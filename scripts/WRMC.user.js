@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽 Wish RP Manager Core
 // @namespace    local.rp.context.manager
-// @version      1.0.3
+// @version      1.0.4
 // @description  Crack RP용 컨텍스트 주입·인지·자동 장기기억·자료집·전체 재구축을 하나로 관리합니다.
 // @author       User
 // @license      All Rights Reserved
@@ -44,7 +44,7 @@
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '1.0.3';
+  const SCRIPT_VERSION = '1.0.4';
   const RUNTIME_KEY = '__WISH_RP_MANAGER_V1__';
   const RELOAD_GUARD_KEY = `WISH_RP_clean_reload_${SCRIPT_VERSION}`;
   const previousRuntime = window[RUNTIME_KEY];
@@ -3360,12 +3360,7 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
       for(const row of rows||[]){row.ref=row.id;delete row.id;}
     return {db,stateDelta,stateDeltaToken,guide,relationshipRange,factCorrections,correctionNotices:[...factCorrections.notices,...(selection?.notices||[])],relationshipPairs:(refData.observe?.relationships||[]).map(r=>WishRelationships.key(r.speaker,r.target)),prompt:JSON.stringify(refData),schema,sentEventRefs:selection?.sentEventRefs||[],correctionTargets:selection?.correctionTargets||[],eventScope:selection?.scope||null};
   }
-  function evidence(text,rp,label) {
-    const q=String(text||'').trim();
-    // 같은 문장의 스마트 따옴표·말줄임표·줄바꿈만 달라진 경우에는
-    // 실제 RP 안의 원문을 찾되, 단어/어순이 바뀐 의역은 계속 거부합니다.
-    if(q.length<2||!autoLoreRecoverExactQuote(rp,q))throw Error(label+'의 직접 근거가 해당 신규 RP에 없습니다.');
-  }
+  // Evidence remains part of the AI output contract; quotation matching does not gate observation updates.
   function validateShape(value,schema,path='응답') {
     if(schema.enum&&!schema.enum.includes(value))throw Error(path+' 값이 허용되지 않습니다.');
     if(schema.type==='object') {
@@ -3398,7 +3393,7 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
     const seen=new Set();
     for(const a of data.people_upsert) {
       if(seen.has(a.ref))throw Error('인물 REF 중복');seen.add(a.ref);
-      evidence(a.evidence,rp,'인물');const old=next.actors.find(x=>x.id===a.ref);
+      const old=next.actors.find(x=>x.id===a.ref);
       if(!old&&!/^NEW_PERSON_/.test(a.ref))throw Error('인물 REF 오류');
       if(!String(a.name||'').trim())throw Error('인물 이름이 없습니다.');
       if(old){if(old.automatic){
@@ -3412,7 +3407,7 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
     const actor=ref=>{const id=people.get(ref)||ref;if(!next.actors.some(a=>a.id===id&&!a.archived))throw Error('알 수 없는 인물 참조: '+ref);return id;};
     seen.clear();
     for(const f of data.facts_upsert) {
-      if(seen.has(f.ref))throw Error('인지 REF 중복');seen.add(f.ref);evidence(f.evidence,rp,'인지');
+      if(seen.has(f.ref))throw Error('인지 REF 중복');seen.add(f.ref);
       let row=next.facts.find(x=>x.id===f.ref);
       if(!row&&!/^NEW_FACT_/.test(f.ref))throw Error('인지 REF 오류');
       if(!String(f.content||'').trim()||!String(f.title||'').trim())throw Error('인지 제목·본문이 없습니다.');
@@ -3429,7 +3424,7 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
     }
     seen.clear();
     for(const r of data.speech_upsert) {
-      evidence(r.evidence,rp,'호칭·말투');const from=actor(r.speaker_ref),to=actor(r.target_ref);
+      const from=actor(r.speaker_ref),to=actor(r.target_ref);
       if(from===to)throw Error('호칭 화자와 상대가 같습니다.');
       const speaker=next.actors.find(a=>a.id===from).name,target=next.actors.find(a=>a.id===to).name,key=from+'>'+to;
       if(seen.has(key))throw Error('호칭 방향 중복');seen.add(key);
@@ -3456,7 +3451,7 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
       if(old)Object.assign(old,patch);else relations.push(patch);
     }
     for(const row of data.concealment_changes) {
-      evidence(row.evidence,rp,'은폐');const h=actor(row.holder_ref),t=actor(row.target_ref),f=facts.get(row.fact_ref)||row.fact_ref;
+      const h=actor(row.holder_ref),t=actor(row.target_ref),f=facts.get(row.fact_ref)||row.fact_ref;
       if(h===t||!next.facts.some(x=>x.id===f))throw Error('은폐 참조 오류');
       if(row.active&&next.state.knowledge[h]?.[f]!=='aware')throw Error('정보를 모르는 인물은 은폐 주체가 될 수 없습니다.');
       const old=next.state.concealments.find(x=>x.holderId===h&&x.targetId===t&&x.factId===f);
@@ -4066,21 +4061,7 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
     }
     return data;
   }
-  function checkApiEvidence(data,p){
-    const sources=p.obs.flatMap(t=>[t.userText,t.assistantText]).filter(Boolean),issues=[];
-    for(const [field,label] of [['people_upsert','인물'],['facts_upsert','인지'],['speech_upsert','호칭·말투'],['relationship_upsert','관계·감정선'],['concealment_changes','은폐']]){
-      for(const [i,row] of (data.observe?.[field]||[]).entries()){
-        const quote=String(row.evidence||'').trim();
-        if(quote.length>=2&&sources.some(src=>autoLoreRecoverExactQuote(src,quote)))continue;
-        issues.push({path:`observe.${field}[${i}].evidence`,label,ref:row.ref||row.fact_ref||row.speaker_ref,title:row.title||row.name||'',quote});
-      }
-    }
-    if(issues.length){
-      const first=issues[0],name=String(first.title||first.ref||'').slice(0,100);
-      const error=new Error(`${first.label} 「${name}」의 직접 근거가 이번 재구축 구간 원문에 없습니다. (${first.path}${issues.length>1?`, 총 ${issues.length}건`:''})`);
-      error.repairIssues=issues;throw error;
-    }
-  }
+  
   async function analyzeApiSegment(cfg,guide,req,draft,p,check,onRepair){
     const options={responseMimeType:'application/json',responseJsonSchema:req.schema,operationLabel:'전체 재구축 구간 분석'};
     let feedback=null;
@@ -4094,7 +4075,7 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
       check();
       try{
         const data=normalizeApiResult(WLOG.parseJson(reply.text,'전체 재구축',reply.diagnostic),req);
-        checkApiEvidence(data,p);
+
         const staged=U3.stage(draft.room,draft.cog,draft.packs,p,req,data);
         return {staged,repairs:attempt};
       }catch(error){
