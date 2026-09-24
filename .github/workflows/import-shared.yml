@@ -1,39 +1,19 @@
-name: Import shared Gist snapshots
+name: Remove temporary workflow
 on:
   workflow_dispatch:
 permissions:
   contents: write
 jobs:
-  import:
+  cleanup:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Copy and verify 25 shared scripts
+      - name: Remove this one-time workflow
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p scripts
-          : > scripts/GIST_REVISIONS.tsv
-          temp_root="$(mktemp -d)"
-          count=0
-          while IFS=$'\t' read -r id filename; do
-            [[ -z "$id" ]] && continue
-            [[ "$id" =~ ^[0-9a-f]{32}$ ]] || { echo "Invalid Gist ID"; exit 1; }
-            [[ "$filename" == *.user.js && "$filename" != */* ]] || { echo "Invalid filename"; exit 1; }
-            git clone --quiet --depth 1 "https://gist.github.com/${id}.git" "$temp_root/$id"
-            test -f "$temp_root/$id/$filename"
-            cp "$temp_root/$id/$filename" "scripts/$filename"
-            cmp "$temp_root/$id/$filename" "scripts/$filename"
-            revision="$(git -C "$temp_root/$id" rev-parse HEAD)"
-            printf '%s\t%s\t%s\n' "$id" "$filename" "$revision" >> scripts/GIST_REVISIONS.tsv
-            count=$((count + 1))
-          done < scripts/GISTS.tsv
-          test "$count" -eq 25
-          test "$(find scripts -maxdepth 1 -type f -name '*.user.js' | wc -l)" -eq 25
+          git rm -- '.github/workflows/import-shared.yml'
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add scripts
-          if ! git diff --cached --quiet; then
-            git commit -m 'Import 25 shared Gist files'
-            git push origin HEAD:main
-          fi
+          git commit -m 'Remove temporary migration workflow'
+          git push origin HEAD:main
