@@ -1,0 +1,55 @@
+name: Add shared post 248129
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  add:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Import ten posted Gists and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/post-248129.tsv <<'SOURCES'
+          d40ec765dc822b96a8d4b93342a264f4	Radiosonde.user.js
+          e7e877f9f627e937d235aac821f920da	crack-chat-template.user.js
+          b608d489ad75f0531720932e46736bfe	crack_memo.user.js
+          2f91496652989d522646b89b1a88227d	CrackMobileTextWrapFix.user.js
+          fb6c1a4d26459a00ca1852eb62aae6c4	RerollMixer.user.js
+          b13ba3e1039a8cf4765566b10f8cfb8a	CrackBadge.user.js
+          7dc388369fb4bb7033501ac307070fee	EditTextClickReplacer.user.js
+          7e0f818e9e5d3bf2950d2d1c279b1891	likes-library.user.js
+          efa19fd1c79283d5d3dd5d3f3aa13152	ModelStats.user.js
+          f05dd2d97fcd5d040534f9c104b6908d	ImageLibraryNativeLazyLoadFix.user.js
+          SOURCES
+          test "$(wc -l < /tmp/post-248129.tsv)" -eq 10
+          test "$(wc -l < scripts/GISTS.tsv)" -eq 25
+          test "$(wc -l < scripts/GIST_REVISIONS.tsv)" -eq 25
+          temp_root="$(mktemp -d)"
+          count=0
+          while IFS=$'\t' read -r id filename; do
+            [[ "$id" =~ ^[0-9a-f]{32}$ ]]
+            [[ "$filename" == *.user.js && "$filename" != */* ]]
+            ! grep -Fq "$id" scripts/GISTS.tsv
+            test ! -e "scripts/$filename"
+            git clone --quiet --depth 1 "https://gist.github.com/${id}.git" "$temp_root/$id"
+            test -f "$temp_root/$id/$filename"
+            cp "$temp_root/$id/$filename" "scripts/$filename"
+            cmp "$temp_root/$id/$filename" "scripts/$filename"
+            revision="$(git -C "$temp_root/$id" rev-parse HEAD)"
+            printf '%s\t%s\n' "$id" "$filename" >> scripts/GISTS.tsv
+            printf '%s\t%s\t%s\n' "$id" "$filename" "$revision" >> scripts/GIST_REVISIONS.tsv
+            count=$((count + 1))
+          done < /tmp/post-248129.tsv
+          test "$count" -eq 10
+          test "$(wc -l < scripts/GISTS.tsv)" -eq 35
+          test "$(wc -l < scripts/GIST_REVISIONS.tsv)" -eq 35
+          test "$(find scripts -maxdepth 1 -type f -name '*.user.js' | wc -l)" -eq 35
+          git rm -- .github/workflows/add-post-248129.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts
+          git commit -m 'Add ten shared scripts from post 248129'
+          git push origin HEAD:main
