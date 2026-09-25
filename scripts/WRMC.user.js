@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽 Wish RP Manager Core
 // @namespace    local.rp.context.manager
-// @version      1.0.4
+// @version      1.0.6
 // @description  Crack RP용 컨텍스트 주입·인지·자동 장기기억·자료집·전체 재구축을 하나로 관리합니다.
 // @author       User
 // @license      All Rights Reserved
@@ -44,7 +44,7 @@
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '1.0.4';
+  const SCRIPT_VERSION = '1.0.6';
   const RUNTIME_KEY = '__WISH_RP_MANAGER_V1__';
   const RELOAD_GUARD_KEY = `WISH_RP_clean_reload_${SCRIPT_VERSION}`;
   const previousRuntime = window[RUNTIME_KEY];
@@ -2495,7 +2495,7 @@ PC와 CHAR 및 CHAR끼리 방향을 따로 검토했는가; 상대의 개인적 
       }return {rows:normalize(rows),covered:[...seen]};
     }
     function displayBody(r,transform=(field,text)=>text){return '현재: '+transform('current',r.current)+(r.trajectory?'\n핵심 전환: '+transform('trajectory',r.trajectory):'')+(r.unresolved?'\n남은 쟁점: '+transform('unresolved',r.unresolved):'');}
-    function body(r,transform){return '[방향별 관계 기억 · 타인에게 자동 공유되는 지식 아님 · 과거 전환은 현재 감정 아님 · 매 장면 같은 반응을 강제하지 않음 · 이후 직접 RP의 명시적 변화 우선]\n'+displayBody(r,transform);}
+    function body(r,transform){return displayBody(r,transform);}
 
     function items(room,query=''){
       if(room.relationshipConfig?.enabled===false)return [];
@@ -4130,6 +4130,10 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
   function relationshipOnlyGuideDefault(){return '# Wish RP Manager Core — 전체 RP에서 관계·감정선만 재구축\n'+WishRelationships.fullGuide+'\n다른 기억은 변경하지 않는다. people에는 관계에 필요한 인물만 등록한다. 기존 인물의 이름·별칭·PC 구분은 변경하지 않는다. people.evidence는 해당 인물을 확인하는 RP 한 메시지의 연속 원문이다. 고정 설정/보호 자료는 참고일 뿐 새로운 RP 인용이 아니다. 모든 번호 파일을 읽은 뒤 최종 순수 JSON 하나만 반환한다. source 값은 그대로 복사한다. format=wish-relationship-rebuild, version=1.\n[출력 Schema]\n';}
   function relationshipOnlyGuide(){return getGuideText('externalRelationships')+JSON.stringify(RELATION_SCHEMA,null,2);}
   async function exportText(r,only=false){return await WLOG.run("외부 AI용 지침·원문 만드는 중",async task=>{return guard(r,async check=>{const s=await source(r);check();const segs=segments(s.rows),manifest=JSON.stringify({last_message_id:s.anchorMessageId,sha256:s.hash});const fixed=(r.slots||[]).filter(x=>(x.group==='character'||(x.group==='extra'&&x.enabled))&&String(x.content||'').trim()).map(x=>`[사용자 관리 ${x.group==='character'?'캐릭터 설정':'OOC·기타'} · ${x.title}]\n${x.content}`).join('\n\n');const originalCog=await bridge().snapshotRaw(apiChatIdOf(r)),d=seed(r,originalCog,packs(r)),ref=JSON.parse(U3.request(d.room,d.cog,d.packs,{memory:true,observe:true,mem:[],obs:[]},{rebuild:true}).prompt);check();
+    if (useAppleTextDownloadList()) {
+      const files=segs.map(seg=>({text:(only?relationshipOnlyGuide():externalGuide())+`\n\n[SOURCE]\n${manifest}\n\n[고정 설정 참고]\n${fixed}\n\n[수동·보호 자료 참고]\n${JSON.stringify({observe:ref.observe,readOnlyPacks:ref.readOnlyPacks,relationshipPeople:only?originalCog.actors.filter(a=>!a.archived).map(a=>({name:a.name,aliases:a.aliases||[],isPlayer:!!a.isPlayer})):undefined})}\n\n[RP ${seg.index}/${segs.length} · 지침 제외 ${seg.chars}자]\n`+text(s.rows.slice(seg.start,seg.end)),filename:`${only?'Wish-관계재구축':'Wish-재구축'}-${seg.index}of${segs.length}.txt`}));
+      check();openTextDownloadList(files,{title:only?'관계 재구축 TXT 받기':'전체 재구축 TXT 받기',roomName:WishRoomNames.display(r)});return segs;
+    }
     for(const seg of segs)downloadText((only?relationshipOnlyGuide():externalGuide())+`\n\n[SOURCE]\n${manifest}\n\n[고정 설정 참고]\n${fixed}\n\n[수동·보호 자료 참고]\n${JSON.stringify({observe:ref.observe,readOnlyPacks:ref.readOnlyPacks,relationshipPeople:only?originalCog.actors.filter(a=>!a.archived).map(a=>({name:a.name,aliases:a.aliases||[],isPlayer:!!a.isPlayer})):undefined})}\n\n[RP ${seg.index}/${segs.length} · 지침 제외 ${seg.chars}자]\n`+text(s.rows.slice(seg.start,seg.end)),`${only?'Wish-관계재구축':'Wish-재구축'}-${seg.index}of${segs.length}.txt`,'text/plain');return segs;});});}
   function personNameKey(value){return String(value||'').normalize('NFKC').replace(/\s+/g,' ').trim().toLowerCase();}
   function personResolver(rows){
@@ -5258,6 +5262,45 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
   function notify(message,type='info',duration=4000,options={}){if(!options.logged&&(type==='error'||type==='warn')){WUICache.errorCount++;WLOG.fail(WLOG.current()?.operation||'알림',message,{level:type});}if(WUI)WUI.toast(String(message),type==='success'?'ok':type,duration);else console.log('[Wish]',message);}
 
 
+  // Apple devices use explicit per-file taps; other platforms keep the original downloads.
+  function useAppleTextDownloadList(nav = navigator) {
+    const hinted = String(nav?.userAgentData?.platform || '').trim();
+    if (/^(macOS|Mac OS X|iOS|iPadOS)$/i.test(hinted)) return true;
+    if (/^(Android|Windows|Linux|Chrome OS|Chromium OS)$/i.test(hinted)) return false;
+    const platform = String(nav?.platform || '');
+    const agent = String(nav?.userAgent || '');
+    if (/Android|Windows NT|Windows Phone|CrOS/i.test(agent) || /^(Win|Linux|Android|CrOS)/i.test(platform)) return false;
+    // Mac matching also covers iPad browsers that report a desktop Mac identity.
+    return /^(Mac|iPhone|iPad|iPod)/i.test(platform) || /\b(iPhone|iPad|iPod|Macintosh)\b|\bMac OS X\b/i.test(agent);
+  }
+
+  // TXT links stay valid while the list is open; each native tap requests one file.
+  function openTextDownloadList(files, options = {}) {
+    if (!WUI) throw new Error('다운로드 화면이 아직 준비되지 않았습니다.');
+    if (!Array.isArray(files) || !files.length) throw new Error('다운로드할 TXT 파일이 없습니다.');
+    const rows = [];
+    try {
+      for (const file of files) {
+        if (!file || typeof file.text !== 'string' || typeof file.filename !== 'string' || !file.filename.trim())
+          throw new Error('TXT 파일의 이름 또는 내용을 확인하지 못했습니다.');
+        const blob = new Blob([file.text], { type: 'text/plain;charset=utf-8' });
+        rows.push({ filename:file.filename, url:URL.createObjectURL(blob), bytes:blob.size, requested:false });
+      }
+      return WUI.openSheet('txtDownloads', { title:options.title || 'TXT 파일 받기', roomName:String(options.roomName || ''), files:rows });
+    } catch (error) {
+      for (const row of rows) URL.revokeObjectURL(row.url);
+      throw error;
+    }
+  }
+
+  function releaseTextDownloadList(dialog) {
+    if (dialog?.type !== 'txtDownloads' || dialog.urlsReleased) return;
+    dialog.urlsReleased = true;
+    const urls = (dialog.files || []).map(file => file.url);
+    // A closing sheet must not immediately invalidate the browser's last request.
+    setTimeout(() => { for (const url of urls) URL.revokeObjectURL(url); }, 60000);
+  }
+
   function downloadText(text, filename, mime = 'application/json') {
     const blob = new Blob([text], { type: `${mime};charset=utf-8` });
     const url = URL.createObjectURL(blob);
@@ -6165,6 +6208,35 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
     const END="## 최종 대조와 출력\n전체 파일을 읽고 모든 bodies id를 개별 검토한다.\n0. 제공된 Schema의 필드·식별값을 그대로 사용하고 요청 본문이 누락·중복되지 않게 한다. 동결 구조·보호 문자열은 바꾸지 않는다.\n1. 원문의 모든 사건과 본문 내부의 사실을 결과에서 각각 되찾을 수 있는지 대조한다. 주체·대상·요일·세부 장소·수량·단위·순서·인과·부정·조건·실행 상태·인지·실제 대사와 말투 예시를 확인한다. 결과를 풀어 쓸 때 원문 밖의 추측이 필요하면 그 부분을 고친다.\n2. 의미 보존과 산문 보존을 혼동하지 않는다. 설명 본문에 불필요한 조사·종결어미·보조용언·반복 주어·장황한 연결이 남았는지 다시 정리한다. ‘~함/~음’도 불필요하면 제거하되 필요한 시제·진행·불확실성은 남긴다.\n각 keep은 실제로 읽고 더 줄일 안전한 표현이 없는지 확인한 결과여야 한다. 현재상태·날짜로그 등 분류 전체가 keep이면 각각 검토했는지 다시 확인한다. 압축을 강제하려고 사실을 버리지는 않는다.\n입력이 빠졌거나 끝까지 처리할 수 없다면 정식 incomplete 결과를 사용한다. 본문을 읽지 않은 채 keep으로 완성하지 않는다.\n최종 결과는 UTF-8 wish-secondary-rebuild.json 하나로 제공한다. 파일 생성이 불가능하면 같은 순수 JSON만 출력한다. 설명·인사·Markdown 코드블록·스키마 정의를 결과에 붙이지 않는다.\n";
     // Pure, local checks only. These detect specific losses, not semantic equivalence.
     const GUIDE_REVISION=2;
+    // Context-only notation: the export must have used this exact built-in guide.
+    // Old/custom overlays without provenance remain readable, but receive no new grammar.
+    const CONTEXT_NOTATION = Object.freeze({
+      id:'wish-secondary-notation-v1',
+      start:'[Wish 압축 기록 시작]',end:'[Wish 압축 기록 끝]',
+      definitions:": 대상의 내용·속성. · 같은 층위의 병렬. ; 사실의 경계. → 왼쪽 주체에서 오른쪽 대상으로 향하는 행동·감정·전달. ↔ 원문이 명시한 실제 상호 관계·쌍방 합의. ⇒ 원문이 명시한 인과만. ↑/↓ 원문이 명시한 정도·빈도의 증가/감소. = 정의·동일 대상. ≠ 명시된 비동일. @ 장소. () 짧은 보충·조건. 주장(인물)·전언(전달자→수신자)·생각(인물)은 해당 인물에게 귀속된 정보다."
+    });
+    const contextNotationScopes=new WeakMap();
+    function hasContextNotation(value,room){
+      const record=room?.expressionRebuild,scopes=record?.version===VERSION&&record.enabled!==false&&record.roomId===text(room?.chatId)?contextNotationScopes.get(record):null;
+      if(!scopes?.size)return false;
+      const src=text(value);let offset=0;
+      while(offset<src.length){
+        const start=src.indexOf(CONTEXT_NOTATION.start,offset);if(start<0)return false;
+        const end=src.indexOf(CONTEXT_NOTATION.end,start+CONTEXT_NOTATION.start.length);if(end<0)return false;
+        offset=end+CONTEXT_NOTATION.end.length;if(scopes.has(src.slice(start,offset)))return true;
+      }
+      return false;
+    }
+    function contextNotationGuide(){
+      return '이 칸의 '+CONTEXT_NOTATION.start+'~'+CONTEXT_NOTATION.end+' 범위에만 적용되는 표기 정의: '+CONTEXT_NOTATION.definitions;
+    }
+    function contextNotationText(row,record){
+      if(row.notationId!==CONTEXT_NOTATION.id||[row.source,row.text].some(src=>text(src).includes(CONTEXT_NOTATION.start)||text(src).includes(CONTEXT_NOTATION.end)))return row.text;
+      const scoped=CONTEXT_NOTATION.start+'\n'+row.text+'\n'+CONTEXT_NOTATION.end;
+      if(!contextNotationScopes.has(record))contextNotationScopes.set(record,new Set());
+      contextNotationScopes.get(record).add(scoped);
+      return '\n'+scoped+'\n';
+    }
     function speechExampleLiterals(source){
       const src=text(source),out=[];
       // Explicitly introduced examples, including unquoted Korean greetings.
@@ -6405,10 +6477,11 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
       return {...raw,inventory:inv,epoch,sha:await digest(inv.document)};
     }
     function documents(job){
-      const units=job.inventory.document.units;
+      const units=job.inventory.document.units,guide=getGuideText('externalSecondary');
+      job.notationId=guide===GUIDE?CONTEXT_NOTATION.id:'';
       const identity={export_id:job.exportId,source_sha256:job.sha,part:1,total_parts:1,total_bodies:job.inventory.rows.length,guide_revision:GUIDE_REVISION,category_bodies:Object.fromEntries(Object.keys(LABELS).map(k=>[k,job.inventory.rows.filter(r=>r.category===k).length]).filter(([,n])=>n)),part_body_ids:units.flatMap(u=>u.bodies.map(b=>b.id)),room_name:job.label};
       // One complete artifact; no truncation, cross-card merging or hidden split.
-      return [INTRO+'\n[작업 식별 — 그대로 사용]\n'+JSON.stringify(identity,null,2)+'\n\n[입력 자료 시작]\n'+JSON.stringify({units},null,2)+'\n[입력 자료 끝]\n\n'+getGuideText('externalSecondary')+(job.options?.includeRelationships?'\n## 관계·감정선 표현만 압축\nrelationship의 current/trajectory/unresolved는 이미 저장된 의미의 원문이다. 새 관계를 추출하는 작업이 아니다. 다른 필드/카드의 내용을 옮기거나 사건이 다른 곳에 있다는 이유로 핵심 계기·방향·영역·조건·미해결 의미를 지우지 않는다. readonly의 인물·PC 구분·근거·보호 설정은 변경하지 않는다. 과거 전환과 현재 태도를 구분하고 초반 불신을 현재 불신으로 바꾸지 않는다. →가 들어 있는 기존 이력은 실제 원문 문맥의 순서를 이해하되 신규 표현은 초기/이후/현재로 명시한다. 같은 관계의 세 필드는 독립 본문이며 정보 이동 없이 각 id를 처리한다. 이 추가 규칙은 relationship에만 적용한다.\n':'')+'\n## 정확한 출력 Schema\n'+JSON.stringify(RESULT_SCHEMA,null,2)+'\n\n'+END+'\n[파일 끝 1/1 · '+job.exportId+']\n'];
+      return [INTRO+'\n[작업 식별 — 그대로 사용]\n'+JSON.stringify(identity,null,2)+'\n\n[입력 자료 시작]\n'+JSON.stringify({units},null,2)+'\n[입력 자료 끝]\n\n'+guide+(job.options?.includeRelationships?'\n## 관계·감정선 표현만 압축\nrelationship의 current/trajectory/unresolved는 이미 저장된 의미의 원문이다. 새 관계를 추출하는 작업이 아니다. 다른 필드/카드의 내용을 옮기거나 사건이 다른 곳에 있다는 이유로 핵심 계기·방향·영역·조건·미해결 의미를 지우지 않는다. readonly의 인물·PC 구분·근거·보호 설정은 변경하지 않는다. 과거 전환과 현재 태도를 구분하고 초반 불신을 현재 불신으로 바꾸지 않는다. →가 들어 있는 기존 이력은 실제 원문 문맥의 순서를 이해하되 신규 표현은 초기/이후/현재로 명시한다. 같은 관계의 세 필드는 독립 본문이며 정보 이동 없이 각 id를 처리한다. 이 추가 규칙은 relationship에만 적용한다.\n':'')+'\n## 정확한 출력 Schema\n'+JSON.stringify(RESULT_SCHEMA,null,2)+'\n\n'+END+'\n[파일 끝 1/1 · '+job.exportId+']\n'];
     }
     function openExport(){const room=state.currentRoom;if(!room)throw Error('채팅방을 먼저 열어 주세요.');return WUI.openSheet('secondaryExport',{room,epoch:localRestoreEpoch,busy:false,error:'',draft:{includeProtected:false}});}
     async function exportFromDialog(id){
@@ -6518,7 +6591,7 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
     function stamp(room){const r=room?.expressionRebuild;return r?.version===VERSION&&r.roomId===text(room.chatId)?text(r.token)+':'+(r.enabled!==false?'on':'off'):'';}
     const compiled=new WeakMap();
     function records(room){const record=room?.expressionRebuild;if(!record||record.version!==VERSION||record.roomId!==text(room.chatId)||record.enabled===false||!Array.isArray(record.containers))return new Map();if(compiled.has(record))return compiled.get(record);const map=new Map(record.containers.map(c=>[c.key,c]));compiled.set(record,map);return map;}
-    function projector(room){
+    function projector(room,{contextNotation=false}={}){
       const map=records(room),basisCache=new Map(),stateCache=new Map();
       let logSource=null,logBlocks=new Map(),packMap=null;
       const packById=id=>{if(!packMap)packMap=new Map((lorePackCache||[]).map(p=>[p.scopeId,p]));return packMap.get(id);};
@@ -6528,7 +6601,7 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
         if(!basisCache.has(cid))basisCache.set(cid,typeof basis==='function'?basis():basis);
         if(c.basis!==basisCache.get(cid))return source;
         const row=(c.values||[]).find(r=>r.field===field);
-        return row&&row.source===source&&typeof row.text==='string'&&row.text.trim()&&row.text.length<source.length?row.text:source;
+        return row&&row.source===source&&typeof row.text==='string'&&row.text.trim()&&row.text.length<source.length?(contextNotation?contextNotationText(row,room.expressionRebuild):row.text):source;
       }
       function slotProjection(slot){
         const cid=key('slot',slot.id),src=text(slot.content).trim();
@@ -6553,8 +6626,10 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
         const actual=(room?.speechRelations||[]).find(s=>s.id===row.id);return actual?lookup(key('speech',actual.id),()=>stampValue(speechValue(actual)),'note',text(row.note)):text(row.note);
       }
       function item(i){
-        if(!room||!map.size||!i)return i;
+        if(!i)return i;
         let next=text(i.content);
+        if(i.group==='relationship'&&next.startsWith(WISH_RELATIONSHIP_LEGACY_HEAD))next=next.slice(WISH_RELATIONSHIP_LEGACY_HEAD.length);
+        if(!room||!map.size)return next!==text(i.content)?{...i,content:next}:i;
         if(i.group==='lore-auto'||i.sourceSlotId==='__lore'){
           const p=packById(i.packId),e=p?.entries?.find(e=>e.id===i.entryId);const level=i.compressionLevel||'compact';
           if(p&&e&&next.trim()===loreTextAtLevel(e,level))next=lore(p,e,level);
@@ -6575,12 +6650,12 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
       }
       return {item,lore,speechNote,fact:f=>lookup(key('fact',f.id),()=>stampValue(factValue(f)),'body',text(f.content))};
     }
-    function cognitionProjector(rid){const r=state.currentRoom;return r&&text(apiChatIdOf(r))===text(rid)?projector(r).fact:f=>text(f.content);}
+    function cognitionProjector(rid){const r=state.currentRoom;return r&&text(apiChatIdOf(r))===text(rid)?projector(r,{contextNotation:true}).fact:f=>text(f.content);}
     function apiStamp(rid){return text(apiChatIdOf(state.currentRoom))===text(rid)?stamp(state.currentRoom):'';}
     function buildRecord(room,job,selected){
       const previous=room.expressionRebuild,containers=new Map((previous?.version===VERSION&&previous.roomId===text(room.chatId)?previous.containers||[]:[]).map(c=>[c.key,structuredClone(c)]));
       const sources=new Map(job.inventory.containers.map(c=>[c.key,c]));
-      for(const row of selected){if(row.restore){const old=containers.get(row.container);if(old)old.values=old.values.filter(v=>v.field!==row.field);continue;}const source=sources.get(row.container);if(!source)throw Error('압축 본문의 저장 대상이 없습니다.');let c=containers.get(source.key);if(!c||c.basis!==source.basis){c={key:source.key,kind:source.kind,identity:source.identity,basis:source.basis,values:[]};containers.set(c.key,c);}c.values=c.values.filter(v=>v.field!==row.field);c.values.push({field:row.field,source:row.source,text:row.next,title:row.title,category:row.category,...(row.span?{span:row.span}:{})});}
+      for(const row of selected){if(row.restore){const old=containers.get(row.container);if(old)old.values=old.values.filter(v=>v.field!==row.field);continue;}const source=sources.get(row.container);if(!source)throw Error('압축 본문의 저장 대상이 없습니다.');let c=containers.get(source.key);if(!c||c.basis!==source.basis){c={key:source.key,kind:source.kind,identity:source.identity,basis:source.basis,values:[]};containers.set(c.key,c);}c.values=c.values.filter(v=>v.field!==row.field);c.values.push({field:row.field,source:row.source,text:row.next,title:row.title,category:row.category,...(job.notationId===CONTEXT_NOTATION.id?{notationId:CONTEXT_NOTATION.id}:{}),...(row.span?{span:row.span}:{})});}
       return {version:VERSION,roomId:text(room.chatId),enabled:true,token:crypto.randomUUID(),updatedAt:nowIso(),containers:[...containers.values()].filter(c=>c.values.length)};
     }
     async function commitRecord(room,expectedSnapshot,nextRecord,epoch){
@@ -6619,7 +6694,7 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
     function summary(room){const r=room?.expressionRebuild;if(!r||r.version!==VERSION||r.roomId!==text(room.chatId))return {count:0,enabled:false};const rows=(r.containers||[]).flatMap(c=>c.values||[]);return {count:rows.length,enabled:r.enabled!==false,saved:rows.reduce((n,v)=>n+Math.max(0,text(v.source).length-text(v.text).length),0)};}
     function openManage(){const room=state.currentRoom,r=room?.expressionRebuild;if(!r||!summary(room).count)throw Error('등록된 압축 표현이 없습니다.');return WUI.openSheet('secondaryManage',{room,epoch:localRestoreEpoch,token:stamp(room),busy:false,error:'',rows:r.containers.flatMap((c,ci)=>c.values.map((v,vi)=>({...v,id:'m'+ci+'_'+vi,container:c.key}))),draft:{open:{}}});}
     async function change(id,mode){const d=WUI.ui.dlg(id);if(!d||d.busy)return;assertTarget(d.room,d.epoch,true);d.busy=true;d.error='';WUI.paint();try{await withRoomExclusiveKeys([apiChatIdOf(d.room),'ai:'+apiChatIdOf(d.room)],async()=>{if(stamp(d.room)!==d.token)throw Error('압축 설정이 바뀌었습니다. 관리창을 다시 열어 주세요.');const snap=await snapshot(d.room),next=structuredClone(d.room.expressionRebuild);if(mode==='clear')next.containers=[];else if(mode==='toggle')next.enabled=next.enabled===false;else{const row=d.rows.find(r=>r.id===mode);if(!row)throw Error('압축 항목이 없습니다.');for(const c of next.containers)if(c.key===row.container)c.values=c.values.filter(v=>v.field!==row.field);next.containers=next.containers.filter(c=>c.values.length);}next.token=crypto.randomUUID();next.updatedAt=nowIso();await commitRecord(d.room,snap,next,d.epoch);});d.busy=false;WUI.closeSheet(d);notify(mode==='clear'?'등록 압축본을 해제했습니다. 저장 원문 유지.':'압축 사용 설정을 변경했습니다.','success');}catch(e){d.error=text(e.message||e);}finally{d.busy=false;WUI.paint();}}
-    return {reviewGroups,visibleGroups,reviewPickState,selectReviewRows,toggleReviewGroup,FIELD_LABELS,FORMAT,VERSION,GUIDE_REVISION,LABELS,RESULT_SCHEMA,INTRO,GUIDE,END,extraProtectedLiterals,speechExampleLiterals,numberDiagnostics,numberEvidence,reviewAudit,proseCount,schemaCheck,inventory,documents,digest,validateReply,projector,cognitionProjector,apiStamp,stamp,summary,openExport,exportFromDialog,importFile,prepareImport,visibleRows,apply,openManage,change,buildRecord,snapshot,commitRecord,stateSpans};
+    return {CONTEXT_NOTATION,hasContextNotation,contextNotationGuide,reviewGroups,visibleGroups,reviewPickState,selectReviewRows,toggleReviewGroup,FIELD_LABELS,FORMAT,VERSION,GUIDE_REVISION,LABELS,RESULT_SCHEMA,INTRO,GUIDE,END,extraProtectedLiterals,speechExampleLiterals,numberDiagnostics,numberEvidence,reviewAudit,proseCount,schemaCheck,inventory,documents,digest,validateReply,projector,cognitionProjector,apiStamp,stamp,summary,openExport,exportFromDialog,importFile,prepareImport,visibleRows,apply,openManage,change,buildRecord,snapshot,commitRecord,stateSpans};
   })();
 
   function selectedSlots(room) {
@@ -6898,73 +6973,86 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
 
 
   let wishContextBuildCache=null;
-  function contextItemSection(item){
-    const content=safeForHtmlComment(String(item.content||'').trim());
-    const title=String(item.title||item.slotId||'메모').trim();
-    // Date and event title are already present in each dated-log raw block.
-    const heading=item.group==='log-auto'&&/^\[[^\]\n]+\](?:\n|$)/.test(content)?'날짜로그':title;
-    return `### ${safeForHtmlComment(heading)}\n${content}`;
+  const WISH_CONTEXT_GUIDE = "[RP 연속성 참고]\n아래는 RP의 진행 지시·설정·기억을 모은 관리 자료다. 지시와 참고 내용을 구분해 적용한다. 블록·안내문 자체는 출력하거나 극중 정보로 취급하지 않으며, 기록된 내용은 인물별 경험·인지 범위에서 활용한다.\n사실·시점: 사용자의 직접 지시·정정(OOC)과 RP에서 확정된 최신 변화가 저장 기록보다 우선한다. 저장값이 충돌하면 현재 장면 시점에 유효한 최신 확정값을 우선하고, 선후가 불명확하면 해당 정보의 전용 칸을 기준으로 한다. 발언·주장·생각의 존재와 그 내용의 진위는 별개다. 과거 장면은 당시 인지 범위를 따르며, 옛 값의 재현·언급은 현재값의 변경이 아니다.\n사용: 기록은 필요할 때 참고하며, 실렸다는 이유로 모두 드러내거나 기록된 반응을 매번 재현할 필요는 없다. 기록에 없는 과거를 없던 일로 단정하거나 임의로 채우지 않는다. 응답은 저장 기록체가 아닌 해당 RP의 언어·문체·출력 지시를 따른다.\n표기: 기호는 각 기록의 작성 규약을 따르고, 규약이 드러나지 않으면 문맥으로 읽는다. 뜻이 분명하지 않은 기호로 방향·선후·인과를 단정하지 않는다. 인용·약속어·암호·사용자 작성문의 기호는 원래 뜻을 유지한다.\n\n";
+  const WISH_CONTEXT_GROUPS = Object.freeze([["extra","진행 규칙 · 기타(OOC)","사용자가 직접 적은 진행·문체·출력 관련 지시와 메모다."],["character","캐릭터 설정","사용자가 직접 적은 인물 설정이다. 이후 RP에서 확정된 변화가 아직 반영되지 않았을 수 있다."],["lore","자료집","세계관·장소·조직·물건·복장·대사 등을 모은 참고 자료다. 카드에 따라 현재값과 과거 정보, 확정 설정과 소문·주장, 실제 발언과 예시가 함께 있을 수 있다."],["misc","기타 참고","다른 분류에 속하지 않는 참고 자료다."],["log","날짜로그","지난 RP 사건의 날짜별 기록이며, 전체가 아닌 선별된 일부일 수 있다."],["relationship","관계·감정선","인물 사이의 관계·감정·태도를 방향별로 기록한 것으로, '현재'는 최근 저장 시점의 값이고 '핵심 전환'은 지난 경위다. A → B는 A가 B를 보는 관계·감정·태도이며, 반대 방향이나 상대의 인지 여부와는 별개다."],["cognition","인지 경계","인물별로 알고 있는 정보·아직 모르는 정보·인지 여부가 확인되지 않은 정보를 정리한 것이다."],["speech","현재 호칭·말투 · 화자 → 상대","최근 저장 시점에 유효한 호칭과 말투다."],["currentState","현재상태","최근 저장 시점까지 이어지고 있는 상황·약속·제약이다."]].map(row=>Object.freeze(row)));
+  const WISH_CONTEXT_GROUP_MAP = new Map(WISH_CONTEXT_GROUPS.map(row=>[row[0],row]));
+  const WISH_CONTEXT_FIELDS = Object.freeze(['slotId','sourceSlotId','sourceKey','title','group','content','logIndex','autoType','packId','entryId','compressionLevel']);
+  const WISH_RELATIONSHIP_LEGACY_HEAD = "[방향별 관계 기억 · 타인에게 자동 공유되는 지식 아님 · 과거 전환은 현재 감정 아님 · 매 장면 같은 반응을 강제하지 않음 · 이후 직접 RP의 명시적 변화 우선]\n";
+
+  function contextGroupOf(item){
+    const kind=injectionCadenceKind(item);
+    return WISH_CONTEXT_GROUP_MAP.has(kind)?kind:'misc';
   }
-  function contextGuideText(hasCognition){
-    const cognitionBoundary = hasCognition
-      ? `[인지 경계]\n` +
-        `인지 안내는 플롯 지시가 아니라 인물별 정보의 경계다.\n` +
-        `'알고 있음'은 반드시 말하거나 드러내야 한다는 뜻이 아니다. 문맥상 숨기거나 모르는 척할 수 있으며, 그런 행동만으로 실제 인지 상태가 '모름'으로 바뀌지 않는다.\n` +
-        `인지 안내에 없는 사실을 '모름'으로 해석하지 않는다. 이 안내에는 현재 장면에 필요한 항목만 선별될 수 있다.\n` +
-        `인지 상태를 보여주기 위해 관련 없는 사실을 억지로 대사나 행동에 끼워 넣지 않는다.\n\n`
-      : '';
-    return (
-      `[RP 연속성 참고]\n` +
-      `아래 자료는 출력하거나 극중 발화로 취급하지 말고 현재 장면의 사실관계·연속성 작성에만 참고한다.\n` +
-      `같은 사실이 겹치면 인물별 앎/모름은 인지 안내, 화자→상대별 현재 호칭·말투는 전용 현재 호칭 블록, 현재 진행·관계·제약은 현재상태, 과거 경위는 날짜로그, 세계관 상세·물건/복장별 현재값·실제 핵심 대사는 자료집을 우선한다.\n` +
-      `현재 진행 장면은 현재 호칭·말투를 따른다. 이후 직접 RP에서 실제 지속 변경이 확정됐다면 아직 갱신되지 않은 저장값보다 그 변화를 우선한다. 과거 장면 자체를 재현할 때는 당시 직접 근거의 호칭·말투·정보 경계를 따르되 현재값을 바꾼 것으로 취급하지 않는다. 단순 과거 언급만으로 현재 호칭을 되돌리지 않는다.\n` +
-      `자료집은 참고자료이며 현재 대화에서 더 최근에 확정된 변화나 사용자 직접 정정을 덮어쓰지 않는다.\n` +
-      `날짜로그는 선별된 일부일 수 있다. 목록에 없다고 과거가 없었다고 단정하거나 누락된 과거를 만들어 채우지 않는다. 현재 장면과 이어지는 확인된 사건·약속·미해결 결과를 판단과 반응에 반영하되 관련 없는 회상을 반복하지 않는다. 모든 인물이 그 사실을 안다고 취급하지 않는다.\n` +
-      `새 기억 기록의 →는 행동·감정·전달 방향, ⇒는 원문이 명시한 인과, @는 장소, ;는 사실 경계다. 실제 인용·약속어·암호의 기호는 이 설명으로 재해석하지 않는다.\n` +
-      `기존 기록의 기호는 해당 문맥과 명시된 뜻을 우선한다. 기호만으로 시간 순서를 인과나 인물 간 방향으로 바꾸어 해석하지 않는다.\n` +
-      `기존 RP의 언어·문체·대사·지문 형식을 그대로 유지한다.\n` +
-      `현재 대화의 더 최근 확정 사실과 충돌하면 최근 직접 대화를 우선한다.\n\n` +
-      `${cognitionBoundary}`);
+  function contextGroupHeader(kind,notation=false){
+    const group=WISH_CONTEXT_GROUP_MAP.get(kind)||WISH_CONTEXT_GROUP_MAP.get('misc');
+    return '## '+group[1]+'\n'+group[2]+(notation?'\n'+SecondaryRebuild.contextNotationGuide():'');
   }
+  function contextItemSection(item,kind=contextGroupOf(item)){
+    let raw=String(item.content||'').trim();
+    if(kind==='relationship'&&raw.startsWith(WISH_RELATIONSHIP_LEGACY_HEAD))raw=raw.slice(WISH_RELATIONSHIP_LEGACY_HEAD.length);
+    const content=safeForHtmlComment(raw);
+    if(['currentState','speech','cognition'].includes(kind))return content;
+    if(kind==='log'&&(item.autoType==='whole-log'||/^\[[^\]\n]+\](?:\n|$)/.test(content)))return content;
+    let heading=String(item.title||item.slotId||'메모').trim();
+    if(kind==='lore')heading=heading.replace(/^자료집 · /,'');
+    else if(kind==='relationship')heading=heading.replace(/ · 관계·감정선$/,'');
+    return '### '+safeForHtmlComment(heading)+'\n'+content;
+  }
+  function contextGuideText(){return WISH_CONTEXT_GUIDE;}
+  function contextRow(item,room=null){
+    const active=!!String(item.content||'').trim(),kind=contextGroupOf(item);
+    const section=active?contextItemSection(item,kind):'';
+    return {active,kind,section,notation:SecondaryRebuild.hasContextNotation(String(item.content||'').trim(),room),
+      logIndex:item.logIndex!=null&&Number.isFinite(Number(item.logIndex))?Number(item.logIndex):null,
+      identity:active?JSON.stringify([item.slotId,item.sourceSlotId,item.sourceKey,item.title,item.group,item.logIndex,String(item.content||'').length,simpleHash(item.content||'')]):''};
+  }
+  function contextLayout(rows,render=false){
+    const buckets=new Map(),identities=[];let count=0;
+    for(const row of rows){if(!row.active)continue;
+      if(!buckets.has(row.kind))buckets.set(row.kind,[]);
+      buckets.get(row.kind).push({row,index:count++});identities.push(row.identity);
+    }
+    const pieces=[];let bodyChars=0,pieceCount=0,guideChars=contextGuideText().length;
+    for(const [kind] of WISH_CONTEXT_GROUPS){
+      const entries=buckets.get(kind);if(!entries?.length)continue;
+      const header=contextGroupHeader(kind,entries.some(entry=>entry.row.notation));
+      bodyChars+=header.length;guideChars+=header.length;pieceCount++;
+      if(render){pieces.push(header);
+        // Preserve saved event order, without guessing dates from labels or rank.
+        if(kind==='log'&&entries.every(entry=>entry.row.logIndex!==null))entries.sort((a,b)=>a.row.logIndex-b.row.logIndex||a.index-b.index);
+      }
+      for(const {row} of entries){bodyChars+=row.section.length;pieceCount++;if(render)pieces.push(row.section);}
+    }
+    bodyChars+=Math.max(0,pieceCount-1)*2;
+    return {count,bodyChars,guideChars,envelopeId:'ctx_'+simpleHash(identities.join('|')),body:render?pieces.join('\n\n'):''};
+  }
+  function contextEnvelope(layout){return `${APP.markerStart} version="${APP.version}" id="${layout.envelopeId}" count="${layout.count}"\n`;}
   function contextBlockParts(items,room=null){
-    const projection=SecondaryRebuild.projector(room);
-    const active=(items||[]).map(projection.item).filter(i=>String(i.content||'').trim());
-    const fields=['slotId','title','group','content'],cached=wishContextBuildCache;
-    if(cached&&cached.version===APP.version&&cached.rows.length===active.length&&active.every((item,n)=>fields.every((k,j)=>item[k]===cached.rows[n][j])))return cached.parts;
+    const projection=SecondaryRebuild.projector(room,{contextNotation:true});
+    const active=(items||[]).filter(Boolean).map(projection.item).filter(i=>String(i.content||'').trim());
     if(!active.length)return {block:'',guideChars:0};
-    const hasCognition = active.some(item => item?.group === 'cognition' || item?.slotId === '__cognition');
-    const body=active.map(contextItemSection).join('\n\n');
-    const envelopeId=`ctx_${simpleHash(active.map(i=>[i.slotId,i.title,String(i.content||'').length,simpleHash(i.content||'')]).join('|'))}`;
-    const guide=contextGuideText(hasCognition);
-    const block=`${APP.markerStart} version="${APP.version}" id="${envelopeId}" count="${active.length}"\n`+guide+`${body}\n${APP.markerEnd}`;
-    const parts={block,guideChars:guide.length};
-    wishContextBuildCache={version:APP.version,rows:active.map(i=>fields.map(k=>i[k])),parts};
+    const cached=wishContextBuildCache;
+    if(cached&&cached.version===APP.version&&cached.room===room&&cached.expression===room?.expressionRebuild&&cached.stamp===SecondaryRebuild.stamp(room)&&cached.rows.length===active.length&&active.every((item,n)=>WISH_CONTEXT_FIELDS.every((k,j)=>item[k]===cached.rows[n][j])))return cached.parts;
+    const layout=contextLayout(active.map(item=>contextRow(item,room)),true);
+    const block=contextEnvelope(layout)+contextGuideText()+layout.body+'\n'+APP.markerEnd;
+    const parts={block,guideChars:layout.guideChars};
+    wishContextBuildCache={version:APP.version,room,expression:room?.expressionRebuild,stamp:SecondaryRebuild.stamp(room),rows:active.map(i=>WISH_CONTEXT_FIELDS.map(k=>i[k])),parts};
     return parts;
   }
   function buildContextBlockFromItems(items,room=null){return contextBlockParts(items,room).block;}
 
   function createWishContextMeasure(original = '',room=null) {
-    // Lifetime: one synchronous fit/plan only. Never cache a prior turn's selection.
-    const rows=new Map(),fields=['slotId','title','group','content'],projection=SecondaryRebuild.projector(room);
+    // Lifetime: one synchronous fit/plan only; use the same sections/scopes as rendering.
+    const rows=new Map(),projection=SecondaryRebuild.projector(room,{contextNotation:true});
     const clean=stripOurContextBlock(String(original||'')).text.replace(/\s+$/,'');
-    const guides=[contextGuideText(false),contextGuideText(true)];
     function row(item){
-      const values=fields.map(key=>item[key]),cached=rows.get(item);
-      if(cached&&values.every((value,index)=>value===cached.values[index]))return cached;
-      const wire=projection.item(item),active=!!String(wire.content||'').trim();
-      const next={values,active,section:active?contextItemSection(wire):'',
-        cognition:wire.group==='cognition'||wire.slotId==='__cognition',
-        identity:active?String([wire.slotId,wire.title,String(wire.content||'').length,simpleHash(wire.content||'')]):''};
-      rows.set(item,next);return next;
+      const values=WISH_CONTEXT_FIELDS.map(key=>item[key]),cached=rows.get(item);
+      if(cached&&values.every((value,index)=>value===cached.values[index]))return cached.row;
+      const next=contextRow(projection.item(item),room);rows.set(item,{values,row:next});return next;
     }
     function contextLength(items){
-      let count=0,bodyChars=0,cognition=false;const identities=[];
-      for(const item of items||[]){const value=row(item);if(!value.active)continue;
-        count++;bodyChars+=value.section.length;cognition=cognition||value.cognition;identities.push(value.identity);}
-      if(!count)return 0;
-      const envelopeId='ctx_'+simpleHash(identities.join('|'));
-      const header=`${APP.markerStart} version="${APP.version}" id="${envelopeId}" count="${count}"\n`;
-      return header.length+guides[cognition?1:0].length+bodyChars+2*(count-1)+1+APP.markerEnd.length;
+      const layout=contextLayout((items||[]).filter(Boolean).map(row));
+      return layout.count?contextEnvelope(layout).length+contextGuideText().length+layout.bodyChars+1+APP.markerEnd.length:0;
     }
     function totalLength(items){const length=contextLength(items);return clean.length+(length?2+length:0);}
     function matches(items){return contextLength(items)===buildContextBlockFromItems(items,room).length;}
@@ -12575,6 +12663,19 @@ body[data-theme="dark"] .m3-ui,body[data-theme="dark"] #wish-rp-monitor{--m3-she
 @media (max-width:599px) and (pointer:coarse) and (hover:none){.m3-grip{display:none}}
 @media (any-pointer:fine){#wish-rp-root .m3-grip{display:block;width:28px;height:28px}}
 
+/* TXT 파일 목록 · 한 행에서 한 파일만 다운로드 */
+.m3-txt-list{display:flex;flex-direction:column;gap:8px;min-width:0}
+.m3-txt-row{display:flex;align-items:center;gap:12px;min-width:0;padding:12px;border:1px solid var(--m3-line);border-radius:var(--m3-r-card);background:var(--m3-card)}
+.m3-txt-info{flex:1;min-width:0}
+.m3-txt-info>b{display:block;font-size:13px;line-height:1.5;overflow-wrap:anywhere;word-break:break-word}
+.m3-txt-meta{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;margin-top:4px;font-size:11.5px;color:var(--m3-muted);font-variant-numeric:tabular-nums}
+.m3-txt-row.is-requested .m3-txt-state{color:var(--m3-ok)}
+.m3-ui a.m3-txt-download{display:inline-flex;align-items:center;justify-content:center;flex:0 0 44px;width:44px;height:44px;padding:0;border:1px solid var(--m3-accent-line);border-radius:var(--m3-r-ctl);background:var(--m3-accent-soft);color:var(--m3-accent);text-decoration:none;touch-action:manipulation;cursor:pointer}
+.m3-ui a.m3-txt-download svg.ic{width:20px;height:20px;pointer-events:none}
+.m3-ui a.m3-txt-download:focus-visible{outline:2px solid var(--m3-accent);outline-offset:3px}
+.m3-ui a.m3-txt-download:active{background:var(--m3-card2)}
+.m3-txt-progress{font-size:12px;color:var(--m3-fg2);font-variant-numeric:tabular-nums}
+
 /* 창 · 시트 */
 .wish-dlg-layer{position:absolute;inset:0;z-index:40;pointer-events:none}
 .wish-dlg-layer>.m3-dialog{pointer-events:auto}
@@ -13162,6 +13263,17 @@ function createWishUI(AD) {
     return out.slice(0, 40);
   }
   const DLG = {
+    txtDownloads(d) {
+      const files=d.files||[],requested=files.filter(file=>file.requested).length;
+      const size=bytes=>bytes<1024?fmt(bytes)+' B':bytes<1048576?(bytes/1024).toLocaleString('ko-KR',{maximumFractionDigits:1})+' KB':(bytes/1048576).toLocaleString('ko-KR',{maximumFractionDigits:1})+' MB';
+      return sheet(d,{title:esc(d.title),desc:fmt(files.length)+'개 TXT 준비됨'+(d.roomName?' · '+esc(d.roomName):''),
+        body:`<p class="m3-muted m3-bottomgap">오른쪽 다운로드 아이콘을 눌러 한 파일씩 받으세요. 저장 안내가 끝나면 다음 파일을 누르세요.</p><div class="m3-txt-list" role="list" aria-label="TXT 파일 목록">${files.map((file,i)=>{
+          const label=file.filename+(file.requested?' 다시 다운로드':' 다운로드');
+          return `<div class="m3-txt-row${file.requested?' is-requested':''}" data-key="txt-${d.id}-${i}" role="listitem"><div class="m3-txt-info"><b>${esc(file.filename)}</b><div class="m3-txt-meta"><span>${i+1} / ${files.length} · ${size(file.bytes)}</span><span class="m3-txt-state">${file.requested?'다운로드 요청됨':'준비됨'}</span></div></div><a class="m3-txt-download" href="${esc(file.url)}" download="${esc(file.filename)}" target="_blank" rel="noopener" data-txt-download="${d.id}" data-file-index="${i}" aria-label="${esc(label)}" title="${esc(label)}"${i===0?' data-autofocus':''}>${ic('down')}</a></div>`;
+        }).join('')}</div><p class="m3-muted m3-topgap">전체 TXT를 번호순으로 같은 AI 대화에 첨부해 주세요. 요청 표시는 저장 완료가 아니며, 실제 저장 여부는 브라우저의 다운로드 목록에서 확인해 주세요.</p>`,
+        foot:`<span class="m3-txt-progress" role="status" aria-live="polite">다운로드 요청 ${requested} / ${files.length}</span>${SP}${closeBtn(d)}`});
+    },
+
     relationshipPreflight(d){return sheet(d,{title:'재구축 가져오기 전 확인',body:`<div class="m3-status m3-warning">${ic('alert')}<span>${esc(d.message)}</span></div><p class="m3-muted">파일 선택과 적용 때 모두 검사합니다. 주입이나 기존 자료를 자동으로 바꾸지 않습니다.</p>`,foot:`${SP}${closeBtn(d,'확인')}`});},
     relationshipReview(d){
       const groups=['추가','변경','유지','수동 보호 유지','미출력 · 기존 유지'];
@@ -13466,6 +13578,7 @@ function createWishUI(AD) {
   function closeSheet(idOrD, instant) {
     const d = typeof idOrD === 'string' ? findDlg(idOrD) : idOrD; if (!d || d.leaving) return;
     if(d.busy&&['roomCopy','roomName','loreSplit','secondaryExport','secondaryReview','secondaryManage'].includes(d.type))return;
+    if(d.type==='txtDownloads')releaseTextDownloadList(d);
     if (instant || REDUCED) { S.dialogs = S.dialogs.filter(x => x !== d); paint(); return; }
     d.leaving = true; paint(); setTimeout(() => { S.dialogs = S.dialogs.filter(x => x !== d); paint(); }, 220);
   }
@@ -13563,8 +13676,16 @@ function createWishUI(AD) {
     if (wired.has(host)) return; wired.add(host);
     host.addEventListener('click', e => {
       const t = e.target;
-      if (t.classList && t.classList.contains('m3-dialog')) { const d = findDlg(t.dataset.dlg); if (d) closeSheet(d); return; }
+      if (t.classList && t.classList.contains('m3-dialog')) { const d = findDlg(t.dataset.dlg); if (d && d.type !== 'txtDownloads') closeSheet(d); return; }
       if (t.classList && t.classList.contains('m3-overlay')) return;
+      const link = t.closest('a[data-txt-download]');
+      if (link && host.contains(link)) {
+        const d = findDlg(link.dataset.txtDownload), file = d?.files?.[Number(link.dataset.fileIndex)];
+        if (!file || d.leaving || d.urlsReleased) { e.preventDefault(); return; }
+        if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) { file.requested = true; paint(false); }
+        // Preserve the trusted link's default download; no await, synthetic click or next-file timer.
+        return;
+      }
       const el = t.closest('[data-act]'), sum = t.closest('summary');
       if (sum && (!el || !sum.contains(el)) && !t.closest('input,label,select')) { const k = sum.parentElement && sum.parentElement.dataset.open; if (k) { e.preventDefault(); S.openSet.has(k) ? S.openSet.delete(k) : S.openSet.add(k); paint(); return; } }
       if (!el || !host.contains(el) || el.disabled) return;
@@ -13881,7 +14002,7 @@ function WUIInjectionView(room, candidates) {
  const plan=active.map((i,n)=>row(i,n));
  if(pending)for(const entry of quickManageItems(pending))if(!keys.has(entry.key))plan.push(row(entry.item,plan.length,true,entry.active));
  for(const item of plan)if(!item.off)groups[item.kind]=(groups[item.kind]||0)+item.size;
- const parts=contextBlockParts(active,room),block=parts.block, original=stripOurContextBlock(String(pending?.originalText||'')).text.trimEnd();
+ const parts=contextBlockParts(safeMemoryItems(room,candidates),room),block=parts.block, original=stripOurContextBlock(String(pending?.originalText||'')).text.trimEnd();
  const total=buildInjectedMessage(original,block).length;
  groups.orig=original.length;
  // Only this same block's envelope, headings, separators and instructions are overhead.
