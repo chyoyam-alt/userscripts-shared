@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽 Wish RP Manager Core
 // @namespace    local.rp.context.manager
-// @version      1.0.6
+// @version      1.1.2
 // @description  Crack RP용 컨텍스트 주입·인지·자동 장기기억·자료집·전체 재구축을 하나로 관리합니다.
 // @author       User
 // @license      All Rights Reserved
@@ -44,7 +44,7 @@
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '1.0.6';
+  const SCRIPT_VERSION = '1.1.2';
   const RUNTIME_KEY = '__WISH_RP_MANAGER_V1__';
   const RELOAD_GUARD_KEY = `WISH_RP_clean_reload_${SCRIPT_VERSION}`;
   const previousRuntime = window[RUNTIME_KEY];
@@ -233,7 +233,7 @@
   // 인지 라이브 요청은 아래 WISH_INDEX_GUIDE·SPEECH_GUIDE 계약을 사용합니다.
   const INTERNAL_API_GUIDES = Object.freeze({
     currentState: "# Wish RP Manager Core — 라이브 API 현재상태 갱신 지침 v1.5.0\n\n너는 장기 RP용 ROLLING STATE 유지보수기다.\n이 호출은 전체 TXT 대청소가 아니라, 기존 현재상태와 이번에 제공된 최신 직접 RP를 비교해 현재 유효값을 안전하게 갱신하는 라이브 작업이다.\n\n[입력 블록 — 역할 고정]\n- [기존 현재상태] = 지금 저장된 현재상태이며 이번 갱신의 대상이다. 신규 RP에서 실제 변경 근거가 없으면 기존 유효값을 보존한다.\n- [기존 날짜별 로그 참고] = 이미 저장된 과거 참고 기록이다. 연속성 대조에는 사용할 수 있지만 그 자체를 이번에 새로 발생한 사건의 직접 근거로 쓰지 않는다. 분량 때문에 일부 블록만 제공될 수 있으므로 보이지 않는 기존 로그가 더 있을 수 있다.\n- [캐릭터 설정 / 사용자 고정설정] = 사용자가 확정한 해석·고정 설정의 기준이다. 그 자체는 이번에 발생한 사건이나 극중 정보 전달이 아니며, 인물이 이번 턴에 새로 알게 되었다고 승격하지 않는다.\n- [신규 RP 로그] = 이번 갱신에서 직접 발생한 사건을 판단하는 유일한 RP 원문이다. 지속 상태의 생성·변경·종료에 필요한 직접 근거는 여기에서 찾는다.\n\n[출력 계약]\n- 설명·인사·작업보고·Markdown 코드블록 없이 현재상태 본문과 필요한 Manager 제어 블록만 출력한다.\n- NO_CHANGE를 사용할 때는 앞뒤 설명·마침표·따옴표·불릿 없이 정확히 NO_CHANGE 한 줄만 출력한다.\n- NO_ACTIVE_STATE를 사용할 때는 첫 줄에 정확히 NO_ACTIVE_STATE만 쓰고, 그 뒤에는 Manager 저장 계약이 요구하는 [STATE_RETIREMENTS] 제어 블록 외의 설명·본문을 붙이지 않는다.\n- 가능한 한 전체 현재상태를 20,000자 이내의 고밀도로 유지한다. 다만 이 목표만을 이유로 기존 유효 사실을 삭제하지 않으며, 어떤 경우에도 45,000자를 넘기지 않는다.\n- NO_CHANGE/NO_ACTIVE_STATE 예외가 아니면 첫 줄부터 아래 고정 문법의 구분선으로 시작한다.\n- 각 대섹션은 정확히 다음 3줄 형식이다.\n━━━━━━━━━━━━━━━━━━━━\n1. 섹션명\n━━━━━━━━━━━━━━━━━━━━\n내용\n- 구분선은 정확히 `━━━━━━━━━━━━━━━━━━━━`다.\n- 섹션 번호는 1,2,3... 연속이어야 한다.\n- 기존 현재상태가 있으면 섹션의 역할·제목·순서를 가능한 한 유지한다.\n- 기존 섹션에서 실제로 바뀌지 않은 내용은 표현을 다듬거나 재작성하지 않는다.\n- 기존 섹션으로 담기 어려운 새 지속 상태 범주가 신규 RP에서 실제 생긴 경우에만 새 섹션을 추가한다. 기존 상태가 비어 있으면 필요한 섹션을 처음 구성한다.\n- 출력은 완전한 최신 교체본이어야 한다.\n\n[현재상태의 역할]\n현재상태는 과거 줄거리 저장소가 아니라, 다음 자동 갱신 전까지 계속 유효해야 하는 최신 지속 상태의 정답표다.\n\n[작업 순서]\n1. 신규 RP에서 지속 상태의 생성·변경·종료 후보를 먼저 찾는다.\n2. 각 후보를 기존 현재상태와 대조해 실제 변화인지 판정한다.\n3. 실제 변화가 있으면 바뀐 값은 반영하고, 근거 없이 바뀌지 않은 값은 그대로 보존한 완전한 최신 교체본을 낸다.\n4. 실제 지속 상태 변화가 정말 하나도 없을 때만 NO_CHANGE를 사용한다.\n\n우선 보존:\n1. 기준 시점 / 장기간 유지되는 진행 단계\n2. 지속 부상·회복·신체 제약\n3. 현재 신분·소속·직업·계약·합의\n4. 현재 관계 최신값\n5. 주요 NPC의 지속 상태\n6. 현재 중요한 정보격차의 존재와 영향\n7. 중요한 비밀\n8. 중요 물건·자산의 현재 소유/보관\n9. 현재 유효한 특수특성 제한·변화\n10. 진행 중 사건·약속·계획\n11. 현재 미해결 후크\n12. 반복 오작동을 막기 위한 ANTI-DRIFT 핵심값\n\n기본적으로 제외:\n- 정확한 방·좌석·자세·손에 든 컵 같은 일회성 장면 상태\n- 순간 표정·순간 감정\n- 이미 끝난 사건의 상세 경위\n- 날짜로그에 충분히 보존된 과거 과정\n- 외형·기본성격·말투·세계관 법칙 같은 고정 캐릭터 설정의 장문 반복\n\n[정사 우선순위]\n충돌 시:\n1. 사용자 직접 정정·고정 설정\n2. 최신 직접 RP에서 실제로 발생한 사건\n3. 동일 입력 안의 명시적 확정 사실\n4. 확정 OOC / 세계관 / 로어\n5. 기존 현재상태\n6. 기존 날짜로그\n7. 캐릭터의 주장·추측·오해·거짓말\n8. 모델의 추론\n\n최신 정사가 옛 상태를 뒤집으면 현재값은 최신 하나만 남긴다.\n과거 상태가 어떻게 변했는지는 날짜로그가 담당한다.\n\n[침묵은 변경이 아니다]\n- 신규 RP에서 다시 언급되지 않았다는 이유로 기존 지속 상태를 삭제·완료·해제·치유·망각 처리하지 않는다.\n- 상태를 바꾸려면 실제 변경·완료·해제·소멸·정정 근거가 있어야 한다.\n- 계획이 언급되지 않았다고 취소로 처리하지 않는다.\n- 비밀이 언급되지 않았다고 공개/해제로 처리하지 않는다.\n- 관계가 언급되지 않았다고 관계값을 낮추지 않는다.\n\n[PC 보호 / 과잉추론 금지]\n- 사용자 캐릭터(PC)의 감정·욕망·관계 선택·의도는 사용자 직접 RP/정정으로 확정된 범위만 기록한다.\n- 행동 하나만 보고 사랑·질투·성적 욕망·용서·독점관계를 자동 확정하지 않는다.\n- NPC의 PRIVATE 감정이 변했다고 PC 감정도 같이 변했다고 쓰지 않는다.\n- OOC·서술자 정보·타인 독백을 캐릭터가 알게 된 정보로 바꾸지 않는다.\n- 같은 팀·연인·친구라는 이유로 비밀을 자동 공유하지 않는다.\n\n[Cognition과 역할 분리]\n인지 관리가 별도로 제공되면:\n- actor×fact별 '누가 무엇을 알고/모르는가'의 세부 목록은 Cognition이 관할한다.\n- 현재상태에는 중요한 정보격차가 존재한다는 사실과, 그 격차가 현재 관계·계획·위험에 미치는 영향만 필요한 만큼 남긴다.\n- Cognition 내용을 장문 복제하지 않는다.\n- Cognition 결과 자체를 새 사건의 발생 근거로 되먹이지 않는다. 새 사건의 근거는 실제 RP 원문이다.\n\n[회상·꿈·가정]\n- 회상/플래시백의 과거 사건을 현재 발생 사건처럼 바꾸지 않는다.\n- 꿈·가정·상상·미실행 계획을 실제 상태로 승격하지 않는다.\n- 과거 사건을 현재 인물이 지금도 기억/인지한다고 자동 추정하지 않는다.\n\n[압축]\n- 최대 정보량이 아니라 최대 정보밀도를 목표로 한다.\n- 같은 사실을 여러 섹션에 표현만 바꿔 반복하지 않는다.\n- 다음 RP에 필요한 최신값을 빠르게 찾을 수 있게 짧고 직접적으로 쓴다.\n- 단, 압축을 이유로 관계 최신값·정보격차·중요 비밀·미완료 약속·소유 상태·지속 부상·현재 제약을 없애지 않는다.\n\n입력 자료에 없는 사건·감정·날짜·정보 전달 경로를 새로 만들지 마라.\n\n[변화 없음]\n기존 상태가 유효하고 변경할 것이 없으면 NO_CHANGE 한 줄만 출력할 수 있다. 기존 상태도 없고 새 지속 상태 근거도 없으면 NO_CHANGE를 출력한다. 기존 지속 상태가 이번 신규 RP의 명시적 종료·해제·대체로 모두 사라진 경우에만 NO_ACTIVE_STATE를 사용할 수 있으며, 기존 섹션 제거는 뒤의 Manager 저장 계약에 따라 원문 retirement 근거를 함께 출력한다. 형식만 갖춘 빈 섹션·추측성 상태를 만들지 않는다. 기존 상태를 단순 미언급으로 삭제하지 않는다.\n",
-    logSummary: "# Wish RP Manager Core — 라이브 API 날짜로그 갱신 지침 v1.5.0\n\n너는 장기 RP용 EPISODIC MEMORY 증분 유지보수기다.\n이 호출은 전체 TXT를 처음부터 다시 정리하는 작업이 아니다.\n이번 요청에 제공된 최신 직접 RP와, 요청에 실제로 포함된 기존 날짜로그 참고만 사용해 새로 추가하거나 안전하게 교체해야 하는 날짜 블록만 출력한다.\n\n[작업 순서]\n1. 신규 RP에서 장기 복원 가치가 있는 사건의 생성·중대 보완 여부를 먼저 찾는다.\n2. 기존 참고 블록과 같은 사건인지 대조한다.\n3. 새 사건이면 새 블록, 실제 보완이면 동일 날짜·제목의 완전한 교체 블록을 출력한다.\n4. 기록할 사건 변화가 정말 없을 때만 NO_CHANGE를 사용한다.\n\n[입력 블록 — 역할 고정]\n- [기존 현재상태] = 현재 지속 상태 요약이다. 사건 중복·연속성 판단의 참고로만 사용하고 그 자체를 새 사건 원문으로 취급하지 않는다.\n- [기존 날짜별 로그 참고] = 이미 저장된 날짜 블록의 일부 참고본이다. 분량 때문에 일부만 제공될 수 있으므로 여기에 없는 기존 블록이 더 있다고 전제한다. 제공되지 않은 블록을 없는 것으로 간주하거나 추측으로 교체·재생성하지 않는다.\n- [캐릭터 설정 / 사용자 고정설정] = 사용자가 확정한 설정 기준이다. 그 자체는 이번에 발생한 사건이나 극중 정보 전달이 아니다.\n- [신규 RP 로그] = 이번 호출에서 새 사건·중대 보완을 판단할 유일한 직접 RP 원문이다.\n\n[출력 계약]\n- 설명·인사·작업보고·Markdown 코드블록 없이 날짜 블록만 출력한다.\n- NO_CHANGE를 사용할 때는 앞뒤 설명·마침표·따옴표·불릿 없이 정확히 NO_CHANGE 한 줄만 출력한다.\n- 기존 날짜로그 전체를 재출력하지 않는다.\n- 변화가 없다면 새 사실을 억지로 만들지 말고 NO_CHANGE 한 줄만 출력한다.\n- 각 블록 제목은 줄 전체가 정확히 `[날짜-키워드]` 형식이어야 한다.\n- 제목 바로 다음 줄부터 본문을 시작한다.\n- 서로 다른 블록 사이는 빈 줄 1줄로 구분한다.\n- 날짜 제목 앞에 번호·불릿·공백을 붙이지 않는다.\n- 한 날짜 블록 본문은 공백 포함 최대 약 2,000자 이내로 압축한다.\n\n인식 가능한 예:\n[2026년 9월 7일-계약 목적 공개]\n[2026년-계약 목적 공개]\n[9월 7일-계약 목적 공개]\n[날짜 미상-계약 목적 공개]\n[BC206-사건명]\n[기원전 206년-사건명]\n[AD714-사건명]\n\n[증분 작업의 절대 제한]\n- 자동 삭제 금지.\n- 전체 역사 재정렬·대청소 금지.\n- 전문을 보지 못한 오래된 기존 블록을 추측으로 교체 금지.\n- 같은 날짜가 있다는 이유만으로 전혀 다른 사건을 한 블록으로 합치지 않는다.\n- 표현 개선만을 이유로 기존 블록을 다시 쓰지 않는다.\n- 기존 블록의 내용을 교체해야 한다면 이번 요청 안에 그 블록의 기존 내용이 실제로 보이고, 신규 RP가 그 내용을 변경/보충해야 한다는 근거가 있어야 한다.\n- 오래된 중복 정리·전역 모순 감사·대규모 압축은 라이브 Delta가 아니라 내부 전체 API 재구축 또는 외부 전체 TXT 재구축의 역할이다.\n\n[날짜로그에 남길 사건]\n다음 RP에서 다시 복원할 가치가 있는 사건 위주로 보존한다.\n- 관계 정의·변화·결별·재회·중요 합의\n- 계약·약속·중요 규칙의 성립/중대 변경/종결\n- 비밀·정체·중요 정보의 공개/습득/은폐 변화 계기\n- 중요한 물건의 획득·양도·분실·회수\n- 신분·소속·직책·거점·지속 상태를 바꾼 사건\n- 주요 계획·작전·수사·갈등의 시작/중대 전환/종결\n- 현재 행동 이유나 관계값을 이해하는 데 필요한 과거 사건\n- 뒤에서 실제로 다시 회상·참조·변주되어 기능한 사건\n\n사소한 일상 행동, 순간 표정, 같은 사실의 반복 확인, 단순 대화 순서는 새 블록으로 만들지 않는다.\n\n[정사 판정]\n- 사용자 직접 정정·고정설정과 최신 직접 RP를 최우선으로 한다.\n- 인물의 발언·추측·거짓말·오해·소문을 객관 사실로 자동 승격하지 않는다.\n- OOC/서술자/PRIVATE 정보와 캐릭터가 실제로 아는 정보를 구분한다.\n- 같은 팀·연인·친구라는 이유로 정보가 자동 공유됐다고 쓰지 않는다.\n- 현장에 없던 인물이 직접 전달받지 않은 사실을 알고 있었다고 만들지 않는다.\n- 회상/플래시백의 과거 사건은 원래 과거 시점에 귀속한다. 회상한 현재 시점으로 재날짜매김하지 않는다.\n- 꿈·가정·상상·미실행 계획을 실제 사건으로 기록하지 않는다.\n- 리롤되어 폐기된 답변은 정사로 취급하지 않는다.\n\n[날짜]\n- 원문에서 확인되는 날짜만 쓴다.\n- 연도와 월/일을 모두 알면 `[2026년 9월 7일-사건명]`처럼 쓴다.\n- 연도를 모르면 월/일만 사용한다.\n- 연도만 확실하고 월/일을 모르면 `[2026년-사건명]`처럼 연도-only 제목을 사용한다. 알 수 없는 월/일을 추정하지 않는다.\n- 연도도 월/일도 모르면 `[날짜 미상-사건명]`.\n- 제목에서 날짜와 사건명은 하이픈 하나로 구분하고 사건명 안에 대괄호를 쓰지 않는다.\n- 인접 사건의 날짜를 자동 복사하지 않는다.\n- 날짜/기간/수치가 충돌하면 명시적 정정이 없는 한 임의로 하나를 고르지 않는다.\n- 특수 연호가 원문 정식 표기라면 BC/BCE/AD/CE/기원전/서기를 억지로 일반 연도로 변환하지 않는다.\n\n[블록 본문]\n- 핵심 원인 → 실제 행동/결정 → 결과 → 후속 연속성을 우선한다.\n- 누가 직접 목격/청취/전달받았는지가 중요한 사건은 정보격차가 사라지지 않게 적는다.\n- 대사 전문과 묘사는 필요한 짧은 핵심만 남긴다.\n- 이미 기존 블록에 있는 사실 중 신규 RP로 바뀌지 않은 내용은 삭제하지 않는다.\n- 입력에 없는 원인·동기·날짜·관계 결론을 창작하지 않는다.\n\nManager가 출력된 블록을 날짜와 사건 제목을 함께 식별하여 기존 저장소에 병합한다.\n\n[사건 식별]\n같은 날짜의 다른 사건은 서로 다른 제목으로 출력한다. 기존 사건을 보완할 때는 입력에 전문이 제공된 기존 블록의 날짜·제목을 그대로 유지하고, 기존 사실 전체와 신규 보충을 포함한 완전한 교체 블록을 낸다. 날짜만 같은 사건을 합치거나 삭제하지 않는다. 날짜 정정·제목 변경으로 기존 사건을 바꿔야 하면 라이브 출력에서 삭제를 시도하지 않고 원문 편집/전체 재구축으로 처리한다.\n",
+    logSummary: "# Wish RP Manager Core — 라이브 API 날짜로그 갱신 지침 v1.5.0\n\n너는 장기 RP용 EPISODIC MEMORY 증분 유지보수기다.\n이 호출은 전체 TXT를 처음부터 다시 정리하는 작업이 아니다.\n이번 요청에 제공된 최신 직접 RP와, 요청에 실제로 포함된 기존 날짜로그 참고만 사용해 새로 추가하거나 안전하게 교체해야 하는 날짜 블록만 출력한다.\n\n[작업 순서]\n1. 신규 RP에서 장기 복원 가치가 있는 사건의 생성·중대 보완 여부를 먼저 찾는다.\n2. 기존 참고 블록과 같은 사건인지 대조한다.\n3. 새 사건이면 새 블록, 실제 보완이면 동일 날짜·제목의 완전한 교체 블록을 출력한다.\n4. 기록할 사건 변화가 정말 없을 때만 NO_CHANGE를 사용한다.\n\n[입력 블록 — 역할 고정]\n- [기존 현재상태] = 현재 지속 상태 요약이다. 사건 중복·연속성 판단의 참고로만 사용하고 그 자체를 새 사건 원문으로 취급하지 않는다.\n- [기존 날짜별 로그 참고] = 이미 저장된 날짜 블록의 일부 참고본이다. 분량 때문에 일부만 제공될 수 있으므로 여기에 없는 기존 블록이 더 있다고 전제한다. 제공되지 않은 블록을 없는 것으로 간주하거나 추측으로 교체·재생성하지 않는다.\n- [캐릭터 설정 / 사용자 고정설정] = 사용자가 확정한 설정 기준이다. 그 자체는 이번에 발생한 사건이나 극중 정보 전달이 아니다.\n- [신규 RP 로그] = 이번 호출에서 새 사건·중대 보완을 판단할 유일한 직접 RP 원문이다.\n\n[출력 계약]\n- 설명·인사·작업보고·Markdown 코드블록 없이 날짜 블록만 출력한다.\n- NO_CHANGE를 사용할 때는 앞뒤 설명·마침표·따옴표·불릿 없이 정확히 NO_CHANGE 한 줄만 출력한다.\n- 기존 날짜로그 전체를 재출력하지 않는다.\n- 변화가 없다면 새 사실을 억지로 만들지 말고 NO_CHANGE 한 줄만 출력한다.\n- 각 블록 제목은 줄 전체가 정확히 `[날짜-키워드]` 형식이어야 한다.\n- 제목 바로 다음 줄부터 본문을 시작한다.\n- 서로 다른 블록 사이는 빈 줄 1줄로 구분한다.\n- 날짜 제목 앞에 번호·불릿·공백을 붙이지 않는다.\n- 한 날짜 블록 본문은 공백 포함 최대 약 2,000자 이내로 압축한다.\n\n인식 가능한 예:\n[2026년 9월 7일-계약 목적 공개]\n[2026년-계약 목적 공개]\n[9월 7일-계약 목적 공개]\n[날짜 미상-계약 목적 공개]\n[BC206-사건명]\n[기원전 206년-사건명]\n[AD714-사건명]\n\n[증분 작업의 절대 제한]\n- 자동 삭제 금지.\n- 전체 역사 재정렬·대청소 금지.\n- 전문을 확인하지 못한 오래된 기존 블록을 추측으로 교체 금지.\n- 같은 날짜가 있다는 이유만으로 전혀 다른 사건을 한 블록으로 합치지 않는다.\n- 표현 개선만을 이유로 기존 블록을 다시 쓰지 않는다.\n- 기존 블록의 내용을 교체해야 한다면 이번 요청 안에 그 블록의 기존 내용이 실제로 보이고, 신규 RP가 그 내용을 변경/보충해야 한다는 근거가 있어야 한다.\n- 오래된 중복 정리·전역 모순 감사·대규모 압축은 라이브 Delta가 아니라 내부 전체 API 재구축 또는 외부 전체 TXT 재구축의 역할이다.\n\n[날짜로그에 남길 사건]\n다음 RP에서 다시 복원할 가치가 있는 사건 위주로 보존한다.\n- 관계 정의·변화·결별·재회·중요 합의\n- 계약·약속·중요 규칙의 성립/중대 변경/종결\n- 비밀·정체·중요 정보의 공개/습득/은폐 변화 계기\n- 중요한 물건의 획득·양도·분실·회수\n- 신분·소속·직책·거점·지속 상태를 바꾼 사건\n- 주요 계획·작전·수사·갈등의 시작/중대 전환/종결\n- 현재 행동 이유나 관계값을 이해하는 데 필요한 과거 사건\n- 뒤에서 실제로 다시 회상·참조·변주되어 기능한 사건\n\n사소한 일상 행동, 순간 표정, 같은 사실의 반복 확인, 단순 대화 순서는 새 블록으로 만들지 않는다.\n\n[정사 판정]\n- 사용자 직접 정정·고정설정과 최신 직접 RP를 최우선으로 한다.\n- 인물의 발언·추측·거짓말·오해·소문을 객관 사실로 자동 승격하지 않는다.\n- OOC/서술자/PRIVATE 정보와 캐릭터가 실제로 아는 정보를 구분한다.\n- 같은 팀·연인·친구라는 이유로 정보가 자동 공유됐다고 쓰지 않는다.\n- 현장에 없던 인물이 직접 전달받지 않은 사실을 알고 있었다고 만들지 않는다.\n- 회상/플래시백의 과거 사건은 원래 과거 시점에 귀속한다. 회상한 현재 시점으로 재날짜매김하지 않는다.\n- 꿈·가정·상상·미실행 계획을 실제 사건으로 기록하지 않는다.\n- 리롤되어 폐기된 답변은 정사로 취급하지 않는다.\n\n[날짜]\n- 원문에서 확인되는 날짜만 쓴다.\n- 연도와 월/일을 모두 알면 `[2026년 9월 7일-사건명]`처럼 쓴다.\n- 연도를 모르면 월/일만 사용한다.\n- 연도만 확실하고 월/일을 모르면 `[2026년-사건명]`처럼 연도-only 제목을 사용한다. 알 수 없는 월/일을 추정하지 않는다.\n- 연도도 월/일도 모르면 `[날짜 미상-사건명]`.\n- 제목에서 날짜와 사건명은 하이픈 하나로 구분하고 사건명 안에 대괄호를 쓰지 않는다.\n- 인접 사건의 날짜를 자동 복사하지 않는다.\n- 날짜/기간/수치가 충돌하면 명시적 정정이 없는 한 임의로 하나를 고르지 않는다.\n- 특수 연호가 원문 정식 표기라면 BC/BCE/AD/CE/기원전/서기를 억지로 일반 연도로 변환하지 않는다.\n\n[블록 본문]\n- 핵심 원인 → 실제 행동/결정 → 결과 → 후속 연속성을 우선한다.\n- 누가 직접 목격/청취/전달받았는지가 중요한 사건은 정보격차가 사라지지 않게 적는다.\n- 대사 전문과 묘사는 필요한 짧은 핵심만 남긴다.\n- 이미 기존 블록에 있는 사실 중 신규 RP로 바뀌지 않은 내용은 삭제하지 않는다.\n- 입력에 없는 원인·동기·날짜·관계 결론을 창작하지 않는다.\n\nManager가 출력된 블록을 날짜와 사건 제목을 함께 식별하여 기존 저장소에 병합한다.\n\n[사건 식별]\n같은 날짜의 다른 사건은 서로 다른 제목으로 출력한다. 기존 사건을 보완할 때는 입력에 전문이 제공된 기존 블록의 날짜·제목을 그대로 유지하고, 기존 사실 전체와 신규 보충을 포함한 완전한 교체 블록을 낸다. 날짜만 같은 사건을 합치거나 삭제하지 않는다. 날짜 정정·제목 변경으로 기존 사건을 바꿔야 하면 라이브 출력에서 삭제를 시도하지 않고 원문 편집/전체 재구축으로 처리한다.\n",
   });
 
 
@@ -1508,13 +1508,27 @@ const WLOG=(()=>{
     })[format] || format;
   }
 
+  // User-stop for long AI tasks: rejects the waiting promise at once and aborts in-flight GM requests.
+  const AiAbort=(()=>{let ctl=null;const handles=new Set();
+    const err=msg=>Object.assign(new Error(msg||'작업을 중단했어요.'),{code:'WISH_USER_ABORT'});
+    return {
+      begin(){ctl={aborted:false,rejects:new Set()};return ctl;},
+      end(c){if(ctl===c){ctl=null;handles.clear();}},
+      track(h){if(ctl&&h&&typeof h.abort==='function')handles.add(h);return h;},
+      untrack(h){handles.delete(h);},
+      abort(msg){const c=ctl;if(!c||c.aborted)return;c.aborted=true;for(const h of handles){try{h.abort();}catch{}}handles.clear();const e=err(msg);for(const f of c.rejects)f(e);c.rejects.clear();},
+      race(p){const c=ctl;if(!c)return p;if(c.aborted)return Promise.reject(err());return new Promise((res,rej)=>{c.rejects.add(rej);Promise.resolve(p).then(v=>{c.rejects.delete(rej);res(v);},e=>{c.rejects.delete(rej);rej(e);});});}
+    };})();
+
   function aiGmRequestJson({ method='POST', url, headers={}, body=null, timeout=120000, label='AI' }) {
     return new Promise((resolve, reject) => {
-      GM_xmlhttpRequest({
+      let handle=null;const done=()=>AiAbort.untrack(handle);
+      handle=GM_xmlhttpRequest({
         method, url, headers,
         data: body == null ? undefined : JSON.stringify(body),
         timeout,
         onload: res => {
+          done();
           let parsed = null;
           try { parsed = res.responseText ? JSON.parse(res.responseText) : {}; }
           catch (_) {
@@ -1526,11 +1540,99 @@ const WLOG=(()=>{
           }
           resolve(parsed || {});
         },
-        ontimeout: () => reject(new Error(`${label} API 요청 시간이 초과되었습니다.`)),
-        onerror: () => reject(new Error(`${label} API 네트워크 요청에 실패했습니다.`)),
+        ontimeout: () => {done();reject(new Error(`${label} API 요청 시간이 초과되었습니다.`));},
+        onerror: () => {done();reject(new Error(`${label} API 네트워크 요청에 실패했습니다.`));},
+        onabort: () => {done();reject(Object.assign(new Error('작업을 중단했어요.'),{code:'WISH_USER_ABORT'}));},
       });
+      AiAbort.track(handle);
     });
   }
+
+  // Local-only usage ledger. No prompts, credentials, RP text or network requests.
+  const WishUsage=(()=>{
+    const PREFIX='wish-usage-ledger-v1:',KEY=PREFIX+crypto.randomUUID(),RATES='wish-usage-rates-v1';let data=null,timer=null;
+    const day=(at=Date.now())=>{const d=new Date(at);return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-');};
+    const since=(at=Date.now())=>{const d=new Date(at);d.setDate(1);d.setMonth(d.getMonth()-11);return day(d);};
+    // Official standard (non-batch) text pricing, re-verified 2026-09-27. USD per 1M tokens: [input, output(incl. thinking), cached input].
+    // Sources: ai.google.dev/gemini-api/docs/pricing, api-docs.deepseek.com/quick_start/pricing.
+    // Gemini: thinking tokens are billed as output at the same rate for every thinking level.
+    // DeepSeek: thinking/non-thinking share one price. Off-peak = half of peak. Peak = UTC 01-04, 06-10, Mon-Fri, except Chinese public holidays.
+    const CN_HOLIDAYS=new Set(['2026-09-25','2026-10-01','2026-10-02','2026-10-05','2026-10-06','2026-10-07']); // 2026 weekday holidays (Beijing date); 2027 not yet announced
+    function official(meta,t,at=Date.now()){
+      const m=meta.model,p=meta.provider;let r;
+      if(p==='ai-studio'||p==='firebase'){
+        if(/^gemini-3\.[678]-flash$/.test(m))r=at<Date.UTC(2027,0,1)?[.75,3.75,.075]:[1.5,7.5,.15];
+        else if(m==='gemini-3.5-flash')r=[1.5,9,.15];
+        else if(m==='gemini-3.5-flash-lite')r=[.3,2.5,.03];
+        else if(m==='gemini-3.1-flash-lite')r=[.25,1.5,.025];
+        else if(m==='gemini-3.1-pro-preview'||m==='gemini-3.1-pro')r=t.input>200000?[4,18,.4]:[2,12,.2];
+        if(r&&p==='firebase'&&meta.location&&meta.location!=='global'){
+          if(/^gemini-3\.1-pro/.test(m))return null;
+          r=r.map(n=>n*1.1);
+        }
+      }else if(p==='deepseek'){
+        if(['deepseek-flash','deepseek-v4-flash','deepseek-v4-flash-vision-exp'].includes(m))r=[.3,1.2,.006];
+        else if(m==='deepseek-v4-pro')r=[1.32,3.96,.044];
+        const d=new Date(at),h=d.getUTCHours(),weekday=d.getUTCDay();
+        const cnDay=new Date(at+8*3600e3).toISOString().slice(0,10);
+        if(r&&(CN_HOLIDAYS.has(cnDay)||!(weekday>0&&weekday<6&&((h>=1&&h<4)||(h>=6&&h<10)))))r=r.map(n=>n/2);
+      }
+      return r?{input:r[0],output:r[1],cached:r[2]}:null;
+    }
+    function load(){if(!data){try{data=JSON.parse(localStorage.getItem(KEY)||'null');}catch{}if(!data||data.version!==1||!Array.isArray(data.rows))data={version:1,rows:[],rates:{}};data.rates||={};}return data;}
+    function flush(){clearTimeout(timer);timer=null;if(data?.rows.length)try{localStorage.setItem(KEY,JSON.stringify(data));}catch(e){console.warn('[Wish] 사용량 기록 저장 실패',e.name);}}
+    const number=x=>typeof x==='number'&&Number.isFinite(x)&&x>=0?x:null;
+    function tokens(raw){
+      const g=raw?.usageMetadata||raw?.response?.usageMetadata,u=raw?.usage;
+      if(g){const input=number(g.promptTokenCount),out=number(g.candidatesTokenCount),think=number(g.thoughtsTokenCount)||0;return {input,output:out===null?null:out+think,cached:number(g.cachedContentTokenCount)||0};}
+      if(u)return {input:number(u.prompt_tokens??u.total_input_tokens),output:number(u.completion_tokens??u.total_output_tokens),cached:number(u.prompt_cache_hit_tokens??u.prompt_tokens_details?.cached_tokens??u.total_cached_tokens)||0};
+      return {input:null,output:null,cached:0};
+    }
+    const modelKey=m=>JSON.stringify([m.provider,m.model]);
+    function record(meta,raw,failed,at){try{
+      const db=load(),date=day(at),t=tokens(raw),rate=official(meta,t,at),key=JSON.stringify([date,meta.provider,meta.model,meta.task,rate]);
+      let row=db.rows.find(r=>r.key===key);if(!row){row={key,date,provider:meta.provider,model:meta.model,task:meta.task,rate,calls:0,failed:0,unknown:0,input:0,output:0,cached:0};db.rows.push(row);}
+      row.calls++;if(failed)row.failed++;
+      if(t.input===null||t.output===null)row.unknown++;else{row.input+=t.input;row.output+=t.output;row.cached+=Math.min(t.cached,t.input);}
+      // Bounded daily aggregates, independent of room/card volume.
+      db.rows=db.rows.filter(r=>r.date>=since());
+      if(!timer)timer=setTimeout(flush,500);
+    }catch(e){console.warn('[Wish] 사용량 집계 실패',e.name);}}
+    async function track(cfg,options,fn){const at=Date.now(),model=getAiSelectedModel(cfg),meta={provider:cfg.provider==='deepseek'&&!isDirectDeepSeekBaseUrl(cfg.deepSeekBaseUrl)?'deepseek-custom':cfg.provider,model,location:/^gemini-3\.[678]-flash$/.test(model)?'global':cfg.firebaseLocation,task:options.operationLabel||options.taskKind||'AI 요청'};let raw;try{raw=await fn();record(meta,raw,false,at);return raw;}catch(e){record(meta,null,true,at);throw e;}}
+    function cost(r){const p=load().rates[modelKey(r)]||r.rate;if(!p)return null;return ((r.input-r.cached)*p.input+r.cached*p.cached+r.output*p.output)/1e6;}
+    function total(rows){return rows.reduce((a,r)=>{const c=cost(r);a.calls+=r.calls;a.failed+=r.failed;a.unknown+=c===null?r.calls:r.unknown;a.usd+=c||0;return a;},{calls:0,failed:0,unknown:0,usd:0});}
+    function snapshot(){const db=load(),all=new Map(),cutoff=since();
+      try{db.rates=JSON.parse(localStorage.getItem(RATES)||'{}');}catch{db.rates={};}
+      const add=rows=>{for(const r of rows||[]){if(r.date<cutoff)continue;let row=all.get(r.key);if(!row){all.set(r.key,{...r});continue;}for(const k of ['calls','failed','unknown','input','output','cached'])row[k]+=Number(r[k])||0;}};
+      // Per-page shards prevent one active tab from overwriting another's counters.
+      const keys=Array.from({length:localStorage.length},(_,i)=>localStorage.key(i));
+      for(const key of keys){if(!key?.startsWith(PREFIX)||key===KEY)continue;try{const saved=JSON.parse(localStorage.getItem(key));if(saved?.version===1){const rows=(saved.rows||[]).filter(r=>r.date>=cutoff);if(!rows.length)localStorage.removeItem(key);else{add(rows);if(rows.length!==saved.rows.length)localStorage.setItem(key,JSON.stringify({...saved,rows}));}}}catch{}}
+      db.rows=db.rows.filter(r=>r.date>=cutoff);if(!db.rows.length)localStorage.removeItem(KEY);else flush();
+      add(db.rows);const rows=[...all.values()];return {rows,models:[...new Map(rows.map(r=>[modelKey(r),{key:modelKey(r),provider:r.provider,model:r.model,...(db.rates[modelKey(r)]||{input:'',output:'',cached:''})}])).values()]};}
+    function saveRates(models){const next={...load().rates};for(const m of models){if([m.input,m.output,m.cached].every(v=>v==='')){delete next[m.key];continue;}const vals={};for(const k of ['input','output','cached']){if(String(m[k]).trim()===''||!Number.isFinite(Number(m[k]))||Number(m[k])<0)throw Error('입력·출력·캐시 단가를 모두 0 이상의 숫자로 입력해 주세요. 무료는 0입니다.');vals[k]=Number(m[k]);}next[m.key]=vals;}localStorage.setItem(RATES,JSON.stringify(next));load().rates=next;}
+    addEventListener('pagehide',flush);
+    return {day,since,official,tokens,track,snapshot,total,saveRates,flush};
+  })();
+
+  const WishLocalViews=(()=>{
+    function calendar(room){const rows=parseDatedLogBlocks(room.slots.find(s=>s.id==='logSummary')?.content||'');const valid=r=>!r.isSpecialDate&&!r.isCustomDate&&Number.isInteger(r.year)&&r.year>0;
+      const years=[...new Set(rows.filter(valid).map(r=>r.year))].sort((a,b)=>a-b);
+      return {rows,years,valid};
+    }
+    function graph(v){
+      const nodes=[],byId=new Map(),byName=new Map(),ambiguous=new Set(),pairs=new Map();
+      const nameKey=s=>String(s||'').trim().normalize('NFKC').toLocaleLowerCase();
+      const alias=(text,n)=>{const k=nameKey(text);if(!k)return;if(byName.has(k)&&byName.get(k)!==n){byName.delete(k);ambiguous.add(k);}else if(!ambiguous.has(k))byName.set(k,n);};
+      for(const a of v.cog.actors){const n={id:String(a.id),name:a.name,pc:a.pc};nodes.push(n);byId.set(n.id,n);for(const s of [a.name,...(a.aliases||[])])alias(s,n);}
+      const resolve=text=>{if(!text)return null;if(byId.has(String(text)))return byId.get(String(text));const k=nameKey(text);if(byName.has(k))return byName.get(k);const n={id:'name:'+k,name:String(text),pc:false};if(!byId.has(n.id)){nodes.push(n);byId.set(n.id,n);}return byId.get(n.id);};
+      function pair(a,b){if(!a||!b||a.id===b.id)return null;const k=JSON.stringify([a.id,b.id].sort());if(!pairs.has(k))pairs.set(k,{a:a.id,b:b.id,speech:[],relations:[],secrets:[]});return pairs.get(k);}
+      for(const r of v.speech.rows){const a=resolve(r.speaker),b=resolve(r.target);pair(a,b)?.speech.push({...r,a:a.id,b:b.id});}
+      for(const r of v.relationships.rows){const a=resolve(r.speaker),b=resolve(r.target);pair(a,b)?.relations.push({...r,a:a.id,b:b.id});}
+      for(const f of v.cog.facts)for(const c of f.con||[]){const a=byId.get(String(c.h)),b=byId.get(String(c.t));const p=pair(a,b);if(p)p.secrets.push({a:a.id,b:b.id,text:a.name+' → '+b.name+' · '+f.label+(c.scope?' · '+c.scope:'')});}
+      return {nodes,pairs:[...pairs.values()],facts:v.cog.facts};
+    }
+    return {calendar,graph};
+  })();
 
   function aiHashTiny(value) {
     let h = 2166136261;
@@ -1656,11 +1758,11 @@ const WLOG=(()=>{
     const headers = { 'Content-Type':'application/json', 'x-goog-api-key':cfg.apiKey };
     const run = async currentOptions => {
       if (AI_GEMINI_INTERACTIONS_MODELS.has(model)) {
-        const data = await aiGmRequestJson({ url:'https://generativelanguage.googleapis.com/v1beta/interactions', headers, body:buildGeminiInteractionsPayload(cfg, systemPrompt, userPrompt, currentOptions), timeout:Number(currentOptions.timeoutMs)||120000, label:'Gemini Interactions' });
+        const data = await WishUsage.track(cfg,options,()=>aiGmRequestJson({ url:'https://generativelanguage.googleapis.com/v1beta/interactions', headers, body:buildGeminiInteractionsPayload(cfg, systemPrompt, userPrompt, currentOptions), timeout:Number(currentOptions.timeoutMs)||120000, label:'Gemini Interactions' }));
         return normalizeInteractionResponse(data);
       }
       const payload = buildGeminiPayload(cfg, systemPrompt, userPrompt, currentOptions);
-      const data = await aiGmRequestJson({ url:`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, headers, body:payload, timeout:Number(currentOptions.timeoutMs)||120000, label:'Gemini' });
+      const data = await WishUsage.track(cfg,options,()=>aiGmRequestJson({ url:`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, headers, body:payload, timeout:Number(currentOptions.timeoutMs)||120000, label:'Gemini' }));
       return { text:extractGeminiCandidateText(data), raw:data };
     };
     try { return await run(options); }
@@ -1684,7 +1786,7 @@ const WLOG=(()=>{
     const modelOptions = { model, systemInstruction:String(systemPrompt || ''), generationConfig:buildGeminiGenerationConfig(cfg, options) };
     const gm = firebase.getGenerativeModel(ai, modelOptions);
     try {
-      const result = await gm.generateContent({ contents:[{ role:'user', parts:[{ text:String(userPrompt || '') }] }] });
+      const result = await WishUsage.track(cfg,options,()=>gm.generateContent({ contents:[{ role:'user', parts:[{ text:String(userPrompt || '') }] }] }));
       const response = result?.response;
       const finishReason=String(response?.candidates?.[0]?.finishReason||'');
       if(/MAX_TOKENS|LENGTH|BUDGET_EXCEEDED/i.test(finishReason))throw new Error('AI 출력이 토큰 한도에서 잘렸습니다. 출력 한도나 요청 범위를 조정해 주세요. ('+finishReason+')');
@@ -1716,11 +1818,11 @@ const WLOG=(()=>{
       thinking:{ type:cfg.deepSeekThinking ? 'enabled' : 'disabled' },
       max_tokens:Math.max(1, Number(options.maxOutputTokens || cfg.maxOutputTokens) || cfg.maxOutputTokens),
     };
-    if (cfg.deepSeekThinking) body.reasoning_effort = 'high'; else body.temperature = cfg.temperature;
+    if (cfg.deepSeekThinking) body.reasoning_effort = cfg.deepSeekReasoningEffort==='low'?'low':'high'; else body.temperature = cfg.temperature;
     if (wantsJson) body.response_format = { type:'json_object' };
     let data;
     try {
-      data = await aiGmRequestJson({ url:`${baseUrl}/chat/completions`, headers:{'Content-Type':'application/json',Authorization:`Bearer ${cfg.deepSeekApiKey}`}, body, timeout:Number(options.timeoutMs)||120000, label:'DeepSeek' });
+      data = await WishUsage.track(cfg,options,()=>aiGmRequestJson({ url:`${baseUrl}/chat/completions`, headers:{'Content-Type':'application/json',Authorization:`Bearer ${cfg.deepSeekApiKey}`}, body, timeout:Number(options.timeoutMs)||120000, label:'DeepSeek' }));
     } catch (e) {
       const m=String(e.message||e); if (/401|403/.test(m)) throw new Error('DeepSeek 인증 오류: API Key를 확인해 주세요.'); if (/429/.test(m)) throw new Error('DeepSeek 요청 한도 초과: 잠시 후 다시 시도해 주세요.'); throw e;
     }
@@ -1738,8 +1840,21 @@ const WLOG=(()=>{
     finally{if(timer)clearTimeout(timer);}
   }
 
+  // Request-local policy. Never overwrite the user's saved extraction settings.
+  function aiTaskSettings(settings, taskKind='extract') {
+    const cfg={...normalizeAiSettings(settings)};
+    if(taskKind==='select'||taskKind==='test'){
+      cfg.geminiThinkingLevel='low';
+      if(cfg.provider==='deepseek'){
+        if(isDirectDeepSeekBaseUrl(cfg.deepSeekBaseUrl))cfg.deepSeekReasoningEffort='low';
+        else cfg.deepSeekThinking=false; // Unknown proxy model: do not assume low-effort support.
+      }
+    }
+    return cfg;
+  }
+
   async function callAiProvider(settings, systemPrompt, userPrompt, options={}) {
-    const cfg = normalizeAiSettings(settings);
+    const cfg = aiTaskSettings(settings,options.taskKind);
     options={...options,timeoutMs:Number(options.timeoutMs)>0?Number(options.timeoutMs):(cfg.provider==='firebase'?180000:120000)};
     const label=options.operationLabel||WLOG.current()?.operation||'보조 AI 요청';
     const inputChars=String(systemPrompt||'').length+String(userPrompt||'').length,started=Date.now();
@@ -1759,7 +1874,7 @@ const WLOG=(()=>{
     }
     return await callGoogleAiStudio(cfg, systemPrompt, userPrompt, options);
     };
-    const result=await withAiTimeout(invoke(),options.timeoutMs,options.operationLabel||'보조 AI 요청');
+    const result=await withAiTimeout(AiAbort.race(invoke()),options.timeoutMs,options.operationLabel||'보조 AI 요청');
     return { ...result, text:cleanAiGeneratedText(result.text),diagnostic:{provider:cfg.provider,model:getAiSelectedModel(cfg),finishReason:String(result.raw?.candidates?.[0]?.finishReason||result.raw?.choices?.[0]?.finish_reason||'')} };
     }finally{timers.forEach(clearTimeout);details.elapsedMs=Date.now()-started;}
     },details);
@@ -3621,7 +3736,7 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
         notify(p.memory&&p.observe?'기억·인물 정리 · 통합 1회 요청':'묶음 정리 · 1회 요청','success',3000);
         // JSON MIME + explicit contract avoids schema-rejection fallback making a second call.
         if(req.stateDelta)await WishEconomy.backup(room);
-        const result=await callAiProvider(settings,requestSystem,req.prompt,{responseMimeType:'application/json',operationLabel:unifiedStage});
+        const result=await callAiProvider(settings,requestSystem,req.prompt,{taskKind:'extract',responseMimeType:'application/json',operationLabel:unifiedStage});
         unifiedStage='통합 정리 응답 해석 중';renderModalIfIdle();const data=WLOG.parseJson(result.text,'기억·인물 통합 정리',result.diagnostic);
         unifiedStage='통합 결과 근거·참조 검증 중';renderModalIfIdle();const staged=stage(room,cog,packs,p,req,data);staged.room.unified.retry=null;
         const latest=stableFrame([...(await fetchAllRoomMessages(apiChatIdOf(room)))].reverse());
@@ -4034,9 +4149,9 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
   }
   function joinStage(previous,staged){const all=new Map(previous.packs.map(p=>[p.scopeId,p]));for(const p of staged.packs)all.set(p.scopeId,p);return {room:staged.room,cog:staged.cog||previous.cog,packs:[...all.values()],notices:[...new Set([...(previous.notices||[]),...(staged.notices||[])])],rejectedQuotes:[...(previous.rejectedQuotes||[]),...(staged.rejectedQuotes||[])]};}
   async function guard(r,fn){if(busy()||generationPending(apiChatIdOf(r)))throw Error('진행 중인 작업이 끝난 뒤 실행해 주세요.');
-    const epoch=localRestoreEpoch;control={cancelled:false};aiUpdateRunning=true;
+    const epoch=localRestoreEpoch;control={cancelled:false};aiUpdateRunning=true;const abortCtl=AiAbort.begin();
     const check=()=>{if(control?.cancelled||epoch!==localRestoreEpoch||state.currentRoom!==r)throw Error('작업이 중단되었거나 방·복원 상태가 바뀌었습니다.');};
-    task=(async()=>{try{return await fn(check);}finally{aiUpdateRunning=false;}})();paint();try{return await task;}finally{task=null;control=null;paint();}}
+    task=(async()=>{try{return await fn(check);}finally{aiUpdateRunning=false;}})();paint();try{return await task;}finally{AiAbort.end(abortCtl);task=null;control=null;paint();}}
   async function read(r){return await WLOG.run("재구축할 과거 대화 읽는 중",async task=>{if(get(r)?.draft&&!confirm('읽어 둔 구간과 미적용 결과를 새 원문으로 교체할까요?'))return;return guard(r,async check=>{const s=await source(r);check();const c=await bridge().snapshotRaw(apiChatIdOf(r)),ps=packs(r);await U3.initialize(r,{stable:[...s.messages.map(m=>m.raw)].reverse()},c);check();const j={id:id(r),chatId:r.chatId,kind:'wish-rebuild-231',version:1,status:'pending',message:'대화 읽기 완료',sourceHash:s.hash,anchor:s.anchorMessageId,sourceCount:s.messages.length,segments:segments(s.rows),draft:seed(r,c,ps),basis:basis(r,c,ps),createdAt:nowIso()};await save(r,j);return j;});});}
   function normalizeApiResult(raw,req){
     const data=clone(raw),rows=data?.memory?.state?.sections;
@@ -4071,7 +4186,7 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
       const system=guide+(attempt?`\n[검증 실패 응답 보정 · 한 번만 수행]\nrepair는 직전 출력과 검사 결과이며 정사 근거가 아니다. 원래 request.rp를 다시 대조해 오류를 고친 전체 JSON을 반환한다. 정상 항목과 필요한 신규 변화는 보존한다. 오류를 피하려고 배열 전체를 비우거나 변경된 정보를 삭제하지 않는다. 근거 인용은 이번 구간의 한 USER 또는 ASSISTANT 본문에서 연속된 실제 구절을 그대로 복사한다. 앞 구간/continuityReference/기존 요약/시간 단서는 새 evidence가 아니다. 인용문을 의역하거나 서로 떨어진 문장을 합치지 않는다. 기존 항목이 그대로면 upsert에서 제외해도 보존된다. 원문으로 뒷받침되지 않는 신규 추론만 제거할 수 있다. 출력은 최초 요청과 동일한 전체 스키마를 따른다.\n`:'');
       // Transport/auth/rate-limit failures are not validation repair candidates.
       WishMemorySafety.wire(system,prompt,options.responseJsonSchema);
-      const reply=await callAiProvider(cfg,system,prompt,{...options,operationLabel:attempt?'전체 재구축 결과 보정 (1회)':'전체 재구축 구간 분석'});
+      const reply=await callAiProvider(cfg,system,prompt,{taskKind:'extract',...options,operationLabel:attempt?'전체 재구축 결과 보정 (1회)':'전체 재구축 구간 분석'});
       check();
       try{
         const data=normalizeApiResult(WLOG.parseJson(reply.text,'전체 재구축',reply.diagnostic),req);
@@ -4130,11 +4245,10 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
   function relationshipOnlyGuideDefault(){return '# Wish RP Manager Core — 전체 RP에서 관계·감정선만 재구축\n'+WishRelationships.fullGuide+'\n다른 기억은 변경하지 않는다. people에는 관계에 필요한 인물만 등록한다. 기존 인물의 이름·별칭·PC 구분은 변경하지 않는다. people.evidence는 해당 인물을 확인하는 RP 한 메시지의 연속 원문이다. 고정 설정/보호 자료는 참고일 뿐 새로운 RP 인용이 아니다. 모든 번호 파일을 읽은 뒤 최종 순수 JSON 하나만 반환한다. source 값은 그대로 복사한다. format=wish-relationship-rebuild, version=1.\n[출력 Schema]\n';}
   function relationshipOnlyGuide(){return getGuideText('externalRelationships')+JSON.stringify(RELATION_SCHEMA,null,2);}
   async function exportText(r,only=false){return await WLOG.run("외부 AI용 지침·원문 만드는 중",async task=>{return guard(r,async check=>{const s=await source(r);check();const segs=segments(s.rows),manifest=JSON.stringify({last_message_id:s.anchorMessageId,sha256:s.hash});const fixed=(r.slots||[]).filter(x=>(x.group==='character'||(x.group==='extra'&&x.enabled))&&String(x.content||'').trim()).map(x=>`[사용자 관리 ${x.group==='character'?'캐릭터 설정':'OOC·기타'} · ${x.title}]\n${x.content}`).join('\n\n');const originalCog=await bridge().snapshotRaw(apiChatIdOf(r)),d=seed(r,originalCog,packs(r)),ref=JSON.parse(U3.request(d.room,d.cog,d.packs,{memory:true,observe:true,mem:[],obs:[]},{rebuild:true}).prompt);check();
-    if (useAppleTextDownloadList()) {
+    
       const files=segs.map(seg=>({text:(only?relationshipOnlyGuide():externalGuide())+`\n\n[SOURCE]\n${manifest}\n\n[고정 설정 참고]\n${fixed}\n\n[수동·보호 자료 참고]\n${JSON.stringify({observe:ref.observe,readOnlyPacks:ref.readOnlyPacks,relationshipPeople:only?originalCog.actors.filter(a=>!a.archived).map(a=>({name:a.name,aliases:a.aliases||[],isPlayer:!!a.isPlayer})):undefined})}\n\n[RP ${seg.index}/${segs.length} · 지침 제외 ${seg.chars}자]\n`+text(s.rows.slice(seg.start,seg.end)),filename:`${only?'Wish-관계재구축':'Wish-재구축'}-${seg.index}of${segs.length}.txt`}));
       check();openTextDownloadList(files,{title:only?'관계 재구축 TXT 받기':'전체 재구축 TXT 받기',roomName:WishRoomNames.display(r)});return segs;
-    }
-    for(const seg of segs)downloadText((only?relationshipOnlyGuide():externalGuide())+`\n\n[SOURCE]\n${manifest}\n\n[고정 설정 참고]\n${fixed}\n\n[수동·보호 자료 참고]\n${JSON.stringify({observe:ref.observe,readOnlyPacks:ref.readOnlyPacks,relationshipPeople:only?originalCog.actors.filter(a=>!a.archived).map(a=>({name:a.name,aliases:a.aliases||[],isPlayer:!!a.isPlayer})):undefined})}\n\n[RP ${seg.index}/${segs.length} · 지침 제외 ${seg.chars}자]\n`+text(s.rows.slice(seg.start,seg.end)),`${only?'Wish-관계재구축':'Wish-재구축'}-${seg.index}of${segs.length}.txt`,'text/plain');return segs;});});}
+    });});}
   function personNameKey(value){return String(value||'').normalize('NFKC').replace(/\s+/g,' ').trim().toLowerCase();}
   function personResolver(rows){
     const names=new Map(),aliases=new Map();
@@ -4302,7 +4416,7 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
     const epoch=localRestoreEpoch,input=document.createElement('input');input.type='file';input.accept='.json,application/json';
     input.onchange=async()=>{try{if(!input.files[0])return;if(state.currentRoom!==r||epoch!==localRestoreEpoch)throw Error('파일 선택 중 방·복원 상태가 바뀌었습니다.');const data=await readImportedJsonFile(input.files[0],{label:only?'관계 전용 재구축 JSON':'외부 전체 재구축 JSON',maxBytes:25*1024*1024});await importData(r,data,only);}catch(e){notify(e.message,'error',8000);}finally{input.value='';}};input.click();return true;
   }
-  return {get,load,read,run,apply,clear,exportText,importData,importFile,externalGuideDefault,relationshipOnlyGuideDefault,externalGuide,externalStage,relationshipOnlyGuide,onlyRelationshipStage,alignRelationActors,retainRelationshipScope,applyRelationshipReview,exportRelationshipBackup,externalSchema,segments,units,text,seed,joinStage,commit,schema:SCHEMA,relationshipSchema:RELATION_SCHEMA,busy:()=>!!task,stop:()=>{if(control)control.cancelled=true;},guide:WISH_EXTERNAL_REBUILD_GUIDE};
+  return {get,load,read,run,apply,clear,exportText,importData,importFile,externalGuideDefault,relationshipOnlyGuideDefault,externalGuide,externalStage,relationshipOnlyGuide,onlyRelationshipStage,alignRelationActors,retainRelationshipScope,applyRelationshipReview,exportRelationshipBackup,externalSchema,segments,units,text,seed,joinStage,commit,schema:SCHEMA,relationshipSchema:RELATION_SCHEMA,busy:()=>!!task,stop:()=>{if(control)control.cancelled=true;AiAbort.abort('작업을 중단했어요. 다시 누르면 성공한 구간 다음부터 이어서 분석해요.');},guide:WISH_EXTERNAL_REBUILD_GUIDE};
 })();
 
   let automaticMemoryJob = null;
@@ -5261,18 +5375,6 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
 
   function notify(message,type='info',duration=4000,options={}){if(!options.logged&&(type==='error'||type==='warn')){WUICache.errorCount++;WLOG.fail(WLOG.current()?.operation||'알림',message,{level:type});}if(WUI)WUI.toast(String(message),type==='success'?'ok':type,duration);else console.log('[Wish]',message);}
 
-
-  // Apple devices use explicit per-file taps; other platforms keep the original downloads.
-  function useAppleTextDownloadList(nav = navigator) {
-    const hinted = String(nav?.userAgentData?.platform || '').trim();
-    if (/^(macOS|Mac OS X|iOS|iPadOS)$/i.test(hinted)) return true;
-    if (/^(Android|Windows|Linux|Chrome OS|Chromium OS)$/i.test(hinted)) return false;
-    const platform = String(nav?.platform || '');
-    const agent = String(nav?.userAgent || '');
-    if (/Android|Windows NT|Windows Phone|CrOS/i.test(agent) || /^(Win|Linux|Android|CrOS)/i.test(platform)) return false;
-    // Mac matching also covers iPad browsers that report a desktop Mac identity.
-    return /^(Mac|iPhone|iPad|iPod)/i.test(platform) || /\b(iPhone|iPad|iPod|Macintosh)\b|\bMac OS X\b/i.test(agent);
-  }
 
   // TXT links stay valid while the list is open; each native tap requests one file.
   function openTextDownloadList(files, options = {}) {
@@ -6812,8 +6914,8 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     const finish=typeof WishPerformance==='undefined'?()=>{}:WishPerformance.start('selection');
     try {
   const requested=Number(options.limit),limit=Number.isFinite(requested)&&requested>0?Math.min(allFitLimit(room),Math.floor(requested)):allFitLimit(room);
-  const measure=createWishContextMeasure(original,room),exactSize=xs=>buildInjectedMessage(original,buildContextBlockFromItems(xs,room)).length;
-  let size=xs=>measure.totalLength(xs);
+  const measure=createWishContextMeasure(original,room),exactSize=options.totalLength||((xs)=>buildInjectedMessage(original,buildContextBlockFromItems(xs,room)).length);
+  let size=options.totalLength||((xs)=>measure.totalLength(xs));
   const total=exactSize(items);if(size(items)!==total)size=exactSize;
   if(total<=limit)return {items,method:'all-fit',total,fullTotal:total,omitted:0,error:'',limit};
   const required=items.filter(allFitRequired),optional=items.filter(i=>!allFitRequired(i));
@@ -6825,7 +6927,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
   const sourcePayload=local.map(({item,id})=>({id,title:String(item.title||''),kind:injectionCadenceKind(item),text:String(item.content||''),local_match:direct(item)}));
   const indexed=WishEconomy.settings(room).index,payload=indexed?WishEconomy.prepare(room,sourcePayload):sourcePayload;
   // 후보의 관련도 순위는 최종 글자 예산과 무관하므로 40k→36k 재시도에서도 그대로 재사용합니다.
-  const key=JSON.stringify([WishPromptGuides.selectorStamp(),indexed,cfg,query,original,String(room.slots?.find(s=>s.id==='currentState')?.content||'').slice(0,5000),sourcePayload,items.map(i=>[i.slotId,i.content,i.autoType]),settings.provider,getAiSelectedModel(settings),isAiProviderReady(settings)]);
+  const key=JSON.stringify(['selection-low-v1',WishPromptGuides.selectorStamp(),indexed,cfg,query,original,String(room.slots?.find(s=>s.id==='currentState')?.content||'').slice(0,5000),sourcePayload,items.map(i=>[i.slotId,i.content,i.autoType]),settings.provider,getAiSelectedModel(settings),isAiProviderReady(settings)]);
   let rank=allFitRankCache.get(key);
   if(rank?.method==='local-fallback'&&Date.now()-Number(rank.at||0)>=30000){allFitRankCache.delete(key);rank=null;}
   if(options.preferredKeys){const positions=new Map(optional.map((item,id)=>[pendingItemIdentity(item),id]));rank={ids:options.preferredKeys.filter(k=>positions.has(k)).map(k=>positions.get(k)),method:options.preferredMethod||'local',error:''};}
@@ -6842,7 +6944,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
         for(const candidates of batches){
           const remaining=selectionDeadline-Date.now();
           if(remaining<=0)throw Error(`주입 후보 AI 선별이 ${Math.ceil(RECALL_SELECTION_TIMEOUT_MS/1000)}초를 넘어 로컬 선별로 전환합니다.`);
-          const result=await callAiProvider(settings,getGuideText('apiRecall')+(indexed?getGuideText('apiIndex'):''),JSON.stringify({mode:cfg,query:String(query).slice(-8000),scene_context:{previous_answer_tail:stripAutomationNoise(original,true).slice(-6000),current_state_excerpt:String(room.slots?.find(s=>s.id==='currentState')?.content||'').slice(0,5000),scope:'읽기 전용 일부 문맥 · 신규 사실 생성 금지'},candidates}),{responseMimeType:'application/json',maxOutputTokens:indexed?Math.min(16384,8192+candidates.filter(x=>x.build_index).length*600):4096,timeoutMs:remaining,operationLabel:cfg.semantic&&cfg.selector?'관련 기억 찾기·우선순위 정하기':cfg.semantic?'표현이 다른 기억 찾기':'기억 우선순위 정하기'});
+          const result=await callAiProvider(settings,getGuideText('apiRecall')+(indexed?getGuideText('apiIndex'):''),JSON.stringify({mode:cfg,query:String(query).slice(-8000),scene_context:{previous_answer_tail:stripAutomationNoise(original,true).slice(-6000),current_state_excerpt:String(room.slots?.find(s=>s.id==='currentState')?.content||'').slice(0,5000),scope:'읽기 전용 일부 문맥 · 신규 사실 생성 금지'},candidates}),{taskKind:'select',responseMimeType:'application/json',maxOutputTokens:indexed?Math.min(16384,8192+candidates.filter(x=>x.build_index).length*600):4096,timeoutMs:remaining,operationLabel:cfg.semantic&&cfg.selector?'관련 기억 찾기·우선순위 정하기':cfg.semantic?'표현이 다른 기억 찾기':'기억 우선순위 정하기'});
           const parsed=WLOG.parseJson(result.text,'주입 후보 선별',result.diagnostic),data=indexed?WishEconomy.decode(parsed):parsed,valid=new Set(candidates.map(x=>x.id)),seen=new Set();
           if(!data||Object.keys(data).some(k=>k!=='scores')||!Array.isArray(data.scores)||data.scores.length!==candidates.length)throw Error('후보 개수가 맞지 않는 AI 결과');
           for(const row of data.scores){if(!row||Object.keys(row).some(k=>!['id','relevance','related',...(indexed?['index_quotes']:[])].includes(k))||!valid.has(row.id)||seen.has(row.id)||!Number.isInteger(row.relevance)||row.relevance<0||row.relevance>100||typeof row.related!=='boolean')throw Error('유효하지 않은 AI 후보 선별');seen.add(row.id);scores.push(row);}
@@ -7096,10 +7198,9 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
 
   function sessionSetupSelectedItems(room) {
     normalizeRoomSlots(room);
-    return selectedSlots(room)
-      .filter(s => s.group === 'character' || s.group === 'extra')
-      .map(s => ({ slotId:String(s.id||''), title:String(s.title||'').trim() || (s.group === 'character' ? '캐릭터' : '기타'), group:s.group, content:String(s.content||'').trim() }))
-      .filter(s => s.content);
+    // Before the first USER turn, selected characters need no RP name-match evidence.
+    return safeMemoryItems(room,snapshotSelectedItems(room,'',Number.MAX_SAFE_INTEGER))
+      .filter(item=>injectionEveryForItem(room,item)>0&&!item.off&&String(item.content||'').trim());
   }
 
   function sessionSetupHashFromItems(items) {
@@ -7108,27 +7209,16 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     return `setup_${simpleHash(list.map(i => [i.slotId,i.group,i.title,i.content.length,simpleHash(i.content)]).join('|'))}`;
   }
 
-  function buildSessionSetupBlock(room) {
-    const projection=SecondaryRebuild.projector(room);
-    const items = sessionSetupSelectedItems(room).map(projection.item);
-    const setupId = sessionSetupHashFromItems(items);
-    if (!setupId) return { block:'', hash:'', items:[] };
-    const body = items.map(item => {
-      const category = item.group === 'character' ? '캐릭터 설정' : '기타 · OOC';
-      const title = safeForHtmlComment(String(item.title || '').trim());
-      const content = safeForHtmlComment(String(item.content || '').trim());
-      return `### ${category} · ${title}\n${content}`;
-    }).join('\n\n');
-    const block = `${APP.sessionSetupMarkerStart} version="${APP.version}" id="${setupId}" sections="${items.map(i=>i.slotId).join(',')}"\n` +
-      `[세션 시작 설정]\n` +
-      `아래는 이번 RP 세션에 적용할 사용자 지정 캐릭터·OOC 설정이다. 극중 발언이나 별도 설명으로 출력하지 않는다.\n` +
-      `첫 USER 입력에 대한 응답부터 이후 RP에 자연스럽게 적용한다.\n` +
-      `캐릭터 설정은 해당 인물의 표현·행동·대사 기준으로, 기타·OOC는 RP 진행 규칙으로 사용한다.\n` +
-      `설정을 보여주기 위해 관련 없는 내용을 억지로 언급하지 않는다.\n` +
-      `이후 사용자가 직접 정정한 내용이 충돌하면 최신 사용자 정정을 우선한다.\n` +
-      `사용자 캐릭터의 행동·감정·선택을 대신 결정하지 않는다.\n\n` +
-      `${body}\n${APP.sessionSetupMarkerEnd}`;
-    return { block, hash:setupId, items };
+  function buildSessionSetupBlock(room, selected = sessionSetupSelectedItems(room)) {
+    const projection=SecondaryRebuild.projector(room,{contextNotation:true});
+    const items=selected.map(projection.item);
+    const setupId=sessionSetupHashFromItems(items);
+    if(!setupId)return {block:'',hash:'',items:[]};
+    const layout=contextLayout(items.map(item=>contextRow(item,room)),true);
+    const block=APP.sessionSetupMarkerStart+' version="'+APP.version+'" id="'+setupId+'" count="'+items.length+'"\n'+
+      '[세션 시작 자료]\n첫 USER 입력부터 아래 자료를 참고한다. 이후 직접 RP와 사용자 정정이 우선하며, 사용자 캐릭터의 행동·감정·선택을 대신 결정하지 않는다.\n'+
+      contextGuideText()+layout.body+'\n'+APP.sessionSetupMarkerEnd;
+    return {block,hash:setupId,items};
   }
 
   function buildSessionSetupMessage(original, setupBlock) {
@@ -7168,6 +7258,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     const original = stripSessionSetupBlock(first.raw).text.replace(/\s+$/,'');
     if (!original) throw new Error('AI 시작 메시지 원문이 비어 있어 시작 설정을 적용하지 않았습니다.');
     const nextText = buildSessionSetupMessage(original, setupBlock);
+    if(setupBlock&&nextText.length>allFitLimit(room))throw Error('시작 메시지와 주입 자료가 허용 글자 수를 넘습니다. 항목을 줄여 주세요.');
 
     await assertActiveRoomLease(rid);
     const current = await fetchMessage(rid,messageId);
@@ -7202,8 +7293,16 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
   }
 
   async function applyFreshSessionSetup(room) {
-    const built = buildSessionSetupBlock(room);
-    if (!built.block || !built.items.length) throw new Error('켜져 있고 내용이 있는 캐릭터 설정 또는 기타·OOC가 없습니다. 먼저 사용할 항목을 켜 주세요.');
+    const target=await inspectFreshSessionSetupTarget(room,true);
+    if(!target.fresh)throw Error(target.reason);
+    const bridge=(typeof unsafeWindow!=='undefined'?unsafeWindow:window).__WishCognitionBridge;
+    await bridge?.refreshExpression?.(apiChatIdOf(room));
+    const original=stripSessionSetupBlock(target.raw).text;
+    const selection=await chooseAllFitItems(room,sessionSetupSelectedItems(room),original,'',{
+      totalLength:items=>buildSessionSetupMessage(original,buildSessionSetupBlock(room,items).block).length
+    });
+    const built = buildSessionSetupBlock(room,selection.items);
+    if (!built.block || !built.items.length) throw new Error('켜져 있고 내용이 있는 주입 항목이 없습니다. 먼저 사용할 항목을 켜 주세요.');
     const result = await writeFreshSessionSetup(room,built.block,built.hash);
     room.sessionSetup = { version:1, messageId:result.messageId, appliedHash:built.hash, appliedAt:Date.now(), verified:true };
     await saveRoom(room);
@@ -8818,7 +8917,7 @@ function formatLocalRecordTime(value){
     if(respectEnabled&&room?.speechConfig?.enabled===false)return '';
     const rows=resolvedSpeechRelations(room);
     if(!rows.length)return '';
-    const head=includeRule?'이 목록은 저장 시점의 현재 호칭·말투다. 현재 장면에서 과거 기본값을 되살리지 않는다. 이후 직접 RP의 확정된 지속 변경은 이 목록보다 우선한다. 과거 장면 자체를 재현할 때는 당시 근거를 따르며 그것을 현재값의 변경으로 보지 않는다.\n':'';
+    const head=includeRule?'이 목록은 저장 시점의 현재 호칭·말투다. 현재 장면에서 과거 기본값을 되살리지 않는다. 이후 직접 RP의 확정된 지속 변경은 이 목록보다 우선한다. 과거 장면 자체를 재현할 때는 당시 근거를 따르며 그것을 현재값의 변경으로 간주하지 않는다.\n':'';
     return head+rows.map(row=>{const note=noteTransform?noteTransform(row):row.note;return `- ${row.speaker} → ${row.target}: ${row.address?'“'+row.address+'”라고 부름':'호칭 미확정'} · ${speechRegisterLabel(row.register)}${note?` · ${note}`:''}`;}).join('\n');
   }
 
@@ -9228,7 +9327,7 @@ function formatLocalRecordTime(value){
     }
     const basis=hybridRecallInputStamp(room);
     const assertPlan=()=>{assertCurrent();if(hybridRecallInputStamp(room)!==basis)throw recallStaleError();};
-    const inventory=JSON.stringify([WishPromptGuides.selectorStamp(),recallSelectionSettings(room),SecondaryRebuild.stamp(room),WishEconomy.stamp(room),normalPlan.map(i=>[pendingItemIdentity(i),i.content,i.autoType]).sort((a,b)=>a[0].localeCompare(b[0]))]);
+    const inventory=JSON.stringify(['selection-low-v1',WishPromptGuides.selectorStamp(),recallSelectionSettings(room),SecondaryRebuild.stamp(room),WishEconomy.stamp(room),normalPlan.map(i=>[pendingItemIdentity(i),i.content,i.autoType]).sort((a,b)=>a[0].localeCompare(b[0]))]);
     const previousPlan=pending.recallPlan;
     const retained=!selection&&!allowAi&&previousPlan?.inventoryHash===aiHashTiny(inventory)&&previousPlan.inventoryChars===inventory.length&&previousPlan.method==='ai'&&Array.isArray(previousPlan.rankedKeys);
     if(!selection)selection=await chooseAllFitItems(room,normalPlan,original,query,{forceLocal:!allowAi||!hasOriginal,...(retained?{preferredKeys:previousPlan.rankedKeys,preferredMethod:'ai'}:{})});
@@ -9292,7 +9391,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     if(text.length>120000)throw new Error('원문이 120,000자를 넘습니다. 뒷부분이 빠지지 않도록 나눠서 변환해 주세요.');
     const settings=loadAiSettings();
     const system=getGuideText('apiLoreConversion');
-    const result=await callAiProvider(settings,system,`${PROMPT_INPUT_BOUNDARY}\n\n[변환할 자료 원문]\n${text}`,{responseMimeType:'application/json',operationLabel:'텍스트를 자료 카드로 변환',responseJsonSchema:WISH_LORE_CONVERSION_SCHEMA,maxOutputTokens:Math.max(8192,Number(settings.maxOutputTokens||0)||8192)});
+    const result=await callAiProvider(settings,system,`${PROMPT_INPUT_BOUNDARY}\n\n[변환할 자료 원문]\n${text}`,{taskKind:'extract',responseMimeType:'application/json',operationLabel:'텍스트를 자료 카드로 변환',responseJsonSchema:WISH_LORE_CONVERSION_SCHEMA,maxOutputTokens:Math.max(8192,Number(settings.maxOutputTokens||0)||8192)});
     let parsed;try{parsed=JSON.parse(cleanAiGeneratedText(result.text));}catch{throw new Error('AI 변환 결과가 올바른 JSON이 아닙니다.');}
     if(!Array.isArray(parsed?.entries)||!parsed.entries.length)throw new Error('AI가 변환할 자료 항목을 만들지 못했습니다.');
     return parsed.entries.map(normalizeLoreEntry);
@@ -11028,10 +11127,10 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       btn.dataset.busy='1';btn.disabled=true;const old=btn.textContent;btn.textContent=action==='remove'?'제거 중…':'적용 중…';
       try{
         if(action==='remove'){
-          if(!confirm('첫 USER 전송 전에 AI 시작 메시지에서 세션 시작 설정만 제거할까요? 캐릭터·OOC 저장 내용 자체는 지워지지 않습니다.'))return;
+          if(!confirm('첫 USER 전송 전에 AI 시작 메시지에서 세션 시작 설정만 제거할까요? 저장된 자료 자체는 지워지지 않습니다.'))return;
           await removeFreshSessionSetup(room);notify('시작 설정을 AI 시작 메시지에서 제거했습니다.','success',3200);
         }else{
-          const result=await applyFreshSessionSetup(room);notify(`🚀 시작 설정 적용 완료 · 캐릭터/OOC ${result.count}개 · 첫 답변부터 적용됩니다.`,'success',4200);
+          const result=await applyFreshSessionSetup(room);notify(`🚀 시작 설정 적용 완료 · 주입 항목 ${result.count}개 · 첫 답변부터 적용됩니다.`,'success',4200);
         }
         await refreshSessionSetupEligibility(room,true).catch(()=>{});renderModalIfOpen();
       }catch(e){notify(e.message,'error',7000);await refreshSessionSetupEligibility(room,true).catch(()=>{});renderModalIfOpen();}
@@ -12882,6 +12981,11 @@ function createWishUI(AD) {
 
   /* ───────── 1. 아이콘 ───────── */
   const IC = {
+    wallet:'<path d="m9 7-2-4h10l-2 4M9 7h6c1 3 6 5 6 10 0 3-3 4-9 4s-9-1-9-4c0-5 5-7 6-10Z"/><path d="M9 7h6m-3 4v7m2-6h-3a1.5 1.5 0 000 3h2a1.5 1.5 0 010 3H9"/>',
+    list:'<path d="M9 6h11M9 12h11M9 18h11"/><path d="M4.5 6h.01M4.5 12h.01M4.5 18h.01"/>',
+    more:'<circle cx="5.5" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="18.5" cy="12" r="1.2" fill="currentColor"/>',
+    calendar:'<rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="M7.5 13.5h.01M12 13.5h.01M16.5 13.5h.01M7.5 17h.01M12 17h.01"/><rect x="15" y="15.5" width="3" height="3" rx=".7" fill="currentColor" stroke="none"/>',
+    relation:'<circle cx="12" cy="5" r="2.4"/><circle cx="5.5" cy="19" r="2.4"/><circle cx="18.5" cy="19" r="2.4"/><path d="M12 7.4V12M5.5 16.6V12h13v4.6"/>',
     inbox: '<path d="M4 13h4l1.5 3h5L16 13h4"/><path d="M5.6 5h12.8L20 13v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-5z"/>',
     memory: '<path d="M12 3.5 3.5 8 12 12.5 20.5 8z"/><path d="m3.5 12.5 8.5 4.5 8.5-4.5"/><path d="m3.5 16.5 8.5 4 8.5-4"/>',
     doc: '<path d="M7 3h7l5 5v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>',
@@ -13091,7 +13195,8 @@ function createWishUI(AD) {
     const g=new Map();
     for(const b of V.logs.blocks){const k=b.undated||!b.date||b.date==='날짜 미상'?'날짜 미상':b.date;if(!g.has(k))g.set(k,[]);g.get(k).push(b);}
     const groups=[...g].filter(([d])=>d!=='날짜 미상').reverse().concat([...g].filter(([d])=>d==='날짜 미상'));
-    return `<div class="m3-toolbar"><div class="m3-actions m3-grow">${btn('주입 로그 고르기','logPick',{cls:'mini',icon:'pin',feat:'logPick'})}${btn('원문 편집','raw',{arg:'log',cls:'mini',icon:'edit'})}${btn('날짜 표기 정리','logNorm',{cls:'mini',icon:'date',feat:'dateNorm'})}${btn('중복 날짜 정리','logDedupe',{cls:'mini',icon:'merge',feat:'dedupe'})}</div>${chip('주입','logs.inject',V.logs.inject)}</div>
+    const dupN=Number(V.logs.dupDates)||0,moreOpen=S.openSet.has('log-more');
+    return `<div class="m3-toolbar m3-logbar"><div class="m3-actions m3-grow"><span class="m3-viewseg" role="group" aria-label="보기 방식"><button type="button" class="is-on" aria-pressed="true">${ic('list')}<span>목록</span></button><button type="button" data-act="logCalendar" aria-pressed="false">${ic('calendar')}<span>달력</span></button></span>${btn('주입 로그 고르기','logPick',{cls:'mini',icon:'pin',feat:'logPick'})}${dupN&&has('dedupe')?`<button type="button" class="m3-dupwarn" data-act="logDedupe" title="중복 날짜 정리">${ic('alert')}<span>중복 <b>${dupN}</b></span></button>`:''}</div>${chip('주입','logs.inject',V.logs.inject)}<details class="m3-more" data-key="log-more" data-open="log-more"${moreOpen?' open':''}><summary class="m3-btn mini m3-more-btn" aria-label="정리 도구">${ic('more')}</summary><div class="m3-more-menu" role="menu"><div class="m3-more-h">정리 도구</div>${btn('원문 편집','raw',{arg:'log',cls:'mini',icon:'edit'})}${btn('날짜 표기 정리','logNorm',{cls:'mini',icon:'date',feat:'dateNorm'})}${btn('중복 날짜 정리'+(dupN?' · '+dupN+'개':''),'logDedupe',{cls:'mini',icon:'merge',feat:'dedupe'})}</div></details></div>
     ${groups.map(([d,bs])=>`<section class="m3-date-group" data-key="dg-${esc(d)}"><div class="m3-date-head"><b>${esc(d)}</b><small>${bs.length}블록</small></div>${bs.map(b=>card('lg-'+b.id,esc(b.title),fmt(b.size)+'자',`<p>${esc(b.body)}</p>`,btn('편집','lgEdit',{arg:b.id,cls:'mini',icon:'edit'})+btn('삭제','lgDel',{arg:b.id,cls:'danger mini'}),logBadges(b))).join('')}</section>`).join('')||empty('날짜로그가 비어 있습니다.')}`;
   }
   function mRelationships() {
@@ -13158,7 +13263,7 @@ function createWishUI(AD) {
   }
   function vCog() {
     const c = V.cog, pick = c.facts.filter(f => f.included).length;
-    return `${pageHead('인물 '+help(helpSections([['인물·인지','누가 무엇을 알고 모르는지, 누구에게 숨기는지를 관리합니다. 인지 주입 버튼과 각 정보의 포함·제외 설정을 따릅니다.'],['호칭·말투','화자→상대별 현재 호칭과 말투를 관리합니다. 호칭·말투 주입을 켜면 매턴 포함하며 과거 호칭보다 현재값을 우선합니다.'],['지금 정리','확인 화면의 인지·호칭·말투 지금 정리와 같은 기능입니다. 외부 AI API로 미처리 확정 대화를 읽어 인물·인지·호칭·말투·관계·감정선·은폐를 함께 갱신합니다.']])), `<span class="m3-actions">${btn('설정', 'nav', { arg: 'settings', cls: 'quiet mini', icon: 'set' })}${btn('지금 정리', 'cogRe', { cls: 'mini', icon: 'refresh' })}</span>`)}
+    return `${pageHead('인물 '+help(helpSections([['인물·인지','누가 무엇을 알고 모르는지, 누구에게 숨기는지를 관리합니다. 인지 주입 버튼과 각 정보의 포함·제외 설정을 따릅니다.'],['호칭·말투','화자→상대별 현재 호칭과 말투를 관리합니다. 호칭·말투 주입을 켜면 매턴 포함하며 과거 호칭보다 현재값을 우선합니다.'],['지금 정리','확인 화면의 인지·호칭·말투 지금 정리와 같은 기능입니다. 외부 AI API로 미처리 확정 대화를 읽어 인물·인지·호칭·말투·관계·감정선·은폐를 함께 갱신합니다.']])), `<span class="m3-actions">${btn('설정', 'nav', { arg: 'settings', cls: 'quiet mini', icon: 'set' })}${btn('관계도','relationMap',{cls:'mini',icon:'relation'})}${btn('지금 정리', 'cogRe', { cls: 'mini', icon: 'refresh' })}</span>`)}
     ${tabs([['people', '인물·인지'], ['speech', '호칭·말투'], ['relationships','관계·감정선'], ['review', `이전 검토 ${V.reviews.length}`]], S.cog, 'cogSub')}
     <div class="m3-sub" data-key="cog-${S.cog}">${S.cog === 'relationships' ? mRelationships() : S.cog === 'speech' ? mSpeech() : S.cog === 'review' ? `<div class="m3-sechead"><span class="m3-muted">이전 버전에서 보류한 후보입니다. 새 통합 정리는 직접 근거가 있는 변경만 적용합니다</span>${V.reviews.length ? btn('모두 제외', 'rvClear', { cls: 'quiet mini' }) : ''}</div>${V.reviews.map(reviewPanel).join('') || empty('검토할 항목이 없습니다.')}` :
       `<div class="m3-sechead"><b>인물 ${c.actors.length}</b><span class="m3-actions">${btn('인물 추가', 'acNew', { cls: 'mini', icon: 'plus' })}${chip('인지 주입','cogInclude',V.pol.cog!=='off')}</span></div>
@@ -13187,14 +13292,14 @@ function createWishUI(AD) {
     const mode=q.semantic?(q.selector?'both':'semantic'):(q.selector?'priority':'local');
     const autoHelp=helpSections([['모든 방 공통','주기 저장을 누르면 기억·인물 묶음의 켜짐과 주기가 기존 방과 새 방에 함께 적용됩니다. 정리한 위치와 기억 내용은 방마다 유지합니다.'],['턴 계산','1턴은 USER 메시지와 AI 답변 한 쌍입니다. 리롤은 같은 턴이며 최신 1턴은 다음 답변 뒤 확정됩니다.'],['함께 처리','두 묶음의 주기가 겹치면 같은 AI 요청으로 처리합니다. 주입 후보 선별은 별도로 설정합니다.']]);
     const recallHelp=helpSections([['기본 회수','최근 날짜와 키워드·에리 의미검색으로 찾은 관련 날짜/자료만 먼저 고릅니다. 전체 저장 기억은 삭제되지 않습니다.'],['보조 AI 재검토','선택한 경우 로컬·의미검색으로 좁힌 후보만 다시 봅니다. 응답 완료 뒤 준비하며 USER 전송 직전에는 AI를 기다리지 않습니다.'],['보호할 기억','현재상태·인지·호칭·켜진 캐릭터/OOC·고정 자료를 보호하고 일반 사건·자료는 카드 단위로 고릅니다.'],['안전선','40,000자 안전선과 서버 500 시 36,000자 1회 축소 규칙은 그대로 유지합니다.']]);
-    const advanced=`<section class="m3-panel" data-key="error-log-settings"><b class="m3-title-help">실패·주의 기록</b><p class="m3-muted">최근 작업 오류와 주의 사항을 확인합니다. API 키와 RP 원문은 기록하지 않습니다.</p><div class="m3-actions m3-topgap">${btn('실패 기록 보기','errorLogs',{cls:'mini',icon:'doc'})}</div></section><section class="m3-panel" data-key="automation-baseline"><b class="m3-title-help">자동 시작점 ${help('아직 정리하지 않은 과거 대화를 건너뛰고 이후 새 대화부터 셉니다. 저장된 기억·인지·자료는 유지합니다. 과거 내용을 다시 읽으려면 전체 재구축을 사용하세요.')}</b><p class="m3-muted">이 방의 미처리 대화를 건너뛰고 지금부터 새 대화를 셉니다. 저장된 기억·인지·자료는 유지합니다.</p><div class="m3-actions m3-topgap">${btn('지금으로 맞추기','memoryBase',{cls:'mini',icon:'clock'})}</div></section>`;
+    const advanced=`<section class="m3-panel" data-key="error-log-settings"><div class="m3-panel-head"><b class="m3-title-help">실패·주의 기록</b>${btn('실패 기록 보기','errorLogs',{cls:'mini',icon:'doc'})}</div><p class="m3-muted">최근 작업 오류와 주의 사항을 확인합니다. API 키와 RP 원문은 기록하지 않습니다.</p></section><section class="m3-panel" data-key="automation-baseline"><div class="m3-panel-head"><b class="m3-title-help">자동 시작점 ${help('아직 정리하지 않은 과거 대화를 건너뛰고 이후 새 대화부터 셉니다. 저장된 기억·인지·자료는 유지합니다. 과거 내용을 다시 읽으려면 전체 재구축을 사용하세요.')}</b>${btn('지금으로 맞추기','memoryBase',{cls:'mini',icon:'clock'})}</div><p class="m3-muted">이 방의 미처리 대화를 건너뛰고 지금부터 새 대화를 셉니다. 저장된 기억·인지·자료는 유지합니다.</p></section>`;
     return pageHead('설정')+
       `<section class="m3-panel"><b class="m3-title-help">보조 AI 연결 ${help('기억·인물 정리, 요약, 선택된 주입 후보 재검토에 같은 연결을 사용합니다. 에리 임베딩 의미검색은 Gemini API Key가 준비된 경우 사용합니다.')}</b><p>${esc([V.ai.providerLabel,V.ai.model].filter(Boolean).join(' · '))}</p>${btn('연결 · 모델','api',{cls:'mini'})}</section>`+
       `<section class="m3-panel" data-key="automation-settings"><div class="m3-panel-head"><b class="m3-title-help">자동 정리 ${help(autoHelp)}</b>${btn('주기 저장','unifiedSave',{cls:'mini'})}</div><p class="m3-muted m3-scope-hint">모든 방 공통 · 저장한 주기와 켜짐 설정 적용</p>${tog('기억 묶음','unified.memoryEnabled',u.memoryEnabled,'현재상태 · 날짜별 사건 · 자료')}${step('기억 정리 주기','unified.memoryEvery',u.memoryEvery,{max:100,unit:'턴마다'})}${tog('인물 묶음','unified.observeEnabled',u.observeEnabled,'인지 · 호칭 · 말투 · 은폐')}${step('인물 정리 주기','unified.observeEvery',u.observeEvery,{max:100,unit:'턴마다'})}</section>`+
       `<section class="m3-panel" data-key="economy-settings"><div class="m3-panel-head"><b class="m3-title-help">API 사용량 절약 ${help('실험 기능 · 현재 방에만 적용합니다. 둘 다 OFF이면 2.5.8 방식입니다. OFF는 이미 갱신된 기억을 되돌리지는 않습니다. 처음 켜기 전 기억·인지·자료 백업을 보관하며, 복원용 파일은 기존 백업/복원 화면에서 가져올 수 있습니다. RP 원문은 이 백업으로 되돌리지 않습니다.')}</b><span class="m3-actions m3-economy-actions">${btn('절약 적용 전 백업 받기','economyBackup',{cls:'mini'})}${btn('절약 설정 저장','economySave',{cls:'mini'})}</span></div>${helpToggle('현재상태 변경분 갱신','apiEconomy.delta',V.apiEconomy?.delta,'변경된 원문 구간만 수정하고 나머지 문구는 보존합니다. 수정·추가·종료에 신규 RP 근거와 요청 토큰을 검증합니다. 애매한 편집은 원본을 유지하고 오류를 표시합니다. 날짜별 사건·자료·인지는 기존 증분 방식을 유지합니다.')}${helpToggle('색인으로 후보 선별','apiEconomy.index',V.apiEconomy?.index,'전체 후보가 40,000자를 초과할 때만 기존 선별 설정에 따라 사용합니다. 첫 선별에서 원문과 점수를 읽고 짧은 발췌 색인을 함께 준비하므로 첫 호출은 더 커질 수 있습니다. 다음 호출부터 같은 원문의 색인을 사용하며 실제 주입은 원문입니다. 자료 변경·색인 부적합·캐시 소실 때는 원문으로 돌아갑니다. 핵심 단서 누락 가능성은 실전 비교가 필요합니다.')}<p class="m3-muted">${esc(V.apiEconomy?.status||'')}</p></section>`+
       `<section class="m3-panel" data-key="recall-settings"><div class="m3-panel-head"><b class="m3-title-help">선택된 기억 AI 재검토 ${help(recallHelp)}</b>${btn('재검토 설정 저장','recallSave',{cls:'mini'})}</div><div class="m3-setting-row m3-recall-mode"><label for="wish-recall-mode">재검토 방식</label>${selc('recall.mode',mode,[['local','에리·키워드 결과만 사용'],['priority','AI로 후보 순서 재검토'],['both','AI로 관련성·순서 재검토'],['semantic','AI로 관련성만 재검토']],'m3-select',' id="wish-recall-mode" aria-label="선택된 기억 AI 재검토"')}</div><p class="m3-muted">최근·관련 기억 검색은 유지 · 원문·서식 포함 전체 후보가 40,000자를 초과할 때만 AI 선별 · 관련 후보를 40,000자 안전선까지 포함 · 전송 시 40,000자 초과 후보만 AI 선별 · 임베딩·자동 정리는 별도</p>${helpToggle('AI로 관련성 재확인','recall.semantic',q.semantic,'사용하도록 설정한 전체 후보가 원문·서식 포함 40,000자를 초과하면 보조 AI가 문맥 관련성을 확인합니다. 제외 항목은 유지하며, 키워드가 일치하지 않는 후보도 평가합니다. 기존 검색 벡터는 재사용하고 전송 직전 새 임베딩 요청은 하지 않습니다.')}${helpToggle('AI로 우선순위 정하기','recall.selector',q.selector,'현재 질문·미해결 약속·위험과 직접 연결된 후보부터 40,000자 안전선 안에 배치합니다. 실패하면 에리·키워드 순위를 그대로 사용합니다.')}</section>`+
       `<section class="m3-panel" data-key="api-guides"><div class="m3-panel-head"><b>API 추출 지침</b>${btn('지침','promptGuides',{arg:'apiCommon',cls:'mini',icon:'doc'})}</div><p class="m3-muted">기억·인물·후보 선별 등 지침을 선택해 편집합니다. 모든 방 공통 · 기본값 복원 가능</p></section>`+
-      advanced;
+      `<section class="m3-panel" data-key="usage-settings"><div class="m3-panel-head"><b>AI 사용량 가계부</b>${btn('가계부','usageLedger',{cls:'mini',icon:'wallet'})}</div><p class="m3-muted">날짜별 호출 횟수와 예상 비용(USD) · 추가 API 호출 없음</p></section>`+advanced;
   }
   const NAV = [['check', '확인', 'inbox'], ['memory', '기억', 'memory'], ['lore', '자료집', 'book'], ['cognition', '인물', 'people'], ['tools', '자료 관리', 'tools'], ['settings', '설정', 'set']];
   const navList = () => NAV.filter(([k]) => (k !== 'lore' || has('lore')));
@@ -13262,16 +13367,538 @@ function createWishUI(AD) {
     V.cog.facts.forEach(f => hit(f.label, f.content) && out.push({ key: 'ft' + f.id, k: '인지', c: COL.cog, title: f.label, copy: f.content, act: 'ftEdit', arg: f.id }));
     return out.slice(0, 40);
   }
+  const APPROVED_STYLE=String.raw`
+:host{display:block;font-size:16px;line-height:normal;font-weight:400;letter-spacing:normal}
+*{box-sizing:border-box;margin:0;padding:0}
+button,input{font:inherit;color:inherit}
+button{cursor:pointer;background:none;border:0}
+button:disabled{cursor:default}
+.m3-ui{--f:'Pretendard','Noto Sans KR',-apple-system,sans-serif;--spring:cubic-bezier(.34,1.42,.5,1);--ease:cubic-bezier(.2,.8,.3,1);
+--m3-sheet:#fff;--m3-bg:#f2f4fa;--m3-card:#fff;--m3-card2:#f4f6fc;--m3-line:#e0e5f0;--m3-line2:#eef1f8;--m3-fg:#1b2130;--m3-fg2:#566079;--m3-muted:#8b93a9;--m3-accent:#3f52a0;--m3-accent-ink:#fff;--m3-accent-soft:#ebeefa;--m3-accent-line:#d2daf1;--m3-ok:#2f7a64;--m3-warn:#976d21;--m3-danger:#a84b57;
+--m3-shadow:0 1px 1px rgba(25,35,70,.04),0 12px 26px -20px rgba(25,35,70,.45);--m3-shell-shadow:0 28px 64px -34px rgba(25,35,70,.5);
+--c-rel:#c58eab;--c-state:#7f9fd8;--c-cog:#7ab7a4;--c-char:#d394b1;--c-extra:#b992c0;--c-lore:#929ad0;--c-log:#d5a86a;
+font-family:var(--f);color:var(--m3-fg);-webkit-font-smoothing:antialiased}
+.m3-ui.dark{--m3-sheet:#181c25;--m3-bg:#121620;--m3-card:#1f2430;--m3-card2:#252b39;--m3-line:#303747;--m3-line2:#272d3a;--m3-fg:#eef1f8;--m3-fg2:#b2bacd;--m3-muted:#828ba3;--m3-accent:#8ba1e4;--m3-accent-ink:#141a28;--m3-accent-soft:#232a3c;--m3-accent-line:#39425c;--m3-ok:#78c8ab;--m3-warn:#d5ab6d;--m3-danger:#e08b96;
+--m3-shadow:0 1px 1px rgba(0,0,0,.25),0 12px 26px -20px rgba(0,0,0,.8);--m3-shell-shadow:0 28px 64px -32px rgba(0,0,0,.85)}
+svg.ic{width:15px;height:15px;flex:none}
+.m3-shell{display:flex;flex-direction:column;max-height:calc(100dvh - 32px);border-radius:16px;border:1px solid var(--m3-line);background:var(--m3-sheet);box-shadow:var(--m3-shell-shadow);overflow:hidden}
+.m3-head{display:flex;align-items:center;gap:10px;padding:13px 12px 12px 16px;border-bottom:1px solid var(--m3-line2);flex:none}
+.hd-ic{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:var(--m3-accent-soft);color:var(--m3-accent);flex:none}
+.hd-ic svg.ic{width:17px;height:17px}
+.m3-head strong{font-size:15.5px;font-weight:650;letter-spacing:-.2px;white-space:nowrap}
+.m3-head small{font-size:11.5px;color:var(--m3-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.grow{flex:1;min-width:0}
+.icb{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:var(--m3-muted);flex:none;transition:background .2s,color .2s}
+.icb:hover:not(:disabled){background:var(--m3-card2);color:var(--m3-fg)}
+.icb:disabled{opacity:.28}
+.icb:focus-visible,.chipb:focus-visible,.seg button:focus-visible{outline:2px solid var(--m3-accent);outline-offset:1px}
+.m3-body{flex:1;min-height:0;overflow:auto;padding:14px;background:var(--m3-bg);scrollbar-width:thin;scrollbar-color:var(--m3-line) transparent}
+.box{border:1px solid var(--m3-line);border-radius:12px;background:var(--m3-card);box-shadow:var(--m3-shadow)}
+.sec-t{display:flex;align-items:center;justify-content:space-between;font-size:11.5px;font-weight:600;color:var(--m3-muted);margin:16px 2px 7px;letter-spacing:.02em}
+.muted{color:var(--m3-muted)}
+.empty{padding:18px 12px;text-align:center;font-size:12px;color:var(--m3-muted)}
+.chipb{font-size:11.5px;padding:4px 10px;border-radius:999px;border:1px solid var(--m3-line);background:var(--m3-card);color:var(--m3-fg2);white-space:nowrap;transition:background .2s,color .2s,border-color .2s}
+.chipb:hover:not(:disabled){border-color:var(--m3-accent-line);color:var(--m3-accent)}
+.chipb[aria-pressed=true]{background:var(--m3-accent-soft);color:var(--m3-accent);border-color:var(--m3-accent-line);font-weight:600}
+.seg{display:flex;gap:2px;padding:2px;border-radius:9px;background:var(--m3-card2)}
+.seg button{font-size:11.5px;padding:4px 10px;border-radius:7px;color:var(--m3-muted);transition:background .25s,color .25s}
+.seg button[aria-pressed=true]{background:var(--m3-card);color:var(--m3-fg);font-weight:600;box-shadow:var(--m3-shadow)}
+.btn{display:inline-flex;align-items:center;gap:5px;border-radius:8px;padding:7px 13px;font-size:12px;font-weight:550;border:1px solid var(--m3-line);background:var(--m3-card);color:var(--m3-fg2)}
+.btn.pri{background:var(--m3-accent);color:var(--m3-accent-ink);border-color:transparent}
+.st{font-size:10.5px;line-height:1.5;padding:1px 8px;border-radius:999px;white-space:nowrap;color:var(--m3-muted);background:var(--m3-card2)}
+.st.inj{color:var(--m3-ok);background:color-mix(in srgb,var(--m3-ok) 12%,transparent)}
+.st.cand{color:var(--m3-accent);background:var(--m3-accent-soft)}
+.chev{color:var(--m3-muted);transition:transform .25s var(--ease);display:grid;place-items:center}
+details[open]>summary .chev{transform:rotate(180deg)}
+summary{list-style:none;cursor:pointer}
+summary::-webkit-details-marker{display:none}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}}
+@keyframes grow{from{transform:scaleY(0)}}
+@keyframes fadein{from{opacity:0}}
+
+/* ── 가계부 ── */
+[data-kind=cost] .m3-head .seg{margin-left:auto}
+.mnav{display:flex;align-items:center;justify-content:center;gap:6px;margin:-2px 0 10px}
+.mnav.off{display:none}
+.mnav b{min-width:110px;text-align:center;font-size:14px;font-weight:650;font-variant-numeric:tabular-nums}
+.sum{display:flex;align-items:flex-end;gap:12px;padding:16px 16px 4px}
+.sum .k{font-size:11.5px;color:var(--m3-muted);margin-bottom:3px}
+.big{font-size:30px;font-weight:750;letter-spacing:-1px;line-height:1.05;font-variant-numeric:tabular-nums}
+.big small{font-size:12px;font-weight:500;color:var(--m3-muted);letter-spacing:0;margin-left:5px}
+.stats{margin-left:auto;display:flex;gap:14px;text-align:right}
+.stats b{display:block;font-size:14px;font-weight:650;font-variant-numeric:tabular-nums}
+.stats span{font-size:10.5px;color:var(--m3-muted)}
+.stats .bad b{color:var(--m3-danger)}
+.warn{display:flex;align-items:center;gap:8px;margin:10px 16px 0;padding:7px 10px;border-radius:8px;font-size:11.5px;color:var(--m3-warn);background:color-mix(in srgb,var(--m3-warn) 11%,transparent)}
+.warn button{margin-left:auto;font-size:11.5px;font-weight:600;color:inherit;text-decoration:underline;text-underline-offset:2px}
+.bars{display:flex;align-items:flex-end;gap:2px;height:84px;padding:14px 16px 0}
+.bar{flex:1;height:100%;display:flex;align-items:flex-end;border-radius:3px;position:relative}
+.bar i{display:block;width:100%;height:var(--h);min-height:2px;border-radius:3px 3px 1px 1px;background:var(--m3-accent);opacity:.32;transform-origin:bottom;animation:grow .6s var(--spring) both;animation-delay:calc(var(--i)*14ms);transition:opacity .2s}
+.bar.zero i{background:var(--m3-line);opacity:1}
+.bar:hover i{opacity:.7}
+.bar.now i{opacity:.85}
+.bar.on i{opacity:1;box-shadow:0 0 0 2px var(--m3-accent-soft)}
+.axis{display:flex;justify-content:space-between;padding:6px 16px 0;font-size:10.5px;color:var(--m3-muted)}
+.tip{margin:8px 16px 14px;padding:7px 10px;border-radius:8px;background:var(--m3-card2);font-size:11.5px;color:var(--m3-fg2);min-height:30px}
+.tip b{color:var(--m3-fg);font-weight:600}
+.list{padding:2px 14px}
+.urow{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--m3-line2);animation:rise .4s var(--spring) both}
+.urow:last-child{border-bottom:0}
+.u-t{font-size:12.5px;font-weight:550;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.u-s{font-size:10.5px;color:var(--m3-muted);margin-top:1px}
+.u-bar{height:3px;border-radius:2px;background:var(--m3-card2);margin-top:6px;overflow:hidden}
+.u-bar i{display:block;height:100%;width:var(--w);background:var(--cc);border-radius:2px;transform-origin:left;animation:grow .8s var(--ease) both;animation-name:growx}
+@keyframes growx{from{transform:scaleX(0)}}
+.u-n{font-size:11.5px;color:var(--m3-muted);font-variant-numeric:tabular-nums}
+.u-w{font-size:12.5px;font-weight:650;min-width:56px;text-align:right;font-variant-numeric:tabular-nums}
+.note{margin:12px 4px 0;font-size:10.5px;line-height:1.6;color:var(--m3-muted)}
+
+/* ── 두 칸 배치(달력·관계도) ── */
+[data-kind=cal] .m3-shell,[data-kind=map] .m3-shell{height:min(720px,calc(100dvh - 32px))}
+.two{display:flex;flex-direction:column;gap:14px}
+.pane-r{min-width:0}
+@media(min-width:760px){
+ .two{display:grid;grid-template-columns:minmax(330px,1fr) minmax(0,1fr);grid-template-rows:minmax(0,1fr);gap:0;padding:0;overflow:hidden}
+ .two>.pane-l,.two>.pane-r{padding:14px;overflow:auto;min-height:0;scrollbar-width:thin;scrollbar-color:var(--m3-line) transparent}
+ .two>.pane-r{border-left:1px solid var(--m3-line2);background:var(--m3-sheet)}
+ [data-kind=map] .two{grid-template-columns:minmax(0,1.25fr) minmax(300px,1fr)}
+}
+
+/* ── 달력 ── */
+.cal{padding:12px 12px 10px;position:relative}
+.yr{display:flex;align-items:center;gap:4px;margin-bottom:10px}
+.yr-b{display:inline-flex;align-items:center;gap:4px;font-size:15px;font-weight:700;letter-spacing:-.2px;padding:4px 8px;border-radius:8px}
+.yr-b:hover{background:var(--m3-card2)}
+.yr-b svg.ic{width:13px;height:13px;color:var(--m3-muted)}
+.ypop{position:absolute;left:10px;right:10px;top:48px;z-index:5;display:grid;grid-template-columns:repeat(auto-fill,minmax(76px,1fr));gap:4px;padding:8px;border-radius:11px;border:1px solid var(--m3-line);background:var(--m3-sheet);box-shadow:var(--m3-shell-shadow);animation:rise .3s var(--spring)}
+.ypop[hidden]{display:none}
+.ypop button{padding:7px 4px;border-radius:7px;font-size:12px;font-weight:600;display:flex;flex-direction:column;align-items:center}
+.ypop button small{font-size:10px;font-weight:400;color:var(--m3-muted)}
+.ypop button:hover{background:var(--m3-card2)}
+.ypop button.sel{background:var(--m3-accent);color:var(--m3-accent-ink)}
+.ypop button.sel small{color:inherit;opacity:.8}
+.months{display:grid;grid-template-columns:repeat(12,1fr);gap:3px;margin-bottom:12px}
+.months button{position:relative;padding:5px 0 8px;border-radius:7px;font-size:11px;color:var(--m3-muted);transition:background .2s,color .2s}
+.months button::after{content:"";position:absolute;left:50%;bottom:3px;width:4px;height:4px;border-radius:50%;transform:translateX(-50%);background:var(--c-log);opacity:0}
+.months button.has{color:var(--m3-fg2)}
+.months button.has::after{opacity:.9}
+.months button.has:hover{background:var(--m3-card2)}
+.months button:disabled{opacity:.35}
+.months button.sel{background:var(--m3-accent);color:var(--m3-accent-ink);font-weight:650}
+.months button.sel::after{background:var(--m3-accent-ink)}
+.wk,.grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+.wk span{text-align:center;font-size:10.5px;color:var(--m3-muted);padding-bottom:5px}
+.wk span:first-child{color:color-mix(in srgb,var(--m3-danger) 70%,var(--m3-muted))}
+.grid button{position:relative;aspect-ratio:1/.84;border-radius:8px;font-size:12px;color:var(--m3-muted);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-variant-numeric:tabular-nums;animation:fadein .35s ease both;animation-delay:calc(var(--i)*8ms);transition:background .2s,transform .3s var(--spring)}
+.grid button.e{visibility:hidden}
+.grid button.has{color:var(--m3-fg);font-weight:600;background:color-mix(in srgb,var(--c-log) calc(var(--lv)*10%),transparent)}
+.grid button.has:hover{transform:scale(1.06)}
+.grid .dots{display:flex;gap:2px;height:4px}
+.grid .dots i{width:4px;height:4px;border-radius:50%;background:var(--c-log)}
+.grid button.inj::before,.grid button.cand::before{content:"";position:absolute;top:4px;right:5px;width:5px;height:5px;border-radius:50%}
+.grid button.inj::before{background:var(--m3-ok)}
+.grid button.cand::before{background:var(--m3-accent)}
+.grid button.sel{background:var(--m3-accent);color:var(--m3-accent-ink)}
+.grid button.sel .dots i,.grid button.sel::before{background:var(--m3-accent-ink)}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:10.5px;color:var(--m3-muted);margin-top:9px;padding-top:9px;border-top:1px solid var(--m3-line2)}
+.legend i{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px;vertical-align:middle}
+.ystat{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.ystat span{font-size:11px;padding:3px 9px;border-radius:999px;background:var(--m3-card);border:1px solid var(--m3-line);color:var(--m3-fg2)}
+.dayh{display:flex;align-items:baseline;gap:8px;margin:0 2px 10px}
+.dayh b{font-size:16px;font-weight:700;letter-spacing:-.3px}
+.dayh span{font-size:11.5px;color:var(--m3-muted)}
+.lc{position:relative;border:1px solid var(--m3-line);border-radius:11px;background:var(--m3-card);box-shadow:var(--m3-shadow);margin-bottom:8px;animation:rise .4s var(--spring) both;animation-delay:calc(var(--i)*40ms)}
+.lc::after{content:"";position:absolute;left:0;top:12px;bottom:12px;width:3px;border-radius:0 3px 3px 0;background:var(--c-log)}
+.lc>summary{display:grid;grid-template-columns:minmax(0,1fr) auto 16px;gap:4px 8px;align-items:center;padding:11px 12px 11px 16px}
+.lc-t{font-size:13px;font-weight:600;overflow-wrap:anywhere}
+.lc-x{grid-column:1/-1;font-size:11.5px;line-height:1.6;color:var(--m3-muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.lc[open] .lc-x{display:none}
+.lc-b{margin:0 12px 12px 16px;padding-top:10px;border-top:1px solid var(--m3-line2);font-size:12.5px;line-height:1.75;color:var(--m3-fg2);white-space:pre-wrap;overflow-wrap:anywhere;animation:fadein .3s ease}
+.lc-d{font-size:10.5px;color:var(--m3-muted);margin-right:6px}
+.nodate{margin-top:14px;border:1px dashed var(--m3-line);border-radius:11px}
+.nodate[hidden]{display:none}
+.nodate>summary{display:flex;align-items:center;gap:8px;padding:10px 12px;font-size:12.5px;color:var(--m3-fg2)}
+.nodate>summary .chev{margin-left:auto}
+.nd-in{padding:0 10px 6px}
+.ndg-h{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:var(--m3-muted);margin:8px 2px 6px}
+.ndg-h span{font-weight:400}
+
+/* ── 관계도 ── */
+.tools{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
+.search{flex:1;min-width:140px;display:flex;align-items:center;gap:6px;padding:0 10px;height:30px;border-radius:9px;border:1px solid var(--m3-line);background:var(--m3-card);color:var(--m3-muted)}
+.search input{flex:1;min-width:0;border:0;background:none;outline:none;font-size:12px;color:var(--m3-fg)}
+.search:focus-within{border-color:var(--m3-accent)}
+.filters{display:flex;gap:4px}
+.map{position:relative;overflow:hidden;background:radial-gradient(ellipse at 50% 50%,var(--m3-accent-soft) 0,transparent 65%),var(--m3-card)}
+.map>svg{display:block;width:100%;height:auto;touch-action:manipulation}
+.ring{fill:none;stroke:var(--m3-line2);stroke-dasharray:2 6}
+.e{fill:none;stroke:var(--m3-fg2);stroke-linecap:round;opacity:.38;transition:opacity .4s,stroke .3s,stroke-width .3s;stroke-dasharray:var(--len);stroke-dashoffset:var(--len)}
+.go .e{animation:draw 1s var(--ease) forwards;animation-delay:var(--dl)}
+.e.sp{stroke-width:1.2}
+.e.rel{stroke-width:2}
+.go .e.sp.done{stroke-dasharray:3 4;stroke-dashoffset:0;animation:none}
+.e.lit{stroke:var(--m3-accent);opacity:.95}
+.e.rel.lit{stroke-width:2.6}
+.e.dim,.lk.dim{opacity:.08}
+.node.dim{opacity:.28}
+.sweep{fill:none;stroke:#fff;stroke-linecap:round;stroke-width:3;opacity:0;stroke-dasharray:.1 400;pointer-events:none}
+.sweep.run{animation:sweep 1.1s var(--ease) 1}
+@keyframes sweep{0%{opacity:0;stroke-dashoffset:0}15%{opacity:.95}85%{opacity:.95}100%{opacity:0;stroke-dashoffset:-400}}
+@keyframes draw{to{stroke-dashoffset:0}}
+.lk{cursor:pointer;transition:opacity .4s}
+.go .lk{animation:fadein .4s ease backwards;animation-delay:1.1s}
+.lk circle{fill:var(--m3-sheet);stroke:var(--m3-danger);stroke-width:1.3}
+.lk path{fill:none;stroke:var(--m3-danger);stroke-width:1.3;stroke-linecap:round}
+.lk rect{fill:var(--m3-danger)}
+.lk:hover circle,.lk:focus circle{stroke-width:2.2}
+.lk:focus{outline:none}
+.node{cursor:pointer;transition:opacity .4s}
+.node:focus{outline:none}
+.node .pp{transform-box:fill-box;transform-origin:center;opacity:0}
+.go .node .pp{animation:pop .55s var(--spring) forwards;animation-delay:var(--dl)}
+@keyframes pop{from{opacity:0;transform:scale(.4)}to{opacity:1;transform:scale(1)}}
+.node rect.pill{fill:var(--m3-card);stroke:var(--m3-line);stroke-width:1.4;transition:stroke .25s,fill .25s}
+.node text{fill:var(--m3-fg);font-size:12px;font-weight:600;text-anchor:middle;dominant-baseline:central;font-family:var(--f);pointer-events:none}
+.node:hover rect.pill,.node:focus rect.pill{stroke:var(--m3-accent)}
+.node.link rect.pill{stroke:var(--m3-accent-line)}
+.node.sel rect.pill{stroke:var(--m3-accent);stroke-width:2.2}
+.node.pc rect.pill{fill:var(--m3-accent);stroke:var(--m3-accent)}
+.node.pc text{fill:var(--m3-accent-ink)}
+.m3-ui:not(.dark) .sweep{stroke:#fff}
+.node.hit rect.pill{stroke:var(--m3-warn);stroke-width:2.2}
+.node rect.halo{fill:none;stroke:var(--m3-accent);stroke-width:1.5;opacity:0;transform-box:fill-box;transform-origin:center}
+.node.sel rect.halo.run{animation:ping 1.1s var(--ease) 1}
+@keyframes ping{0%{opacity:.7;transform:scale(1)}100%{opacity:0;transform:scale(1.35)}}
+.key{display:flex;gap:14px;flex-wrap:wrap;align-items:center;padding:9px 12px;border-top:1px solid var(--m3-line2);font-size:10.5px;color:var(--m3-muted)}
+.key svg{vertical-align:middle;margin-right:5px;display:inline-block}
+.key span{display:inline-flex;align-items:center}
+.key .hint{margin-left:auto}
+.dh{display:flex;align-items:center;gap:10px;margin:0 2px 12px}
+.dh .pl{padding:5px 12px;border-radius:999px;border:2px solid var(--m3-accent);font-size:14px;font-weight:700;background:var(--m3-card)}
+.dh .pl.pc{background:var(--m3-accent);color:var(--m3-accent-ink)}
+.dh .s{font-size:11.5px;color:var(--m3-muted);line-height:1.5}
+.dh .back{margin-left:auto}
+.rc{position:relative;border:1px solid var(--m3-line);border-radius:11px;background:var(--m3-card);box-shadow:var(--m3-shadow);margin-bottom:8px;animation:rise .4s var(--spring) both;animation-delay:calc(var(--i)*45ms)}
+.rc::after{content:"";position:absolute;left:0;top:12px;bottom:12px;width:3px;border-radius:0 3px 3px 0;background:var(--m3-line)}
+.rc.hasrel::after{background:var(--c-rel)}
+.rc>summary{display:grid;grid-template-columns:auto minmax(0,1fr) 16px;gap:6px 8px;align-items:center;padding:11px 12px 11px 16px}
+.rc-n{font-size:13.5px;font-weight:650;white-space:nowrap;max-width:10em;overflow:hidden;text-overflow:ellipsis}
+.rc-tags{display:flex;gap:4px;align-items:center;flex-wrap:wrap;justify-content:flex-end;min-width:0}
+.tg{font-size:10.5px;padding:1px 8px;border-radius:999px;background:var(--m3-card2);color:var(--m3-fg2);white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.tg em{font-style:normal;color:var(--m3-muted);margin-left:4px}
+.tg.sec{color:var(--m3-danger);background:color-mix(in srgb,var(--m3-danger) 10%,transparent)}
+.rc-x{grid-column:1/-1;font-size:11.5px;line-height:1.6;color:var(--m3-muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.rc[open] .rc-x{display:none}
+.rc-b{margin:0 12px 12px 16px;border-top:1px solid var(--m3-line2);animation:fadein .3s ease}
+.cat{font-size:10.5px;font-weight:650;letter-spacing:.03em;color:var(--m3-muted);margin:12px 0 6px}
+.cat.rel{color:var(--c-rel)}
+.cat.sec{color:var(--m3-danger)}
+.sp-row{font-size:12px;line-height:1.55;padding:3px 0}
+.sp-row:not(.sp-fold),.sp-row>summary{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:3px 10px;align-items:baseline}
+.sp-row .v{min-width:0;overflow-wrap:anywhere}
+.sp-more{display:inline-flex;align-items:center;gap:2px;font-size:10.5px;color:var(--m3-muted);white-space:nowrap;padding:1px 4px 1px 8px;border-radius:999px;transition:background .2s,color .2s}
+.sp-fold>summary:hover .sp-more{background:var(--m3-card2);color:var(--m3-fg)}
+.sp-more .chev svg.ic{width:12px;height:12px}
+.sp-fold[open] .sp-more{color:var(--m3-accent)}
+.sp-row .w{color:var(--m3-muted);white-space:nowrap}
+.sp-row q{quotes:"\201C" "\201D";color:var(--m3-fg);font-weight:600}
+.sp-row .nt{margin:4px 0 6px;padding:8px 10px;border-radius:8px;background:var(--m3-card2);font-size:11.5px;line-height:1.7;color:var(--m3-fg2);white-space:pre-wrap;overflow-wrap:anywhere;animation:fadein .25s ease}
+.rl{padding:8px 10px;border-radius:9px;background:var(--m3-card2);margin-bottom:6px}
+.rl b{display:block;font-size:11px;color:var(--m3-muted);font-weight:550;margin-bottom:3px}
+.rl p{font-size:12.5px;line-height:1.7;color:var(--m3-fg2);white-space:pre-wrap;overflow-wrap:anywhere}
+.rl .un{margin-top:6px;font-size:11.5px;color:var(--m3-warn)}
+.rl .hist{margin-top:8px;border-top:1px dashed var(--m3-line);padding-top:6px}
+.rl .hist>summary{display:flex;align-items:center;gap:6px;width:100%;padding:5px 8px;border-radius:7px;font-size:11.5px;font-weight:600;color:var(--m3-accent);transition:background .2s}
+.rl .hist>summary:hover{background:var(--m3-accent-soft)}
+.rl .hist>summary svg.ic{width:13px;height:13px}
+.rl .hist>summary .chev{margin-left:auto}
+.rl .hist[open]>summary{background:var(--m3-accent-soft)}
+.rl .hist p{margin:6px 2px 2px;padding-left:10px;border-left:2px solid var(--m3-accent-line);font-size:11.5px;line-height:1.75;animation:fadein .25s ease}
+.sc{display:flex;gap:7px;align-items:flex-start;padding:7px 9px;border-radius:8px;background:color-mix(in srgb,var(--m3-danger) 9%,transparent);font-size:12px;line-height:1.5;color:var(--m3-fg2);margin-bottom:5px;overflow-wrap:anywhere}
+.sc svg.ic{color:var(--m3-danger);width:13px;height:13px;margin-top:2px}
+.kn{margin-top:12px}
+.kn>summary{display:flex;align-items:center;gap:8px;padding:11px 12px;font-size:12.5px;font-weight:600}
+.kn>summary .chev{margin-left:auto}
+.kn-in{padding:0 12px 10px}
+.kn-r{display:flex;gap:10px;padding:7px 0;border-top:1px solid var(--m3-line2);font-size:12px;line-height:1.55}
+.kn-r span{flex:1;overflow-wrap:anywhere}
+.kn-r small{font-size:10.5px;padding:1px 7px;border-radius:999px;align-self:flex-start;background:var(--m3-card2);color:var(--m3-muted)}
+.kn-r small.aware{color:var(--m3-ok);background:color-mix(in srgb,var(--m3-ok) 12%,transparent)}
+.note.map-n{text-align:center}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}.e{stroke-dashoffset:0}.node .pp,.lk{opacity:1}}
+
+/* ── 새 아이콘 애니메이션 ── */
+svg.ic-calendar rect:last-of-type,svg.ic-relation circle,svg.ic-list path,svg.ic-more circle,svg.ic-wallet{transform-box:fill-box;transform-origin:center}svg.ic-wallet{transform-origin:50% 12%}:hover>svg.ic-calendar{animation:wiIcTilt .6s cubic-bezier(.34,1.42,.5,1)}:hover>svg.ic-calendar rect:last-of-type{animation:wiIcBlink .6s cubic-bezier(.34,1.42,.5,1)}:hover>svg.ic-relation path{stroke-dasharray:30;animation:wiIcDraw .7s ease}:hover>svg.ic-relation circle{animation:wiIcPop .5s cubic-bezier(.34,1.42,.5,1) backwards}:hover>svg.ic-relation circle:nth-of-type(2){animation-delay:.12s}:hover>svg.ic-relation circle:nth-of-type(3){animation-delay:.24s}:hover>svg.ic-list path:first-of-type{animation:wiIcNudge .45s ease}:hover>svg.ic-list path:last-of-type{animation:wiIcPop .45s cubic-bezier(.34,1.42,.5,1)}:hover>svg.ic-more circle,[open]>summary>svg.ic-more circle{animation:wiIcHop .5s ease}:hover>svg.ic-more circle:nth-of-type(2),[open]>summary>svg.ic-more circle:nth-of-type(2){animation-delay:.08s}:hover>svg.ic-more circle:nth-of-type(3),[open]>summary>svg.ic-more circle:nth-of-type(3){animation-delay:.16s}:hover>svg.ic-wallet{animation:wiIcSwing .75s ease}
+@keyframes wiIcTilt{30%{transform:rotate(-8deg)}60%{transform:rotate(4deg)}}@keyframes wiIcBlink{0%{transform:scale(1)}35%{transform:scale(0)}70%{transform:scale(1.35)}100%{transform:scale(1)}}@keyframes wiIcDraw{from{stroke-dashoffset:30}to{stroke-dashoffset:0}}@keyframes wiIcPop{from{transform:scale(.3)}to{transform:scale(1)}}@keyframes wiIcNudge{40%{transform:translateX(2.5px)}}@keyframes wiIcHop{40%{transform:translateY(-3px)}}@keyframes wiIcSwing{20%{transform:rotate(12deg)}45%{transform:rotate(-9deg)}70%{transform:rotate(5deg)}}
+.hd-ic{animation:wiHdIn .55s cubic-bezier(.34,1.42,.5,1) .05s backwards}
+@keyframes wiHdIn{from{opacity:0;transform:scale(.5) rotate(-12deg)}}
+.hd-ic svg.ic-calendar rect:last-of-type{animation:wiIcBlink .7s cubic-bezier(.34,1.42,.5,1) .35s backwards}
+.hd-ic svg.ic-relation path{stroke-dasharray:30;animation:wiIcDraw .8s ease .3s backwards}
+.hd-ic svg.ic-wallet{animation:wiIcSwing .8s ease .35s}
+@media(prefers-reduced-motion:reduce){.hd-ic,svg.ic,svg.ic *{animation:none!important}}
+`;
+  const APPROVED_TEMPLATES={
+cost:`<div class="m3-shell">
+ <div class="m3-head"><span class="hd-ic"></span><strong>AI 사용량</strong><span class="grow"></span>
+  <div class="seg" data-mode><button data-v="month" aria-pressed="true">월별</button><button data-v="all" aria-pressed="false">12개월</button></div>
+  <button class="icb" aria-label="닫기" data-ic="close"></button></div>
+ <div class="m3-body">
+  <div class="mnav" data-nav><button class="icb" data-prev aria-label="이전 달" data-ic="left"></button><b data-label></b><button class="icb" data-next aria-label="다음 달" data-ic="right"></button></div>
+  <div class="box" data-cap>
+   <div class="sum"><div><div class="k">예상 비용</div><div class="big" data-usd></div></div>
+    <div class="stats"><div><b data-calls></b><span>호출</span></div><div><b data-avg></b><span>하루 평균</span></div><div data-failbox><b data-fail></b><span>실패</span></div></div></div>
+   <div class="warn" data-warn hidden></div>
+   <div class="bars" data-bars></div><div class="axis" data-axis></div>
+   <div class="tip" data-tip></div>
+  </div>
+  <div class="sec-t">작업별</div><div class="box list" data-tasks></div>
+  <div class="sec-t">모델별</div><div class="box list" data-models></div>
+  <p class="note" data-note></p>
+ </div></div>`,
+cal:`<div class="m3-shell">
+ <div class="m3-head"><span class="hd-ic"></span><strong>날짜로그 달력</strong><small data-count></small><span class="grow"></span>
+  <button class="icb" aria-label="닫기" data-ic="close"></button></div>
+ <div class="m3-body two">
+  <div class="pane-l">
+   <div class="box cal">
+    <div class="yr"><button class="icb" data-py aria-label="이전 연도" data-ic="left"></button><button class="yr-b" data-yr aria-haspopup="true"></button><button class="icb" data-ny aria-label="다음 연도" data-ic="right"></button><span class="grow"></span><button class="chipb" data-first>처음</button><button class="chipb" data-last>최신</button></div>
+    <div class="ypop" data-ypop hidden></div>
+    <div class="months" data-months></div>
+    <div class="wk"><span>일</span><span>월</span><span>화</span><span>수</span><span>목</span><span>금</span><span>토</span></div>
+    <div class="grid" data-grid></div>
+    <div class="legend"><span><i style="background:var(--c-log)"></i>기록 양</span><span><i style="background:var(--m3-ok)"></i>주입 중</span><span><i style="background:var(--m3-accent)"></i>주입 후보</span></div>
+   </div>
+   <div class="ystat" data-ystat></div>
+  </div>
+  <div class="pane-r">
+   <div class="dayh"><b data-dt></b><span data-dc></span></div>
+   <div data-cards></div>
+   <details class="nodate" data-nd><summary><span data-ic="clock"></span><span data-nd-sum></span><span class="chev" data-ic="chev"></span></summary><div class="nd-in" data-nd-list></div></details>
+  </div>
+ </div></div>`,
+map:`<div class="m3-shell">
+ <div class="m3-head"><span class="hd-ic"></span><strong>인물 관계도</strong><small data-count></small><span class="grow"></span>
+  <button class="icb" aria-label="닫기" data-ic="close"></button></div>
+ <div class="m3-body two">
+  <div class="pane-l">
+   <div class="tools"><label class="search"><span data-ic="search"></span><input data-q placeholder="인물 찾기" aria-label="인물 찾기"></label>
+    <div class="filters" data-f><button class="chipb" data-v="all" aria-pressed="true">전체</button><button class="chipb" data-v="rel" aria-pressed="false">관계 기록</button><button class="chipb" data-v="sec" aria-pressed="false">비밀</button></div></div>
+   <div class="box map"><svg data-svg></svg><div class="key" data-key></div></div>
+   <p class="note map-n">저장된 호칭·말투 · 관계·감정선 · 인지 자료만 사용 · 추가 API 호출 없음</p>
+  </div>
+  <div class="pane-r" data-det></div>
+ </div></div>`
+  };
+
+  // 뷰 전용 아이콘(IC에 없는 방향·검색 등). IC 값이 있으면 IC를 우선 사용.
+  const APPROVED_IC={
+    left:'<path d="m15 6-6 6 6 6"/>',right:'<path d="m9 6 6 6-6 6"/>',chev:'<path d="m6 9 6 6 6-6"/>',close:'<path d="M6 6l12 12M18 6 6 18"/>',
+    search:'<circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/>',clock:'<circle cx="12" cy="12" r="8"/><path d="M12 8v4l2.5 2.5"/>',
+    lock:'<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>'
+  };
+  function approvedIcon(n){return '<svg class="ic ic-'+n+'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+((typeof IC!=='undefined'&&IC[n])||APPROVED_IC[n]||'')+'</svg>';}
+  function approvedIcons(ui){ui.querySelectorAll('[data-ic]').forEach(el=>{el.innerHTML=approvedIcon(el.dataset.ic);});}
+  // Markup, tokens and diagram geometry come from wish-features-456-settings.html.
+  // A shadow root isolates the approved design from the manager's legacy CSS.
+  function localUsageOpen(){const snap=WishUsage.snapshot();openSheet('usageLedger',{snap,draft:{month:WishUsage.day().slice(0,7)}});}
+  function calendarSelect(d,year){d.draft.year=Number(year);const rows=d.calendar.rows.filter(r=>d.calendar.valid(r)&&r.year===Number(year)&&r.month&&r.day);d.draft.month=rows.at(-1)?.month||1;d.draft.day=rows.at(-1)?.day||0;}
+  function localCalendarOpen(){const calendar=WishLocalViews.calendar(state.currentRoom),d=openSheet('logCalendar',{calendar,logState:new Map(V.logs.blocks.map(b=>[b.key,{included:b.included,verified:V.inj.verified}])),injectionOn:V.inj.armed,logsOn:V.logs.inject,draft:{}});calendarSelect(d,calendar.years.at(-1)||0);}
+  function localGraphOpen(){openSheet('relationMap',{graph:WishLocalViews.graph(V),draft:{page:0}});}
+  function approvedSheet(d,kind,title){return `<div class="m3-dialog m3-ui ${d.leaving?'m3-leaving':''}" data-key="${d.id}" data-dlg="${d.id}" role="dialog" aria-modal="true" aria-label="${title}"><div data-approved-view="${kind}" data-approved-id="${d.id}" style="width:min(${kind==='cost'?420:900}px,calc(100vw - 24px));max-height:calc(100dvh - 32px);overflow:auto;border-radius:16px"></div></div>`;}
+  const vUsageLedger=d=>approvedSheet(d,'cost','AI 사용량'),vLogCalendar=d=>approvedSheet(d,'cal','날짜로그'),vRelationMap=d=>approvedSheet(d,'map','인물 관계도');
+  function mountApprovedViews(){
+    root.querySelectorAll('[data-approved-view]').forEach(host=>{
+      if(host.shadowRoot)return;const d=findDlg(host.dataset.approvedId);if(!d)return;
+      const shadow=host.attachShadow({mode:'open'}),style=document.createElement('style');style.textContent=APPROVED_STYLE;shadow.append(style);
+      const ui=document.createElement('div');ui.className='m3-ui'+(document.body.getAttribute('data-theme')==='dark'||(!document.body.hasAttribute('data-theme')&&matchMedia('(prefers-color-scheme: dark)').matches)?' dark':'');ui.dataset.kind=host.dataset.approvedView;
+      ui.innerHTML=APPROVED_TEMPLATES[ui.dataset.kind];shadow.append(ui);
+      const close=()=>closeSheet(d);ui.querySelectorAll('.m3-head [aria-label="닫기"]').forEach(b=>b.onclick=close);
+      ({cost:approvedCost,map:approvedMap,cal:approvedCal})[ui.dataset.kind](ui,d,close);
+    });
+  }
+  function approvedCost(ui,d){
+    approvedIcons(ui);ui.querySelector('.hd-ic').innerHTML=approvedIcon('wallet');
+    const q=s=>ui.querySelector(s),T=WishUsage.total,today=WishUsage.day(),cur=today.slice(0,7);
+    const months=Array.from({length:12},(_,i)=>{const x=new Date();x.setDate(1);x.setMonth(x.getMonth()-i);return WishUsage.day(x).slice(0,7);});
+    const PV={'ai-studio':'AI Studio',firebase:'Firebase',deepseek:'DeepSeek','deepseek-custom':'DeepSeek 호환'};
+    const COL=['--c-state','--c-log','--c-cog','--c-lore','--c-rel','--c-extra'];
+    const money=n=>{n=Number(n)||0;return n===0?'$0':n<.01?'$'+n.toFixed(4):'$'+n.toFixed(2);};
+    const mlabel=m=>{const [y,mm]=m.split('-');return y+'년 '+Number(mm)+'월';};
+    if(d.draft.month!=='all'&&!months.includes(d.draft.month))d.draft.month=cur;
+    let sel=d.draft.month==='all'?cur:d.draft.month;
+    q('[data-mode]').onclick=e=>{const b=e.target.closest('button');if(!b)return;d.draft.month=b.dataset.v==='all'?'all':sel;render();};
+    const go=step=>{const i=months.indexOf(sel)+step;if(i<0||i>11)return;sel=months[i];d.draft.month=sel;render();};
+    q('[data-prev]').onclick=()=>go(1);q('[data-next]').onclick=()=>go(-1);
+    const group=(rows,key)=>{const g=new Map();rows.forEach(r=>{const k=key(r);if(!g.has(k))g.set(k,[]);g.get(k).push(r);});return [...g].map(([k,rs])=>({k,rs,t:T(rs)})).sort((a,b)=>b.t.usd-a.t.usd||b.t.calls-a.t.calls);};
+    const row=(name,sub,t,col,w,i)=>`<div class="urow" style="--cc:var(${col});--w:${Math.max(2,w*100)}%;animation-delay:${i*40}ms"><div><div class="u-t">${name}</div>${sub?`<div class="u-s">${sub}</div>`:''}<div class="u-bar"><i></i></div></div><span class="u-n">${t.calls.toLocaleString()}회</span><span class="u-w">${t.unknown===t.calls&&t.calls?'?':money(t.usd)}</span></div>`;
+    function render(){
+      const all=d.draft.month==='all',rows=d.snap.rows.filter(r=>all||r.date.startsWith(sel)),t=T(rows);
+      q('[data-mode]').querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String((b.dataset.v==='all')===all)));
+      q('[data-nav]').classList.toggle('off',all);q('[data-label]').textContent=mlabel(sel);
+      q('[data-prev]').disabled=months.indexOf(sel)>=11;q('[data-next]').disabled=months.indexOf(sel)<=0;
+      q('[data-usd]').innerHTML=money(t.usd)+'<small>USD</small>';q('[data-usd]').title='$'+t.usd.toFixed(6);
+      q('[data-calls]').textContent=t.calls.toLocaleString();
+      const [yy,mm]=sel.split('-').map(Number),len=new Date(yy,mm,0).getDate();
+      const days=all?Math.max(1,Math.round((Date.now()-new Date(WishUsage.since()+'T00:00:00').getTime())/864e5)):sel===cur?Number(today.slice(8)):len;
+      q('[data-avg]').textContent=(t.calls/days).toFixed(1);
+      q('[data-fail]').textContent=t.failed.toLocaleString();q('[data-failbox]').className=t.failed?'bad':'';
+      const warn=q('[data-warn]');warn.hidden=!t.unknown;
+      warn.textContent=t.unknown?`공식 단가가 없는 모델 호출 ${t.unknown.toLocaleString()}회 · 비용 합계에서 빠짐`:'';
+      const byDay=new Map();rows.forEach(r=>{if(!byDay.has(r.date))byDay.set(r.date,[]);byDay.get(r.date).push(r);});
+      const bins=all?[...months].reverse().map(m=>({lab:mlabel(m),rows:rows.filter(r=>r.date.startsWith(m)),now:m===cur}))
+        :Array.from({length:len},(_,i)=>{const k=sel+'-'+String(i+1).padStart(2,'0');return {lab:mm+'월 '+(i+1)+'일',rows:byDay.get(k)||[],now:k===today};});
+      const tots=bins.map(b=>T(b.rows)),peak=Math.max(1,...tots.map(x=>x.calls)),bars=q('[data-bars]'),tip=q('[data-tip]');
+      const show=(b,x)=>{tip.innerHTML=`<b>${b.lab}</b> · 호출 ${x.calls.toLocaleString()}회 · ${money(x.usd)}${x.failed?` · 실패 ${x.failed}회`:''}${x.unknown?` · 비용 미확인 ${x.unknown}회`:''}`;};
+      bars.replaceChildren();
+      bins.forEach((b,i)=>{const x=tots[i],el=document.createElement('button');el.type='button';el.className='bar'+(b.now?' now':'')+(x.calls?'':' zero');
+        el.style.setProperty('--h',(x.calls?Math.max(4,x.calls/peak*100):0)+'%');el.style.setProperty('--i',i);el.setAttribute('aria-label',b.lab+' · '+x.calls+'회');el.innerHTML='<i></i>';
+        el.onclick=()=>{bars.querySelectorAll('.on').forEach(z=>z.classList.remove('on'));el.classList.add('on');show(b,x);};bars.append(el);});
+      q('[data-axis]').innerHTML=all?`<span>${Number(months[11].slice(5))}월</span><span>${Number(cur.slice(5))}월</span>`:`<span>1일</span><span>15일</span><span>${len}일</span>`;
+      const nowIdx=bins.findIndex(b=>b.now);tip.innerHTML=nowIdx>=0?'':(all?'막대를 누르면 그달 내역':'막대를 누르면 그날 내역');
+      if(nowIdx>=0){bars.children[nowIdx].classList.add('on');show(bins[nowIdx],tots[nowIdx]);}
+      const tasks=group(rows,r=>r.task||'AI 요청'),mt=Math.max(1,...tasks.map(x=>x.t.calls));
+      q('[data-tasks]').innerHTML=tasks.map((x,i)=>row(esc(x.k),'',x.t,COL[i%COL.length],x.t.calls/mt,i)).join('')||'<p class="empty">이 기간에 기록된 호출이 없어요.</p>';
+      const models=group(rows,r=>JSON.stringify([r.provider,r.model])),mm2=Math.max(1,...models.map(x=>x.t.calls));
+      q('[data-models]').innerHTML=models.map((x,i)=>{const [p,m]=JSON.parse(x.k);const src=x.rs.some(r=>r.rate)?'공식 단가':'공식 단가 없음 · 비용 제외';
+        return row(esc(m),esc((PV[p]||p)+' · '+src),x.t,COL[(i+2)%COL.length],x.t.calls/mm2,i);}).join('')||'<p class="empty">이 기간에 기록된 호출이 없어요.</p>';
+      q('[data-note]').textContent='이 브라우저 · 모든 방 합산 · 최근 12개월. 공식 표준 단가(2026-09-27 확인) 기준 예상치. DeepSeek 피크/오프피크·중국 공휴일 반영. 무료 등급·배치·세금은 실제 청구와 다를 수 있어요. 추가 API 호출 없음.';
+    }
+    render();
+  }
+  function approvedCal(ui,d){
+    approvedIcons(ui);ui.querySelector('.hd-ic').innerHTML=approvedIcon('calendar');
+    const q=s=>ui.querySelector(s),{rows,years,valid}=d.calendar,dated=r=>valid(r)&&r.month&&r.day;
+    const byDate=(a,b)=>a.year-b.year||a.month-b.month||a.day-b.day;
+    const LBL={inj:'주입 중',cand:'주입 후보',off:'주입 안 함'};
+    const st=r=>{const s=d.logState.get(r.key);if(d.injectionOn===false||d.logsOn===false||!s?.included)return 'off';return s.verified?'inj':'cand';};
+    const title=r=>r.events||String(r.heading||'').replace(/^\[|\]$/g,'')||'제목 없음';
+    const card=(r,i,dateChip)=>`<details class="lc" style="--i:${i}"><summary><span class="lc-t">${dateChip?`<span class="lc-d">${esc(r.fullDate||'')}</span>`:''}${esc(title(r))}</span><span class="st ${st(r)}">${LBL[st(r)]}</span><span class="chev">${approvedIcon('chev')}</span>${r.body?`<span class="lc-x">${esc(r.body)}</span>`:''}</summary><div class="lc-b">${r.body?esc(r.body):'<span class="muted">본문 없음</span>'}</div></details>`;
+    q('[data-count]').textContent='카드 '+rows.length+'개';
+    const other=rows.filter(r=>!dated(r)),kind=r=>r.isUnknown?'날짜 미상':r.isSpecialDate?'연호·기원전':r.isCustomDate?'작품 고유 표기':r.isYearOnly?'연도만':(r.month&&r.day)?'월·일만 (연도 없음)':'기타';
+    const nd=q('[data-nd]');nd.hidden=!other.length;q('[data-nd-sum]').textContent='날짜가 정확하지 않은 기록 '+other.length+'개';
+    const groups=new Map();other.forEach(r=>{const k=kind(r);if(!groups.has(k))groups.set(k,[]);groups.get(k).push(r);});
+    q('[data-nd-list]').innerHTML=[...groups].map(([k,rs])=>`<div class="ndg-h">${k}<span>${rs.length}</span></div>`+rs.map((r,i)=>card(r,i,true)).join('')).join('');
+    const pick=(y,which)=>{const rs=rows.filter(r=>dated(r)&&r.year===y).sort(byDate),r=which==='first'?rs[0]:rs.at(-1);d.draft.year=y;d.draft.month=r?.month||1;d.draft.day=r?.day||0;};
+    const pop=q('[data-ypop]');
+    q('[data-yr]').onclick=()=>{pop.hidden=!pop.hidden;};
+    pop.onclick=e=>{const b=e.target.closest('button');if(!b)return;pop.hidden=true;pick(Number(b.dataset.y),'last');render(true);};
+    q('[data-py]').onclick=()=>{pick(years[years.indexOf(d.draft.year)-1],'last');render(true);};
+    q('[data-ny]').onclick=()=>{pick(years[years.indexOf(d.draft.year)+1],'last');render(true);};
+    q('[data-first]').onclick=()=>{pick(years[0],'first');render(true);};
+    q('[data-last]').onclick=()=>{pick(years.at(-1),'last');render(true);};
+    q('[data-months]').onclick=e=>{const b=e.target.closest('button');if(!b||b.disabled)return;const m=Number(b.dataset.m),r=rows.filter(x=>dated(x)&&x.year===d.draft.year&&x.month===m).sort(byDate)[0];d.draft.month=m;d.draft.day=r?.day||0;render(true);};
+    q('[data-grid]').onclick=e=>{const b=e.target.closest('button.has');if(!b)return;d.draft.day=Number(b.dataset.d);render(false);};
+    function render(regrid){
+      const y=d.draft.year,m=d.draft.month,day=d.draft.day,yr=rows.filter(r=>dated(r)&&r.year===y),mon=yr.filter(r=>r.month===m);
+      if(!years.length){q('.cal').innerHTML='<p class="empty">연·월·일이 모두 적힌 날짜로그가 아직 없어요.<br>아래 서랍에서 다른 기록을 볼 수 있어요.</p>';q('[data-dt]').textContent='';q('[data-dc]').textContent='';q('[data-cards]').innerHTML='';nd.open=true;return;}
+      q('[data-yr]').innerHTML=y+'년'+approvedIcon('chev');
+      q('[data-py]').disabled=years.indexOf(y)<=0;q('[data-ny]').disabled=years.indexOf(y)>=years.length-1;
+      pop.innerHTML=years.map(v=>`<button type="button" data-y="${v}" class="${v===y?'sel':''}">${v}년<small>${rows.filter(r=>dated(r)&&r.year===v).length}개</small></button>`).join('');
+      q('[data-months]').innerHTML=Array.from({length:12},(_,i)=>{const has=yr.some(r=>r.month===i+1);return `<button type="button" data-m="${i+1}" class="${has?'has':''} ${m===i+1?'sel':''}" ${has?'':'disabled'}>${i+1}</button>`;}).join('');
+      const dt=new Date(0);dt.setUTCFullYear(y,m-1,1);const first=dt.getUTCDay();dt.setUTCFullYear(y,m,0);const last=dt.getUTCDate();
+      let html='';for(let i=0;i<first;i++)html+='<button class="e" disabled tabindex="-1"></button>';
+      for(let i=1;i<=last;i++){const rs=mon.filter(r=>r.day===i),n=rs.length,s=rs.map(st),mark=s.includes('inj')?'inj':s.includes('cand')?'cand':'';
+        html+=`<button type="button" data-d="${i}" style="--i:${regrid?i:0};--lv:${Math.min(n,4)}" class="${n?'has':''} ${mark} ${n&&i===day?'sel':''}" ${n?'':'disabled'} aria-label="${y}년 ${m}월 ${i}일 · 카드 ${n}개"><span>${i}</span><span class="dots">${'<i></i>'.repeat(Math.min(n,3))}</span></button>`;}
+      q('[data-grid]').innerHTML=html;
+      const dayN=new Set(yr.map(r=>r.month*100+r.day)).size;
+      q('[data-ystat]').innerHTML=`<span>${y}년 기록 ${dayN}일</span><span>카드 ${yr.length}개</span><span>주입 중 ${yr.filter(r=>st(r)==='inj').length}개</span>`;
+      const sel=mon.filter(r=>r.day===day),wd=day?'일월화수목금토'[(()=>{const z=new Date(0);z.setUTCFullYear(y,m-1,day);return z.getUTCDay();})()]:'';
+      q('[data-dt]').textContent=day?`${y}년 ${m}월 ${day}일`:`${y}년 ${m}월`;q('[data-dc]').textContent=day?`${wd}요일 · 카드 ${sel.length}개`:'';
+      q('[data-cards]').innerHTML=sel.map((r,i)=>card(r,i,false)).join('')||'<p class="empty">이 날짜의 카드가 없어요.</p>';
+    }
+    if(years.length&&(!years.includes(d.draft.year)||!d.draft.month||!d.draft.day))pick(years.includes(d.draft.year)?d.draft.year:years.at(-1),'last');
+    render(true);
+  }
+  function approvedMap(ui,d){
+    approvedIcons(ui);ui.querySelector('.hd-ic').innerHTML=approvedIcon('relation');
+    const q=s=>ui.querySelector(s),{nodes,pairs,facts}=d.graph,det=q('[data-det]'),svg=q('[data-svg]');
+    const REG=(typeof L!=='undefined'&&L.reg)||{honorific:'존댓말',banmal:'반말',mixed:'상황별 혼용',other:'기타'};
+    const KN=(typeof L!=='undefined'&&L.know)||{aware:'알고 있음',unaware:'모름',unverified:'확인 안 됨'};
+    if(!nodes.length){q('.pane-l').innerHTML='<p class="empty">저장된 인물이 없어요. 인물·인지를 먼저 정리해 주세요.</p>';det.innerHTML='';return;}
+    const center=nodes.find(n=>n.pc)||nodes[0],byId=new Map(nodes.map(n=>[n.id,n])),name=id=>byId.get(id)?.name||id;
+    q('[data-count]').textContent=`등장 ${nodes.length}명 · 연결 ${pairs.length}`;
+    q('[data-key]').innerHTML=`<span><svg width="22" height="6"><path d="M1 3h20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>관계·감정선 기록</span><span><svg width="22" height="6"><path d="M1 3h20" stroke="currentColor" stroke-width="1.3" stroke-dasharray="3 4" stroke-linecap="round"/></svg>호칭만 기록</span><span>${approvedIcon('lock')} 비밀</span><span class="hint">자물쇠를 누르면 비밀만 보기</span>`;
+    const deg=new Map(nodes.map(n=>[n.id,0]));pairs.forEach(p=>{deg.set(p.a,(deg.get(p.a)||0)+1);deg.set(p.b,(deg.get(p.b)||0)+1);});
+    const nearC=new Set(pairs.filter(p=>p.a===center.id||p.b===center.id).map(p=>p.a===center.id?p.b:p.a));
+    const others=nodes.filter(n=>n!==center).sort((a,b)=>(nearC.has(b.id)-nearC.has(a.id))||(deg.get(b.id)-deg.get(a.id)));
+    const rings=[];for(let i=0,c=0;i<others.length;c++){const cap=[8,14,20][c]||28;rings.push(others.slice(i,i+cap));i+=cap;}
+    const W=440,H=[260,300,430,540,640][rings.length]||640,cx=W/2,cy=H/2,pos=new Map([[center.id,[cx,cy]]]);
+    rings.forEach((ring,ri)=>{const ry=(ri+1)*(H/2-30)/rings.length,rx=Math.min(W/2-48,ry*1.55);ring.forEach((n,i)=>{const a=-Math.PI/2+(i+(ri%2?.5:0))*2*Math.PI/ring.length;pos.set(n.id,[cx+Math.cos(a)*rx,cy+Math.sin(a)*ry]);});});
+    svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+    const NS='http://www.w3.org/2000/svg',mk=(t,a)=>{const el=document.createElementNS(NS,t);for(const k in a)el.setAttribute(k,a[k]);return el;};
+    const gR=mk('g',{}),gE=mk('g',{}),gS=mk('g',{}),gL=mk('g',{}),gN=mk('g',{});svg.replaceChildren(gR,gE,gS,gL,gN);
+    rings.forEach((_,ri)=>{const ry=(ri+1)*(H/2-30)/rings.length;gR.append(mk('ellipse',{class:'ring',cx,cy,rx:Math.min(W/2-48,ry*1.55),ry}));});
+    const links=pairs.map((p,i)=>{const [ax,ay]=pos.get(p.a),[bx,by]=pos.get(p.b),len=Math.hypot(bx-ax,by-ay)||1,near=Math.abs((bx-ax)*(ay-cy)-(ax-cx)*(by-ay))/len,bend=(p.a===center.id||p.b===center.id)?0:near<46?110:Math.min(26,len*.12),
+      qx=(ax+bx)/2-(by-ay)/len*bend,qy=(ay+by)/2+(bx-ax)/len*bend,dd=`M${ax} ${ay} Q${qx} ${qy} ${bx} ${by}`,rel=p.relations.length>0;
+      const e=mk('path',{class:'e '+(rel?'rel':'sp'),d:dd});e.style.setProperty('--len',Math.ceil(len*1.2));e.style.setProperty('--dl',(.25+i*.035)+'s');
+      if(!rel)e.addEventListener('animationend',()=>e.classList.add('done'),{once:true});
+      const s=mk('path',{class:'sweep',d:dd});gE.append(e);gS.append(s);
+      const o={p,e,s,rel};
+      if(p.secrets.length){const g=mk('g',{class:'lk',transform:`translate(${.25*ax+.5*qx+.25*bx} ${.25*ay+.5*qy+.25*by})`,tabindex:0,role:'button','aria-label':name(p.a)+'·'+name(p.b)+' 비밀 보기'});
+        g.append(mk('circle',{r:8.5}),mk('path',{d:'M-2.5 -.5v-2a2.5 2.5 0 0 1 5 0v2'}),mk('rect',{x:-3.6,y:-.8,width:7.2,height:5.2,rx:1.2}));
+        const open=()=>{secretPair=p;paint(false);};g.onclick=open;g.onkeydown=ev=>{if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();open();}};gL.append(g);o.lk=g;}
+      return o;});
+    const tw=s=>[...String(s)].reduce((w,ch)=>w+(/[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af\u4e00-\u9fff]/.test(ch)?12.5:7.2),0);
+    const els=new Map();
+    nodes.forEach((n,i)=>{const [x,y]=pos.get(n.id),label=String(n.name||'?').length>8?String(n.name).slice(0,7)+'…':String(n.name||'?'),pc=n===center,h=pc?32:26,w=Math.max(h+8,tw(label)+(pc?30:24));
+      const g=mk('g',{class:'node'+(pc?' pc':''),tabindex:0,role:'button','aria-label':n.name+' 관계 보기'}),pp=mk('g',{class:'pp'});pp.style.setProperty('--dl',(pc?0:.08+i*.03)+'s');
+      pp.append(mk('rect',{class:'halo',x:x-w/2,y:y-h/2,width:w,height:h,rx:h/2}),mk('rect',{class:'pill',x:x-w/2,y:y-h/2,width:w,height:h,rx:h/2}));
+      const t=mk('text',{x,y});t.textContent=label;pp.append(t);g.append(pp);
+      const pick=()=>{secretPair=null;d.draft.sel=n.id;paint(true);};g.onclick=pick;g.onkeydown=ev=>{if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();pick();}};
+      const ti=mk('title',{});ti.textContent=n.name;g.append(ti);els.set(n.id,g);gN.append(g);});
+    let secretPair=null;d.draft.sel=byId.has(d.draft.sel)?d.draft.sel:center.id;d.draft.f=d.draft.f||'all';
+    const pass=p=>d.draft.f==='all'||(d.draft.f==='rel'?p.relations.length>0:p.secrets.length>0);
+    q('[data-f]').querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.v===d.draft.f)));
+    q('[data-f]').onclick=e=>{const b=e.target.closest('button');if(!b)return;d.draft.f=b.dataset.v;secretPair=null;q('[data-f]').querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));paint(false);};
+    const qi=q('[data-q]');
+    qi.oninput=()=>{const k=qi.value.trim().toLowerCase();els.forEach((g,id)=>g.classList.toggle('hit',!!k&&String(name(id)).toLowerCase().includes(k)));};
+    qi.onkeydown=e=>{if(e.key!=='Enter')return;const k=qi.value.trim().toLowerCase(),hit=nodes.find(n=>k&&String(n.name).toLowerCase().includes(k));if(hit){d.draft.sel=hit.id;secretPair=null;paint(true);}};
+    function paint(fx){
+      const sel=d.draft.sel,live=new Set([sel]);
+      links.forEach(o=>{const on=secretPair?o.p===secretPair:(pass(o.p)&&(o.p.a===sel||o.p.b===sel));
+        o.e.classList.toggle('dim',!on);o.e.classList.toggle('lit',on);o.lk?.classList.toggle('dim',!on);
+        if(on){live.add(o.p.a);live.add(o.p.b);if(fx){o.s.classList.remove('run');void o.s.getBBox();o.s.classList.add('run');}}});
+      els.forEach((g,id)=>{g.classList.toggle('sel',id===sel&&!secretPair);g.classList.toggle('link',live.has(id)&&id!==sel);g.classList.toggle('dim',!live.has(id));
+        if(fx&&id===sel){const h=g.querySelector('.halo');h.classList.remove('run');void h.getBBox();h.classList.add('run');}});
+      details();
+    }
+    const spTag=s=>s?`<span class="tg">${esc(s.address||'호칭 없음')}<em>${esc(REG[s.register||s.reg]||'')}</em></span>`:'';
+    const lock=approvedIcon('lock');
+    function pairBody(p,me){
+      const other=p.a===me?p.b:p.a,order=[me,other];
+      const sp=order.map(a=>p.speech.find(r=>r.a===a)).filter(Boolean);
+      const rl=order.flatMap(a=>p.relations.filter(r=>r.a===a));
+      const spLine=s=>`<span class="w">${esc(name(s.a))} → ${esc(name(s.b))}</span><span class="v">${s.address?`<q>${esc(s.address)}</q> · `:''}${esc(REG[s.register||s.reg]||'기타')}</span>`;
+      return `<div class="cat">호칭 · 말투</div>${sp.map(s=>s.note?`<details class="sp-row sp-fold"><summary>${spLine(s)}<span class="sp-more">말투 설명<span class="chev">${approvedIcon('chev')}</span></span></summary><div class="nt">${esc(s.note)}</div></details>`:`<div class="sp-row">${spLine(s)}</div>`).join('')||'<p class="muted" style="font-size:12px">기록 없음</p>'}
+        <div class="cat rel">관계 · 감정선</div>${rl.map(r=>`<div class="rl"><b>${esc(name(r.a))} → ${esc(name(r.b))}</b><p>${esc(r.current||'')}</p>${r.unresolved?`<div class="un">남은 쟁점 · ${esc(r.unresolved)}</div>`:''}${r.trajectory?`<details class="hist"><summary>${approvedIcon('clock')}<span>관계 이력</span><span class="chev">${approvedIcon('chev')}</span></summary><p>${esc(r.trajectory)}</p></details>`:''}</div>`).join('')||'<p class="muted" style="font-size:12px">기록 없음</p>'}
+        ${p.secrets.length?`<div class="cat sec">인지 · 비밀</div>${p.secrets.map(c=>`<div class="sc">${lock}<span>${esc(c.text)}</span></div>`).join('')}`:''}`;
+    }
+    function details(){
+      if(secretPair){const p=secretPair;det.innerHTML=`<div class="dh"><div class="s"><b style="font-size:15px;color:var(--m3-fg)">${esc(name(p.a))} ↔ ${esc(name(p.b))}</b><br>비밀 ${p.secrets.length}개</div><button class="chipb back" data-back>돌아가기</button></div>`+p.secrets.map(c=>`<div class="sc">${lock}<span>${esc(c.text)}</span></div>`).join('')+`<details class="rc" open style="--i:1;margin-top:10px"><summary><span class="rc-n">두 사람 관계 전체</span><span></span><span class="chev">${approvedIcon('chev')}</span></summary><div class="rc-b">${pairBody(p,p.a)}</div></details>`;
+        det.querySelector('[data-back]').onclick=()=>{secretPair=null;paint(false);};return;}
+      const sel=d.draft.sel,me=byId.get(sel),rel=pairs.filter(p=>(p.a===sel||p.b===sel)&&pass(p)).sort((a,b)=>(b.relations.length>0)-(a.relations.length>0)||b.secrets.length-a.secrets.length);
+      const secN=rel.reduce((n,p)=>n+p.secrets.length,0);
+      det.innerHTML=`<div class="dh"><span class="pl ${me===center?'pc':''}">${esc(me.name)}</span><div class="s">${rel.length}명과 연결${secN?` · 비밀 ${secN}개`:''}</div>${me!==center?`<button class="chipb back" data-back>${esc(center.name)}(으)로</button>`:''}</div>`+
+        (rel.map((p,i)=>{const o=p.a===sel?p.b:p.a,out=p.speech.find(r=>r.a===sel),inn=p.speech.find(r=>r.a===o),cur=(p.relations.find(r=>r.a===sel)||p.relations[0])?.current;
+          return `<details class="rc ${p.relations.length?'hasrel':''}" style="--i:${i}"><summary><span class="rc-n">${esc(name(o))}</span><span class="rc-tags">${spTag(out)}${out&&inn?'<span class="muted" style="font-size:10px">⇄</span>':''}${spTag(inn)}${p.secrets.length?`<span class="tg sec">비밀 ${p.secrets.length}</span>`:''}</span><span class="chev">${approvedIcon('chev')}</span><span class="rc-x">${esc(cur||'관계·감정선 기록 없음')}</span></summary><div class="rc-b">${pairBody(p,sel)}</div></details>`;}).join('')||'<p class="empty">이 조건에 맞는 연결이 없어요.</p>');
+      const kn=facts.filter(f=>f.know?.[sel]&&f.know[sel]!=='unverified');
+      if(kn.length)det.insertAdjacentHTML('beforeend',`<details class="box kn"><summary>${esc(me.name)}의 인지<span class="tg">알고 있음 ${kn.filter(f=>f.know[sel]==='aware').length}</span><span class="tg">모름 ${kn.filter(f=>f.know[sel]==='unaware').length}</span><span class="chev">${approvedIcon('chev')}</span></summary><div class="kn-in">${kn.map(f=>`<div class="kn-r"><span>${esc(f.label)}</span><small class="${f.know[sel]}">${esc(KN[f.know[sel]]||f.know[sel])}</small></div>`).join('')}</div></details>`);
+      det.querySelector('[data-back]')?.addEventListener('click',()=>{d.draft.sel=center.id;paint(true);});
+    }
+    paint(false);requestAnimationFrame(()=>svg.classList.add('go'));
+  }
+
   const DLG = {
+    usageLedger:vUsageLedger,logCalendar:vLogCalendar,relationMap:vRelationMap,
     txtDownloads(d) {
       const files=d.files||[],requested=files.filter(file=>file.requested).length;
       const size=bytes=>bytes<1024?fmt(bytes)+' B':bytes<1048576?(bytes/1024).toLocaleString('ko-KR',{maximumFractionDigits:1})+' KB':(bytes/1048576).toLocaleString('ko-KR',{maximumFractionDigits:1})+' MB';
       return sheet(d,{title:esc(d.title),desc:fmt(files.length)+'개 TXT 준비됨'+(d.roomName?' · '+esc(d.roomName):''),
-        body:`<p class="m3-muted m3-bottomgap">오른쪽 다운로드 아이콘을 눌러 한 파일씩 받으세요. 저장 안내가 끝나면 다음 파일을 누르세요.</p><div class="m3-txt-list" role="list" aria-label="TXT 파일 목록">${files.map((file,i)=>{
+        body:`<p class="m3-muted m3-bottomgap">오른쪽 아이콘으로 한 파일씩 받거나, 전체 다운으로 1번부터 마지막 파일까지 각각 연속으로 받으세요.</p><div class="m3-txt-list" role="list" aria-label="TXT 파일 목록">${files.map((file,i)=>{
           const label=file.filename+(file.requested?' 다시 다운로드':' 다운로드');
           return `<div class="m3-txt-row${file.requested?' is-requested':''}" data-key="txt-${d.id}-${i}" role="listitem"><div class="m3-txt-info"><b>${esc(file.filename)}</b><div class="m3-txt-meta"><span>${i+1} / ${files.length} · ${size(file.bytes)}</span><span class="m3-txt-state">${file.requested?'다운로드 요청됨':'준비됨'}</span></div></div><a class="m3-txt-download" href="${esc(file.url)}" download="${esc(file.filename)}" target="_blank" rel="noopener" data-txt-download="${d.id}" data-file-index="${i}" aria-label="${esc(label)}" title="${esc(label)}"${i===0?' data-autofocus':''}>${ic('down')}</a></div>`;
         }).join('')}</div><p class="m3-muted m3-topgap">전체 TXT를 번호순으로 같은 AI 대화에 첨부해 주세요. 요청 표시는 저장 완료가 아니며, 실제 저장 여부는 브라우저의 다운로드 목록에서 확인해 주세요.</p>`,
-        foot:`<span class="m3-txt-progress" role="status" aria-live="polite">다운로드 요청 ${requested} / ${files.length}</span>${SP}${closeBtn(d)}`});
+        foot:`<button type="button" class="m3-btn" data-txt-all="${d.id}">${ic('down')}<span>전체 다운</span></button><span class="m3-txt-progress" role="status" aria-live="polite">다운로드 요청 ${requested} / ${files.length}</span>${SP}${closeBtn(d)}`});
     },
 
     relationshipPreflight(d){return sheet(d,{title:'재구축 가져오기 전 확인',body:`<div class="m3-status m3-warning">${ic('alert')}<span>${esc(d.message)}</span></div><p class="m3-muted">파일 선택과 적용 때 모두 검사합니다. 주입이나 기존 자료를 자동으로 바꾸지 않습니다.</p>`,foot:`${SP}${closeBtn(d,'확인')}`});},
@@ -13364,8 +13991,9 @@ function createWishUI(AD) {
       <section class="m3-grp"><div class="m3-gt">${ic('key')}연결</div>${field('AI 서비스', selc(D(d, 'provider'), a.provider, d.providers || [['ai-studio', 'Google AI Studio'], ['firebase', 'Firebase AI Logic'], ['deepseek', 'DeepSeek API']]))}
       ${a.provider === 'firebase' ? field('Firebase Config', ta(D(d, 'firebase'), a.firebase, 'const firebaseConfig = { apiKey:"…", projectId:"…" };', '100')) : ds ? field('DeepSeek API Key', inp(D(d, 'dsKey'), a.dsKey || '', '저장됨 · 새 키를 넣으면 교체', 'password')) + field('Base URL', inp(D(d, 'dsBase'), a.dsBase || '')) : field('Gemini API Key', inp(D(d, 'key'), a.key || '', '저장됨 · 새 키를 넣으면 교체', 'password'), '이 브라우저에만 보관하고 백업에는 넣지 않습니다.')}</section>
       <section class="m3-grp"><div class="m3-gt">${ic('spark')}모델 · 생성</div>
-      ${ds ? `<div class="m3-grid2">${field('DeepSeek 모델', selc(D(d, 'dsModel'), a.dsModel, models.length ? models : [[a.dsModel, a.dsModel]]))}${field('추론', selc(D(d, 'dsThinking'), a.dsThinking, [['1', '켜기'], ['0', '끄기']]))}</div>${d.showCustom ? field('커스텀 모델 ID · 서드파티 전용', inp(D(d, 'dsCustom'), a.dsCustom || '')) : ''}` : `<div class="m3-grid2">${field('모델', selc(D(d, 'model'), a.model, models.length ? models : [[a.model, a.model]]))}${field('추론 강도', selc(D(d, 'thinking'), a.thinking, d.thinkingOptions || [['low', '낮음'], ['medium', '보통'], ['high', '높음']]))}</div>`}
+      ${ds ? `<div class="m3-grid2">${field('DeepSeek 모델', selc(D(d, 'dsModel'), a.dsModel, models.length ? models : [[a.dsModel, a.dsModel]]))}${field('기억 추출·재구축 추론', selc(D(d, 'dsThinking'), a.dsThinking, [['1', '켜기'], ['0', '끄기']]))}</div>${d.showCustom ? field('커스텀 모델 ID · 서드파티 전용', inp(D(d, 'dsCustom'), a.dsCustom || '')) : ''}` : `<div class="m3-grid2">${field('모델', selc(D(d, 'model'), a.model, models.length ? models : [[a.model, a.model]]))}${field('기억 추출·재구축 추론 강도', selc(D(d, 'thinking'), a.thinking, d.thinkingOptions || [['low', '낮음'], ['medium', '보통'], ['high', '높음']]))}</div>`}
       </section>
+      <p class="m3-muted">추출·재구축·자료 변환은 선택한 설정을 사용합니다. 후보 선별·색인·연결 테스트는 낮음으로 실행합니다. DeepSeek 추론 OFF는 유지하며, 사용자 지정 서버에서는 해당 보조 작업의 추론을 끕니다. 임베딩 의미검색은 별도입니다.</p>
       <div class="m3-status ${a.test === 'ok' ? 'm3-ok' : a.test === 'busy' ? 'm3-busy' : a.test === 'err' ? 'm3-err' : ''}" aria-live="polite">${ic(a.test === 'ok' ? 'check' : 'alert')}<span>${a.test === 'busy' ? `연결 테스트 중${dots}` : a.test === 'ok' ? '연결 성공 · 저장을 눌러야 유지됩니다' : a.test === 'err' ? esc(a.testMsg || '연결 실패') : '연결 테스트는 소량의 API를 사용합니다.'}</span></div>`,
         foot: `${btn('인증 삭제', 'aiClear', { arg: d.id, cls: 'danger mini' })}${SP}${btn('연결 테스트', 'aiTest', { arg: d.id, dis: a.test === 'busy' })}${saveBtn(d, '저장', 'aiSave')}` });
     },
@@ -13560,7 +14188,7 @@ function createWishUI(AD) {
   }
   function render() {
     raf = 0; if(needsFullView()){if(modelDirty||!vmAt)readVM();}else readMonitorVM(); modelDirty=false; ensureRoot();
-    const tpl = document.createElement('template'); tpl.innerHTML = vRoot(); patchKids(root, tpl.content); fxInit(root);
+    const tpl = document.createElement('template'); tpl.innerHTML = vRoot(); patchKids(root, tpl.content); mountApprovedViews(); fxInit(root);
     renderQuick(); updateMonitor();
     if (S.scrollTop) { S.scrollTop = false; const m = root.querySelector('.m3-main'); if (m) m.scrollTop = 0; }
     if (S.wantFocus) { S.wantFocus = false; const el = root.querySelector('.wish-dlg-layer>.m3-dialog:last-child [data-autofocus]'); if (el) el.focus({ preventScroll: true }); }
@@ -13574,13 +14202,29 @@ function createWishUI(AD) {
 
   /* ───────── 17. 시트 · 토스트 · 작업 ───────── */
   const findDlg = id => S.dialogs.find(x => x.id === id);
-  function openSheet(type, props = {}) { const d = { id: uid('dlg'), type, draft: {}, ...props }; S.dialogs.push(d); S.wantFocus = true; paint(); return d; }
-  function closeSheet(idOrD, instant) {
+  // Keep editor objects in memory: no per-keystroke disk writes or automatic commits.
+  const editorDrafts=new Map();
+  const isDraftEditor=type=>/^e(Slot|State|Log|Speech|Pack|Entry|Actor|Fact|Relationship|Con)$/.test(type)||['promptGuide','guide','presets','loreConvert'].includes(type);
+  function editorKey(type,p){return JSON.stringify([location.pathname,type,p.ref??'',p.kind??'',p.pack??'',p.group??'',p.parent??'',p.idx??'',p.wishSpeechParent??'']);}
+  function openSheet(type, props = {}) {
+    const key=isDraftEditor(type)?editorKey(type,props):'';
+    const d=(key&&editorDrafts.get(key))||{id:uid('dlg'),type,draft:{},...props};
+    d.leaving=false;
+    if(key){d.editPath=location.pathname;d.editKey=key;editorDrafts.set(key,d);}
+    if(!S.dialogs.includes(d))S.dialogs.push(d);
+    S.wantFocus=true;paint();return d;
+  }
+  function discardPanelDrafts(){
+    for(const [key,d] of editorDrafts)if(d.editPath===location.pathname&&!d.busy&&!d.draft?.busy){editorDrafts.delete(key);closeSheet(d,true);}
+  }
+  function closeSheet(idOrD, instant, preserveDraft = false) {
     const d = typeof idOrD === 'string' ? findDlg(idOrD) : idOrD; if (!d || d.leaving) return;
     if(d.busy&&['roomCopy','roomName','loreSplit','secondaryExport','secondaryReview','secondaryManage'].includes(d.type))return;
+    if(d.editKey&&(d.busy||d.draft?.busy))return;
+    if(d.editKey&&!preserveDraft)editorDrafts.delete(d.editKey);
     if(d.type==='txtDownloads')releaseTextDownloadList(d);
     if (instant || REDUCED) { S.dialogs = S.dialogs.filter(x => x !== d); paint(); return; }
-    d.leaving = true; paint(); setTimeout(() => { S.dialogs = S.dialogs.filter(x => x !== d); paint(); }, 220);
+    d.leaving = true; paint(); setTimeout(() => { if(!d.leaving)return; S.dialogs = S.dialogs.filter(x => x !== d); paint(); }, 220);
   }
   function toast(text, type = 'ok', ms = 0) {
     const t = { id: uid('t'), text: String(text || ''), type: type === 'success' ? 'ok' : type }; S.toasts.push(t); if (S.toasts.length > 3) S.toasts.shift(); paint();
@@ -13620,6 +14264,7 @@ function createWishUI(AD) {
 
   /* ───────── 19. 내장 동작 (화면 전용) ───────── */
   const BUILTIN = {
+    usageLedger:localUsageOpen,logCalendar:localCalendarOpen,relationMap:localGraphOpen,
     secondaryExpand:arg=>{const [id,key]=arg.split('|'),d=findDlg(id);if(d&&!d.busy){d.draft.open||={};d.draft.open[key]=!d.draft.open[key];}},
     secondaryMore:id=>{const d=findDlg(id);if(d&&!d.busy)d.draft.limit=(Number(d.draft.limit)||30)+30;},
     secondaryPick:arg=>{const [id,mode]=arg.split('|');SecondaryRebuild.selectReviewRows(findDlg(id),mode);},
@@ -13628,7 +14273,7 @@ function createWishUI(AD) {
 
     nav: a => { if (S.tab !== a) { S.tab = a; S.scrollTop = true; AD.onNav && AD.onNav(a, a === 'memory' ? S.mem : a === 'cognition' ? S.cog : undefined); } },
     memSub: a => { S.mem = a; AD.onNav && AD.onNav('memory', a); }, cogSub: a => { S.cog = a; AD.onNav && AD.onNav('cognition', a); },
-    closePanel: () => close(), closeDlg: id => closeSheet(id), quickClose: () => closeQuick(), quickFull: () => open('check'),
+    closePanel: () => {discardPanelDrafts();close();}, closeDlg: id => closeSheet(id), quickClose: () => closeQuick(), quickFull: () => open('check'),
     flip: (key, el) => setKey(key, el.getAttribute('aria-pressed') !== 'true'),
     step: (arg, el) => { const [k, dir, mn, mx, inc] = arg.split('|'), input = el.parentElement.querySelector('input'); const v = Math.min(Number(mx), Math.max(Number(mn), (Number(input && input.value) || 0) + Number(dir) * Number(inc))); if (input) input.value = v; setKey(k, v); },
     search: () => { S.search = ''; openSheet('search'); }, preview: () => openSheet('preview'), memPick: () => openSheet('memPick'),
@@ -13676,14 +14321,27 @@ function createWishUI(AD) {
     if (wired.has(host)) return; wired.add(host);
     host.addEventListener('click', e => {
       const t = e.target;
-      if (t.classList && t.classList.contains('m3-dialog')) { const d = findDlg(t.dataset.dlg); if (d && d.type !== 'txtDownloads') closeSheet(d); return; }
+      if (S.openSet.has('log-more') && !t.closest('.m3-more>summary')) { S.openSet.delete('log-more'); if (!t.closest('[data-act]')) paint(); }
+      if (t.classList && t.classList.contains('m3-dialog')) { const d = findDlg(t.dataset.dlg); if (d && d.type !== 'txtDownloads') closeSheet(d, false, true); return; }
       if (t.classList && t.classList.contains('m3-overlay')) return;
+      const allButton=t.closest('button[data-txt-all]');
+      if(allButton&&host.contains(allButton)){
+        e.preventDefault();const d=findDlg(allButton.dataset.txtAll);
+        if(!d||d.leaving||d.urlsReleased||d.downloadingAll)return;
+        d.downloadingAll=true;
+        try{
+          const links=[...host.querySelectorAll('a[data-txt-download]')].filter(a=>a.dataset.txtDownload===d.id).sort((a,b)=>Number(a.dataset.fileIndex)-Number(b.dataset.fileIndex));
+          // Reuse each file URL in the originating gesture; no merged blob or delayed queue.
+          for(const a of links)a.click();
+        }finally{d.downloadingAll=false;paint(false);}
+        return;
+      }
       const link = t.closest('a[data-txt-download]');
       if (link && host.contains(link)) {
         const d = findDlg(link.dataset.txtDownload), file = d?.files?.[Number(link.dataset.fileIndex)];
         if (!file || d.leaving || d.urlsReleased) { e.preventDefault(); return; }
-        if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) { file.requested = true; paint(false); }
-        // Preserve the trusted link's default download; no await, synthetic click or next-file timer.
+        if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) { file.requested = true; if(!d.downloadingAll)paint(false); }
+        // Preserve each link's default download, including the synchronous batch loop.
         return;
       }
       const el = t.closest('[data-act]'), sum = t.closest('summary');
@@ -13797,7 +14455,7 @@ function createWishUI(AD) {
   }
   let lastPath = '';
   function mountMonitor() {
-    if (location.pathname !== lastPath) { lastPath = location.pathname; if (S.quick) closeQuick(); AD.onRoute && AD.onRoute(location.pathname); }
+    if (location.pathname !== lastPath) { lastPath = location.pathname; for(const d of [...S.dialogs])if(d.editKey&&d.editPath!==location.pathname)closeSheet(d,true,true); if (S.quick) closeQuick(); AD.onRoute && AD.onRoute(location.pathname); }
     if (!(AD.isChatPath ? AD.isChatPath(location.pathname) : CHAT_PATH.test(location.pathname))) { const m = document.getElementById(MON_ID); if (m) m.remove(); if (S.quick) closeQuick(); return; }
     // Avoid forced layout, placement and monitor DOM writes while Crack streams.
     if(AD.streaming?.()&&document.getElementById(MON_ID)?.isConnected)return;
@@ -13818,7 +14476,7 @@ function createWishUI(AD) {
     document.addEventListener('focusin', e => { const t = e.target.closest && e.target.closest('#wish-rp-root [data-tip]'); if (t) showTip(t); });
     document.addEventListener('click',e=>{const t=e.target.closest?.('#wish-rp-root .m3-help');if(t){e.preventDefault();showTip(t);}else if(!e.target.closest?.('#wish-ui-help-tip'))hideTip();});
     document.addEventListener('focusout',e=>{if(!e.relatedTarget?.closest?.('#wish-ui-help-tip'))hideTip();}); addEventListener('scroll',e=>{if(!e.target.closest?.('#wish-ui-help-tip'))hideTip();},true);
-    document.addEventListener('keydown', e => { if (e.key !== 'Escape') return; if(tipEl){hideTip();return;} const d = [...S.dialogs].reverse().find(x => !x.leaving); if (d) { closeSheet(d); return; } if (S.quick) { closeQuick(); return; } if (S.open) close(); });
+    document.addEventListener('keydown', e => { if (e.key !== 'Escape') return; if(tipEl){hideTip();return;} const d = [...S.dialogs].reverse().find(x => !x.leaving); if (d) { closeSheet(d, false, true); return; } if (S.quick) { closeQuick(); return; } if (S.open) close(); });
     document.addEventListener('pointerdown', e => { if (S.quick && !e.target.closest('#wish-rp-quick,#' + MON_ID)) closeQuick(); });
     addEventListener('resize', () => { if (S.pos || S.size) { S.pos = null; S.size = null; } if (S.open || S.quick) paint(); });
     mountMonitor();
@@ -13908,7 +14566,7 @@ function WUIOpenPromise(type,props){return new Promise(resolve=>{const d=WUI.ope
 function WUIResolve(id,value){const p=WUICache.pending.get(id);if(p){WUICache.pending.delete(id);p.resolve(value);}WUI.closeSheet(id);}
 function WUIWatchClosedSheets(){const observer=new MutationObserver(()=>{for(const [id,p] of WUICache.pending)if(!WUI.ui.dlg(id)){WUICache.pending.delete(id);p.resolve(false);}});observer.observe(document.getElementById('wish-rp-root'),{subtree:true,childList:true});}
 async function WUIOnOpen(){const id=getChatIdFromPath();if(!id){notify('채팅방 화면에서만 사용할 수 있습니다.','warn');WUI.close();return;}await ensureCurrentRoom(id);WUIRefreshSettings();void WishRoomNames.read(id).then(()=>WUI.paint()).catch(()=>{});state.modal=document.getElementById('wish-rp-root');v2ScheduleAsyncRefresh(state.currentRoom);void WUIRefreshTurnCount(state.currentRoom,true);U3.schedule(state.currentRoom);void R31.load(state.currentRoom).catch(e=>notify(e.message,'warn'));WUI.paint();}
-function WUIStyles(){if(!document.getElementById('wish-252-style')){const css=document.createElement('style');css.id='wish-252-style';css.textContent=`
+function WUIStyles(){if(!document.getElementById('wish-logbar-style')){const lb=document.createElement('style');lb.id='wish-logbar-style';lb.textContent='#wish-rp-root .m3-logbar{flex-wrap:nowrap;gap:6px}#wish-rp-root .m3-logbar>.m3-actions{gap:6px;flex-wrap:nowrap}#wish-rp-root .m3-viewseg{display:inline-flex;flex:none;padding:2px;border-radius:9px;background:var(--m3-card2);border:1px solid var(--m3-line)}#wish-rp-root .m3-viewseg>button{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;padding:4px 10px;border:0;border-radius:7px;background:transparent;color:var(--m3-muted);cursor:pointer;transition:background .25s,color .25s}#wish-rp-root .m3-viewseg>button:hover{color:var(--m3-fg)}#wish-rp-root .m3-viewseg>button.is-on{background:var(--m3-card);color:var(--m3-fg);font-weight:600;box-shadow:var(--m3-shadow);cursor:default}#wish-rp-root .m3-viewseg svg.ic{width:13px;height:13px}#wish-rp-root .m3-dupwarn{display:inline-flex;align-items:center;gap:5px;flex:none;font-size:11.5px;padding:4px 10px;border-radius:999px;cursor:pointer;color:var(--m3-warn);background:color-mix(in srgb,var(--m3-warn) 12%,transparent);border:1px solid color-mix(in srgb,var(--m3-warn) 30%,transparent);animation:wishDupPop .45s cubic-bezier(.34,1.42,.5,1)}#wish-rp-root .m3-dupwarn b{font-weight:650}#wish-rp-root .m3-dupwarn svg.ic{width:13px;height:13px}@keyframes wishDupPop{from{opacity:0;transform:scale(.8)}}#wish-rp-root .m3-more{position:relative;flex:none}#wish-rp-root .m3-more>summary{list-style:none;padding:5px 7px!important;cursor:pointer}#wish-rp-root .m3-more>summary::-webkit-details-marker{display:none}#wish-rp-root .m3-more[open]>summary{background:var(--m3-accent-soft)!important;color:var(--m3-accent);border-color:var(--m3-accent-line)!important}#wish-rp-root .m3-more-menu{position:absolute;right:0;top:calc(100% + 6px);z-index:30;min-width:200px;padding:5px;border-radius:11px;border:1px solid var(--m3-line);background:var(--m3-sheet);box-shadow:var(--m3-shell-shadow);display:flex;flex-direction:column;gap:1px;transform-origin:top right;animation:wishMoreDrop .28s cubic-bezier(.34,1.42,.5,1)}@keyframes wishMoreDrop{from{opacity:0;transform:translateY(-4px) scale(.96)}}#wish-rp-root .m3-more-menu .m3-btn{width:100%;justify-content:flex-start;border-color:transparent!important;background:transparent!important;padding:8px 10px;font-size:12.5px}#wish-rp-root .m3-more-menu .m3-btn:hover{background:var(--m3-card2)!important;transform:none}#wish-rp-root .m3-more-h{font-size:10.5px;color:var(--m3-muted);padding:6px 10px 3px}@media(prefers-reduced-motion:reduce){#wish-rp-root .m3-dupwarn,#wish-rp-root .m3-more-menu{animation:none}}#wish-rp-root svg.ic-calendar rect:last-of-type,#wish-rp-root svg.ic-relation circle,#wish-rp-root svg.ic-list path,#wish-rp-root svg.ic-more circle,#wish-rp-root svg.ic-wallet{transform-box:fill-box;transform-origin:center}#wish-rp-root svg.ic-wallet{transform-origin:50% 12%}#wish-rp-root :hover>svg.ic-calendar{animation:wiIcTilt .6s cubic-bezier(.34,1.42,.5,1)}#wish-rp-root :hover>svg.ic-calendar rect:last-of-type{animation:wiIcBlink .6s cubic-bezier(.34,1.42,.5,1)}#wish-rp-root :hover>svg.ic-relation path{stroke-dasharray:30;animation:wiIcDraw .7s ease}#wish-rp-root :hover>svg.ic-relation circle{animation:wiIcPop .5s cubic-bezier(.34,1.42,.5,1) backwards}#wish-rp-root :hover>svg.ic-relation circle:nth-of-type(2){animation-delay:.12s}#wish-rp-root :hover>svg.ic-relation circle:nth-of-type(3){animation-delay:.24s}#wish-rp-root :hover>svg.ic-list path:first-of-type{animation:wiIcNudge .45s ease}#wish-rp-root :hover>svg.ic-list path:last-of-type{animation:wiIcPop .45s cubic-bezier(.34,1.42,.5,1)}#wish-rp-root :hover>svg.ic-more circle,#wish-rp-root [open]>summary>svg.ic-more circle{animation:wiIcHop .5s ease}#wish-rp-root :hover>svg.ic-more circle:nth-of-type(2),#wish-rp-root [open]>summary>svg.ic-more circle:nth-of-type(2){animation-delay:.08s}#wish-rp-root :hover>svg.ic-more circle:nth-of-type(3),#wish-rp-root [open]>summary>svg.ic-more circle:nth-of-type(3){animation-delay:.16s}#wish-rp-root :hover>svg.ic-wallet{animation:wiIcSwing .75s ease}@keyframes wiIcTilt{30%{transform:rotate(-8deg)}60%{transform:rotate(4deg)}}@keyframes wiIcBlink{0%{transform:scale(1)}35%{transform:scale(0)}70%{transform:scale(1.35)}100%{transform:scale(1)}}@keyframes wiIcDraw{from{stroke-dashoffset:30}to{stroke-dashoffset:0}}@keyframes wiIcPop{from{transform:scale(.3)}to{transform:scale(1)}}@keyframes wiIcNudge{40%{transform:translateX(2.5px)}}@keyframes wiIcHop{40%{transform:translateY(-3px)}}@keyframes wiIcSwing{20%{transform:rotate(12deg)}45%{transform:rotate(-9deg)}70%{transform:rotate(5deg)}}@media(prefers-reduced-motion:reduce){#wish-rp-root svg.ic,#wish-rp-root svg.ic *{animation:none!important}}';document.head.append(lb);}if(!document.getElementById('wish-local-views-style')){const st=document.createElement('style');st.id='wish-local-views-style';st.textContent="#wish-rp-root .m3-date-group[data-key^=\"dg-\"] .m3-card::after{display:none!important}";document.head.append(st);}if(!document.getElementById('wish-252-style')){const css=document.createElement('style');css.id='wish-252-style';css.textContent=`
 
 .m3-local-room{margin-bottom:7px}.m3-local-room .m3-t{min-width:0;overflow-wrap:anywhere}.m3-local-room .m3-t small{line-height:1.5;margin-top:3px}
 .m3-economy-actions{display:flex;flex-wrap:nowrap;gap:7px;margin-left:auto}
@@ -14068,7 +14726,7 @@ if(!state.currentRoom||!WUICache.ai)return {};model(state.currentRoom);const r=s
 const rebuild=R31.get(r);const vm={apiEconomy:{...WishEconomy.settings(r),status:WishEconomy.describe(r)},cogInclude:Number(r.injectionPolicy?.cognitionEvery)>0,recall:recallSelectionSettings(r),rebuild:rebuild?{status:rebuild.status,message:rebuild.message,segments:rebuild.segments,ready:!!rebuild.draft}:null,rebuildRunning:R31.busy(),unified:U3.view(r),room:{...WishRoomNames.describe(r),name:D.room},version:SCRIPT_VERSION,save:{saving:state.saveStatus==='saving',at:state.lastSavedAt?new Date(state.lastSavedAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}):''},job:S.job,features:{autoDefault:false,semantic:false,density:false},inj:injection,defaults:{enabled:WUICache.ai.autoMemoryEnabled!==false,every:WUICache.ai.memoryMaxTurns},memory:D.memory,cog:{...D.cog,actors:D.actors,facts:D.facts.map(f=>({...f,included:f.sel}))},reviews:D.reviews.map(rv=>({...rv,acceptLabel:rv.accept})),state:{inject:D.pol.state,sections:D.state,raw:String(r.slots?.find(s=>s.id==='currentState')?.content||'')},logs:{inject:D.pol.log,blocks:D.logs.map(b=>({...b,undated:b.date==='날짜 미상',included:D.pol.log&&plan.some(i=>i.kind==='log'&&!i.off&&(i.sourceKey===b.key||i.key==='log:'+b.key))})),dupDates:logView.duplicateDates},relationships:{on:r.relationshipConfig?.enabled!==false,rows:WishRelationships.normalize(r.relationships)},speech:{on:D.speechOn,rows:D.speech},chars:{autoDetect:D.autoChar,rows:D.chars},extras:{rows:D.extras},presets:D.presets.map(p=>({...p,ret:p.retentionTurns})),lore:D.lore,ai:{providerLabel: getAiProviderLabel(D.ai.provider),model:D.ai.model},pol:D.pol,autoChar:D.autoChar,quickCog:D.facts.map(f=>({id:f.id,label:f.label,mode:f.mode,included:state.quickCognitionDesired.has(f.id)?state.quickCognitionDesired.get(f.id):f.sel})),recent:[D.memory.last,D.lore.auto.last].filter(Boolean),labels:{resetDesc:'현재 방의 기억·인지·이 방 전용 자동 자료를 초기화합니다. 일반 자료집은 유지됩니다.'}};
 Object.assign(vm.memory,{error:U3.monitor(r).error,enabled:vm.unified.enabled&&vm.unified.memoryEnabled,committed:vm.unified.memoryPending,target:vm.unified.memoryEvery,fixed:vm.unified.memoryEvery,running:vm.unified.running,status:vm.unified.error||vm.unified.status});Object.assign(vm.cog,{auto:vm.unified.enabled&&vm.unified.observeEnabled,every:vm.unified.observeEvery});vm.job=vm.unified.running?{label:vm.unified.jobLabel||'통합 결과 확인 중'}:vm.job;
 if(R31.busy())vm.job={label:rebuild?.message||'재구축 자료 준비 중'};
-const eligibility=sessionSetupEligibilityFor(r);vm.fresh=eligibility?.fresh&&WUICache.freshDismissed!==String(state.currentChatId)?{show:true,title:'새 방 시작 설정',desc:'켜진 캐릭터·OOC를 첫 AI 메시지에 적용합니다.'}:null;for(const [path,value] of Object.entries(WUISettingsDraft()))WUISetPath(vm,path,value);vm.diagnostics=WLOG.list();vm.job=WLOG.view()||vm.job;return vm;}
+const eligibility=sessionSetupEligibilityFor(r);vm.fresh=eligibility?.fresh&&WUICache.freshDismissed!==String(state.currentChatId)?{show:true,title:'새 방 시작 설정',desc:'켜진 기억·자료·인물 정보를 첫 AI 메시지에 적용합니다.'}:null;for(const [path,value] of Object.entries(WUISettingsDraft()))WUISetPath(vm,path,value);vm.diagnostics=WLOG.list();vm.job=WLOG.view()||vm.job;return vm;}
 
 // Shared prompt editor. Defaults are resolved lazily after all engines initialize.
 const WishPromptGuides=(()=>{
@@ -14135,7 +14793,7 @@ function WUIEditor(type,id='',extra={}){
  if(type==='fact'){const f=v.cog.facts.find(x=>x.id===id);ed={type:'cog-fact',factId:id,...extra};d=WUI.openSheet('eFact',{ref:id,isNew:!id,fromReview:extra.reviewId,draft:{label:f?.label||'',type:f?.type||'other',content:f?.content||'',mode:f?.mode||'auto',know:structuredClone(f?.know||{}),con:structuredClone(f?.con||[])}});}
  if(d?.type==='eEntry')d.originalSpeechNote=visibleLorePacksForRoom(r).find(p=>p.scopeId===extra.pack)?.entries.find(e=>e.id===id)?.speechRule?.note||'';if(!d)throw Error('지원하지 않는 편집 종류: '+type);d.wishEditor=ed;return d;
 }
-async function WUISaveEditor(d){if(d.type==='promptGuide')return WishPromptGuides.save(d);if(d.type==='eRelationship')return WishRelationships.save(d);return await WLOG.run("편집 내용 검증·저장 중",async task=>{if(['ePack','eEntry'].includes(d.type)&&d.wishEditor?.packId){const livePack=await getCharacterLibrary(d.wishEditor.packId);if(livePack?.ownerChatId&&String(livePack.ownerChatId)!==String(state.currentRoom?.chatId||''))throw Error('다른 방 소유 자료집은 현재 방에서 수정할 수 없습니다. 독립 사본으로 복사한 뒤 편집해 주세요.');}if(d.wishAdvanced){const x=d.draft,ai=loadAiSettings();saveAiSettings({...ai,apiKey:String(x.semanticGeminiApiKey||'').trim()||ai.apiKey,firebaseLocation:String(x.firebaseLocation||ai.firebaseLocation),firebaseSdkVersion:String(x.firebaseSdkVersion||ai.firebaseSdkVersion)});WUIRefreshSettings();return true;}if(d.wishSpeechParent){const p=WUI.ui.dlg(d.wishSpeechParent);if(!p)throw Error('원래 자료 편집창이 닫혔습니다.');p.draft.full=d.draft.content;return true;}if(d.type==='eEntry'&&d.draft.type==='speech'&&!String(d.draft.full||'').trim()){WUI.openSheet('eSlot',{kind:'extra',wishSpeechParent:d.id,isNew:true,draft:{title:'호칭 자료 상세 내용',content:'',ret:'0'}});notify('호칭 자료의 상세 원문도 입력해 주세요.','warn');return false;}const x=d.draft,ed=d.wishEditor||{},fields={};let action='editor-save';const set=(k,v)=>fields['[data-v2-'+k+']']=v;
+async function WUISaveEditor(d){if(d.editPath&&d.editPath!==location.pathname)throw Error('편집을 시작한 방으로 돌아온 뒤 저장해 주세요.');if(d.type==='promptGuide')return WishPromptGuides.save(d);if(d.type==='eRelationship')return WishRelationships.save(d);return await WLOG.run("편집 내용 검증·저장 중",async task=>{if(['ePack','eEntry'].includes(d.type)&&d.wishEditor?.packId){const livePack=await getCharacterLibrary(d.wishEditor.packId);if(livePack?.ownerChatId&&String(livePack.ownerChatId)!==String(state.currentRoom?.chatId||''))throw Error('다른 방 소유 자료집은 현재 방에서 수정할 수 없습니다. 독립 사본으로 복사한 뒤 편집해 주세요.');}if(d.wishAdvanced){const x=d.draft,ai=loadAiSettings();saveAiSettings({...ai,apiKey:String(x.semanticGeminiApiKey||'').trim()||ai.apiKey,firebaseLocation:String(x.firebaseLocation||ai.firebaseLocation),firebaseSdkVersion:String(x.firebaseSdkVersion||ai.firebaseSdkVersion)});WUIRefreshSettings();return true;}if(d.wishSpeechParent){const p=WUI.ui.dlg(d.wishSpeechParent);if(!p)throw Error('원래 자료 편집창이 닫혔습니다.');p.draft.full=d.draft.content;return true;}if(d.type==='eEntry'&&d.draft.type==='speech'&&!String(d.draft.full||'').trim()){WUI.openSheet('eSlot',{kind:'extra',wishSpeechParent:d.id,isNew:true,draft:{title:'호칭 자료 상세 내용',content:'',ret:'0'}});notify('호칭 자료의 상세 원문도 입력해 주세요.','warn');return false;}const x=d.draft,ed=d.wishEditor||{},fields={};let action='editor-save';const set=(k,v)=>fields['[data-v2-'+k+']']=v;
  if(d.type==='guide'){set('ed-body',x.text);}
  else if(d.type==='eSlot'){set('ed-title',x.title);set('ed-body',x.content);set('ed-alias',x.aliases);}
  else if(d.type==='eState'){set('ed-title',x.title);set('ed-body',x.body);}
@@ -14199,7 +14857,7 @@ Object.assign(WUI_ADAPTER.act,{
  logPick:()=>openLogRecallManagerDialog(state.currentRoom),lrApply:async id=>{const d=WUI.ui.dlg(id),r=d.wishRoom;for(const [field,key] of [['manualLogSelectedKeys','man'],['autoLogPinnedKeys','pin'],['autoLogExcludedKeys','ex']])r[field]=d.blocks.filter(b=>d.draft.lr[String(b.index)]?.[key]).map(b=>b.key);await saveRoom(r);WUIResolve(id,true);},
  logNorm:()=>WUIInvoke('log-normalize'),dnApply:id=>WUIDateApply(WUI.ui.dlg(id)),logDedupe:()=>WUIInvoke('log-dedupe'),ddApply:id=>WUIDedupeApply(WUI.ui.dlg(id)),
  presets:()=>openDefaultExtraPresetDialog(state.currentRoom),psLoad:id=>{const d=WUI.ui.dlg(id);if(d.draft.list.length&&!confirm('현재 방 기타 항목으로 편집 중인 프리셋을 교체할까요?'))return;d.draft.list=state.currentRoom.slots.filter(s=>s.group==='extra').map(s=>({id:makeDefaultExtraPresetId(),title:s.title,content:s.content,enabled:s.enabled,ret:String(s.retentionTurns)}));},psSave:id=>WUIPresetsSave(WUI.ui.dlg(id),false),psSaveApply:id=>WUIPresetsSave(WUI.ui.dlg(id),true),
- aiSave:id=>{const d=WUI.ui.dlg(id);saveAiSettings(WUIAIConfig(d));WUIRefreshSettings();WUI.closeSheet(d);notify('AI/API 설정을 저장했습니다.','success');},aiTest:async id=>{const d=WUI.ui.dlg(id);d.draft.test='busy';WUI.paint();try{const cfg=WUIAIConfig(d);if(!isAiProviderReady(cfg))throw Error('인증 정보를 입력해 주세요.');const result=await callAiProvider(cfg,'연결 테스트입니다. 다른 설명 없이 OK 두 글자만 출력하십시오.','OK라고 답하십시오.',{maxOutputTokens:512,operationLabel:'AI 연결 테스트'});d.draft.test='ok';d.draft.testMsg=getAiSelectedModel(cfg)+' · '+cleanAiGeneratedText(result.text).slice(0,50);}catch(e){d.draft.test='err';d.draft.testMsg=e.message;}},aiClear:id=>{const d=WUI.ui.dlg(id),p=normalizeAiProvider(d.draft.provider);if(!confirm(getAiProviderLabel(p)+'의 저장된 인증 정보를 삭제할까요?'))return;const next={...loadAiSettings()};next[p==='deepseek'?'deepSeekApiKey':p==='firebase'?'firebaseConfig':'apiKey']='';saveAiSettings(next);WUIRefreshSettings();WUI.closeSheet(d);},
+ aiSave:id=>{const d=WUI.ui.dlg(id);saveAiSettings(WUIAIConfig(d));WUIRefreshSettings();WUI.closeSheet(d);notify('AI/API 설정을 저장했습니다.','success');},aiTest:async id=>{const d=WUI.ui.dlg(id);d.draft.test='busy';WUI.paint();try{const cfg=WUIAIConfig(d);if(!isAiProviderReady(cfg))throw Error('인증 정보를 입력해 주세요.');const result=await callAiProvider(cfg,'연결 테스트입니다. 다른 설명 없이 OK 두 글자만 출력하십시오.','OK라고 답하십시오.',{taskKind:'test',maxOutputTokens:512,operationLabel:'AI 연결 테스트'});d.draft.test='ok';d.draft.testMsg=getAiSelectedModel(cfg)+' · '+cleanAiGeneratedText(result.text).slice(0,50);}catch(e){d.draft.test='err';d.draft.testMsg=e.message;}},aiClear:id=>{const d=WUI.ui.dlg(id),p=normalizeAiProvider(d.draft.provider);if(!confirm(getAiProviderLabel(p)+'의 저장된 인증 정보를 삭제할까요?'))return;const next={...loadAiSettings()};next[p==='deepseek'?'deepSeekApiKey':p==='firebase'?'firebaseConfig':'apiKey']='';saveAiSettings(next);WUIRefreshSettings();WUI.closeSheet(d);},
  
  
  
