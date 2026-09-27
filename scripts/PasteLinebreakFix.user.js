@@ -2,8 +2,8 @@
 // @name         🧷 Edit Paste Linebreak Fix (수정창 줄바꿈 보존)
 // @namespace    crack-edit-paste-linebreak-fix
 // @version      0.2.0
-// @downloadURL  https://gist.github.com/chyoyam-alt/ef141cc873845eac8005dbfc27ae6653/raw/PasteLinebreakFix.user.js
-// @updateURL    https://gist.github.com/chyoyam-alt/ef141cc873845eac8005dbfc27ae6653/raw/PasteLinebreakFix.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/PasteLinebreakFix.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/PasteLinebreakFix.user.js
 // @description  Crack의 Tiptap/ProseMirror 수정창에서 전문 붙여넣기 시 원본 줄바꿈 수를 그대로 보존합니다.
 // @match        https://crack.wrtn.ai/*
 // @run-at       document-start

@@ -4,8 +4,8 @@
 // @version      1.2.3
 // @description  채팅방 목록을 프로필 링 색상·통합 검색·한눈에 보기(PC·모바일)·스마트 자동 정리로 정돈합니다.
 // @match        *://crack.wrtn.ai/*
-// @downloadURL  https://gist.github.com/chyoyam-alt/4a9b682d5f64cd0e9ca76f5f5a85f6c5/raw/ChatListTuner.user.js
-// @updateURL    https://gist.github.com/chyoyam-alt/4a9b682d5f64cd0e9ca76f5f5a85f6c5/raw/ChatListTuner.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/ChatListTuner.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/ChatListTuner.user.js
 // @grant        none
 // @run-at       document-start
 // ==/UserScript==

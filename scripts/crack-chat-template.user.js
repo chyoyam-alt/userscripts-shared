@@ -2,6 +2,8 @@
 // @name         📜 Crack Chat Template Manager (채팅 템플릿 매니저)
 // @namespace    crack-chat-template
 // @version      2.3.8
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/crack-chat-template.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/crack-chat-template.user.js
 // @description  대사 / OOC 템플릿 + 퀵버튼 (순정 버튼 class 보존 + 가벼운 감지)
 // @author       Gemini & User
 // @match        https://crack.wrtn.ai/stories/*

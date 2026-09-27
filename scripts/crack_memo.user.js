@@ -2,6 +2,8 @@
 // @name         📝 크랙(crack) 자동저장 메모장
 // @namespace    http://tampermonkey.net/
 // @version      1.3.2
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/crack_memo.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/crack_memo.user.js
 // @description  크랙 채팅방마다 개별적으로 저장되는 메모장 - 전송 버튼 옆 미니 버튼형
 // @author       Gemini + ChatGPT
 // @match        https://crack.wrtn.ai/*

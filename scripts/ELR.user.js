@@ -4,8 +4,8 @@
 // @version      1.6.1
 // @description  에리 로어 설치 여부와 무관하게 마지막 USER 원문을 다시 보냅니다. 에리가 있으면 이번 전송만 에리 처리에서 제외하고, 호환 Wish에는 같은 턴 재전송 신호를 전달합니다.
 // @author       ChatGPT
-// @downloadURL  https://gist.github.com/chyoyam-alt/15d02dc45fe3ea2fd5396f774ca42a04/raw/ELR.user.js
-// @updateURL    https://gist.github.com/chyoyam-alt/15d02dc45fe3ea2fd5396f774ca42a04/raw/ELR.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/ELR.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/ELR.user.js
 // @match        https://crack.wrtn.ai/stories/*/episodes/*
 // @match        https://crack.wrtn.ai/characters/*/chats/*
 // @match        https://crack.wrtn.ai/u/*/c/*

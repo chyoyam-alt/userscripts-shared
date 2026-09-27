@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         💗 Crack Likes Library (좋아요 보관함)
 // @namespace    crack-likes-library
-// @downloadURL  https://gist.github.com/chyoyam-alt/7e0f818e9e5d3bf2950d2d1c279b1891/raw/likes-library.user.js
-// @updateURL    https://gist.github.com/chyoyam-alt/7e0f818e9e5d3bf2950d2d1c279b1891/raw/likes-library.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/likes-library.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/likes-library.user.js
 // @version      1.0.1
 // @description  스토리·캐릭터 좋아요를 통합해 검색·정렬·폴더 관리하고, 스토리 기본 정보 팝업과 좋아요 취소를 지원합니다.
 // @author       뤼붕이

@@ -1,15 +1,15 @@
 # 공유 확장 프로그램 보관소
 
 
-갤러리에 공유한 확장 프로그램 35개의 현재 Gist 파일을 보관합니다. 저장소는 공개입니다. 아래 보관 파일명을 누르면 raw 파일을 직접 받을 수 있습니다.
+갤러리에 공유한 확장 프로그램 35개의 설치 파일을 배포합니다. 저장소는 공개입니다. 아래 파일명을 누르면 Tampermonkey 설치 화면이 열립니다.
 
 
-- `scripts/*.user.js`: 공유된 설치 파일의 복사본
-- `scripts/GISTS.tsv`: 원본 Gist와 파일명
-- `scripts/GIST_REVISIONS.tsv`: 복사할 때의 원본 리비전
+- `scripts/*.user.js`: 설치 파일(배포 원본)
+- `scripts/GISTS.tsv`: 예전 Gist와 파일명(기록용)
+- `scripts/GIST_REVISIONS.tsv`: 예전 Gist 리비전(기록용)
 
 
-설치와 자동 업데이트는 게시글의 원래 Gist 링크를 사용합니다. 이 저장소는 보관용 복사본이며 Gist 변경이 자동으로 반영되지는 않습니다. 배포 내역은 실제 배포된 상태를 기준으로 별도 관리합니다.
+설치와 자동 업데이트는 이 저장소의 `main` 브랜치 raw 파일을 사용합니다. 각 스크립트의 `@downloadURL`/`@updateURL`이 이 저장소를 가리키므로, 여기 올라간 새 버전이 설치된 확프에 자동으로 반영됩니다. Gist는 더 이상 사용하지 않습니다(`GISTS.tsv`, `GIST_REVISIONS.tsv`는 이전 기록용).
 
 
 ## 공유 게시글

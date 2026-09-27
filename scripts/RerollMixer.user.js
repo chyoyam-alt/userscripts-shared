@@ -2,6 +2,8 @@
 // @name         Crack Reroll Mixer (크랙 리롤 믹서) 🧩
 // @namespace    http://tampermonkey.net/
 // @version      2.3.0
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/RerollMixer.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/RerollMixer.user.js
 // @description  카드형 리롤 편집과 필요할 때만 펼치는 AI 자연 혼합 도구를 제공합니다.
 // @author       Assistant
 // @match        https://crack.wrtn.ai/stories/*/episodes/*

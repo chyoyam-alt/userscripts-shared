@@ -3,8 +3,8 @@
 // @namespace    crack chat trash
 // @version      1.0.4
 // @description  크랙 채팅방별 삭제 본문 휴지통. 리롤/숨김 답변은 messages 목록 캐시로 본문 복구.
-// @downloadURL  https://gist.github.com/chyoyam-alt/aaf84327b4b4e8840b68c4c2846ebd29/raw/chattrash.user.js
-// @updateURL    https://gist.github.com/chyoyam-alt/aaf84327b4b4e8840b68c4c2846ebd29/raw/chattrash.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/chattrash.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/chattrash.user.js
 // @match        https://crack.wrtn.ai/*
 // @match        https://*.crack.wrtn.ai/*
 // @run-at       document-start

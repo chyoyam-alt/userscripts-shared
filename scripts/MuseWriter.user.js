@@ -2,6 +2,8 @@
 // @name         ✨ Crack Muse Writer (AI 답변 커스텀)
 // @namespace    muse writer
 // @version      5.3.5
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/MuseWriter.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/MuseWriter.user.js
 // @description  Crack 캐릭터챗 입력을 맥락·프로필·참고자료·서사 나침반에 맞춰 다듬고, 단기·장기 기억과 최신 에리 로어를 읽기 전용으로 참고하는 AI 집필 보조 도구
 // @match        https://crack.wrtn.ai/*
 // @grant        GM_addStyle

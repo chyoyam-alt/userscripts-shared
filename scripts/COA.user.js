@@ -4,8 +4,8 @@
 // @version      5.8.6
 // @description  크랙 OOC·로그 저장, 메시지 범위 저장, 검색, 즐겨찾기, 백업과 HTML·PNG·DC 내보내기를 위한 아카이브
 // @author       Crack Archive
-// @downloadURL  https://gist.github.com/chyoyam-alt/4ae1c7902ab15f5fce867bbf8b8ecae3/raw/COA.user.js
-// @updateURL    https://gist.github.com/chyoyam-alt/4ae1c7902ab15f5fce867bbf8b8ecae3/raw/COA.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/COA.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/COA.user.js
 // @match        https://crack.wrtn.ai/*
 // @match        https://crack.wrtn.ai/
 // @grant        GM_setValue

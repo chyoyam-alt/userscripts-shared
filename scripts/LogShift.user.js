@@ -2,8 +2,8 @@
 // @name         🔁 LogShift (로그 일괄 편집기)
 // @namespace    crack.logshift
 // @version      1.0.3
-// @downloadURL  https://gist.github.com/chyoyam-alt/173783fbe395a65ec40dffeef73cfcb3/raw/LogShift.user.js
-// @updateURL    https://gist.github.com/chyoyam-alt/173783fbe395a65ec40dffeef73cfcb3/raw/LogShift.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/LogShift.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/LogShift.user.js
 // @description  크랙 채팅 로그의 문자열 일괄 치환/삭제 + HUD 턴 번호 구간 재번호 도구. 전체 로그 API 조회, 후보 제외, 시작/끝 앵커, 마지막 턴 계산, 백업/되돌리기를 지원합니다.
 // @match        https://crack.wrtn.ai/*
 // @grant        GM_getValue

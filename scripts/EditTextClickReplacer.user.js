@@ -6,8 +6,8 @@
 // @match        https://crack.wrtn.ai/*
 // @run-at       document-idle
 // @grant        none
-// @downloadURL  https://gist.github.com/chyoyam-alt/7dc388369fb4bb7033501ac307070fee/raw/EditTextClickReplacer.user.js
-// @updateURL    https://gist.github.com/chyoyam-alt/7dc388369fb4bb7033501ac307070fee/raw/EditTextClickReplacer.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/EditTextClickReplacer.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/EditTextClickReplacer.user.js
 // ==/UserScript==
 
 (function () {

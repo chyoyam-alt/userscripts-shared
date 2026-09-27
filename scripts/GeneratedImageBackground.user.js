@@ -7,8 +7,8 @@
 // @require      https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js
 // @run-at       document-idle
 // @grant        none
-// @downloadURL  https://gist.github.com/chyoyam-alt/4391ea2abe3340aa838c832ffb27fe58/raw/GeneratedImageBackground.user.js
-// @updateURL    https://gist.github.com/chyoyam-alt/4391ea2abe3340aa838c832ffb27fe58/raw/GeneratedImageBackground.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/GeneratedImageBackground.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/GeneratedImageBackground.user.js
 // ==/UserScript==
 
 // UI 디자인 참고 출처 (Design reference / credit):

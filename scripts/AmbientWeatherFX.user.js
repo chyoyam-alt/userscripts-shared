@@ -3,8 +3,8 @@
 // @namespace    crack-ambient-weather-fx
 // @version      2.6.7
 // @description  Crack 채팅방에 시간대 배경·화면 효과·키워드 자동 전환·사운드를 추가합니다.
-// @downloadURL  https://gist.github.com/chyoyam-alt/e68afc01c22bc0e734b586244086714c/raw/AmbientWeatherFX.user.js
-// @updateURL    https://gist.github.com/chyoyam-alt/e68afc01c22bc0e734b586244086714c/raw/AmbientWeatherFX.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/AmbientWeatherFX.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/AmbientWeatherFX.user.js
 // @match        https://crack.wrtn.ai/*
 // @run-at       document-idle
 // @grant        GM_xmlhttpRequest

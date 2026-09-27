@@ -2,8 +2,8 @@
 // @name         ↗️ Crack Composer Expander (채팅창 펼치기)
 // @namespace    crack-composer-resizer
 // @version      1.5.0
-// @downloadURL  https://gist.github.com/chyoyam-alt/4965cf5e74f2931d26519a93daa5c30a/raw/ComposerExpander.user.js
-// @updateURL    https://gist.github.com/chyoyam-alt/4965cf5e74f2931d26519a93daa5c30a/raw/ComposerExpander.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/ComposerExpander.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/ComposerExpander.user.js
 // @description  PC 크랙 채팅 입력창에 내용이 넘칠 때 ↗ 전체 펼치기와 ↙ 원래 크기 복원을 제공하며 라디오존데 v3.9.7과 즉시 동기화됩니다.
 // @match        *://crack.wrtn.ai/*
 // @run-at       document-idle

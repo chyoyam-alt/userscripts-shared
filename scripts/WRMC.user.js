@@ -2,6 +2,8 @@
 // @name         🪽 Wish RP Manager Core
 // @namespace    local.rp.context.manager
 // @version      1.3.0
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @description  Crack RP용 컨텍스트 주입·인지·자동 장기기억·자료집·전체 재구축을 하나로 관리합니다.
 // @author       User
 // @license      All Rights Reserved

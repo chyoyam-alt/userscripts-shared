@@ -3,8 +3,8 @@
 // @namespace    https://crack.wrtn.ai/
 // @version      1.1.2
 // @description  답변 길이/생각 조절 창에 표시할 모델을 고르고, 새 모델은 자동으로 감지해 표시합니다.
-// @downloadURL  https://gist.github.com/chyoyam-alt/d1268f9a1c73ab876e5c398d7aab018b/raw/OutputModelFilter.user.js
-// @updateURL    https://gist.github.com/chyoyam-alt/d1268f9a1c73ab876e5c398d7aab018b/raw/OutputModelFilter.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/OutputModelFilter.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/OutputModelFilter.user.js
 // @match        https://crack.wrtn.ai/*
 // @grant        GM_getValue
 // @grant        GM_setValue

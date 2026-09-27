@@ -6,8 +6,8 @@
 // @match        https://crack.wrtn.ai/*
 // @run-at       document-idle
 // @grant        none
-// @downloadURL  https://gist.github.com/chyoyam-alt/ec8db5ac1369e738dfbe7c7fc450abdc/raw/ImageBackground.user.js
-// @updateURL    https://gist.github.com/chyoyam-alt/ec8db5ac1369e738dfbe7c7fc450abdc/raw/ImageBackground.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/ImageBackground.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/ImageBackground.user.js
 // ==/UserScript==
 
 // UI 디자인 참고 출처 (Design reference / credit):

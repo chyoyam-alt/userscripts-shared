@@ -2,6 +2,8 @@
 // @name         🎨 Crack Scene Painter (크랙 장면 삽화)
 // @namespace    crack-scene-painter
 // @version      5.2.5
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/CSP.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/CSP.user.js
 // @description  크랙 AI 삽화 + 만화 콘티. 번개 오른쪽 말풍선에서 컷 분할·전용 지침·NAI V5 만화 생성.
 // @match        https://crack.wrtn.ai/*
 // @grant        GM_xmlhttpRequest

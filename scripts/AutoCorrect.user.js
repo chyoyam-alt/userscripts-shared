@@ -4,8 +4,8 @@
 // @version      0.6.1
 // @description  크랙 채팅 입력창용 로컬 한국어 QWERTY 오타·맞춤법·안전 띄어쓰기 자동 교정
 // @author       뤼붕이
-// @downloadURL  https://gist.github.com/chyoyam-alt/01231d2eda953bc3ab9847c42fb1a75d/raw/AutoCorrect.user.js
-// @updateURL    https://gist.github.com/chyoyam-alt/01231d2eda953bc3ab9847c42fb1a75d/raw/AutoCorrect.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/AutoCorrect.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/AutoCorrect.user.js
 // @match        https://crack.wrtn.ai/stories/*/episodes/*
 // @run-at       document-idle
 // @grant        GM_getValue

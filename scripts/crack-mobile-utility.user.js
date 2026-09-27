@@ -4,8 +4,8 @@
 // @version      4.5.5
 // @description  코드블록 자동 줄바꿈, 라이트 테마 코드·보조 글자 대비 수정, 테마 판별 통일, DOM·캐시·라디오존데 반복 처리 최적화. 모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       Assistant
-// @downloadURL  https://gist.github.com/chyoyam-alt/3220e9cc6089c9108117a277d97257f7/raw/crack-mobile-utility.user.js
-// @updateURL    https://gist.github.com/chyoyam-alt/3220e9cc6089c9108117a277d97257f7/raw/crack-mobile-utility.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/crack-mobile-utility.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/crack-mobile-utility.user.js
 // @match        *://crack.wrtn.ai/*
 // @run-at       document-idle
 // @grant        GM_addStyle

@@ -2,8 +2,8 @@
 // @name         🧭 Crack AI Chat Radar (최근 대화 분석·제목 추천)
 // @namespace    crack ai chat radar
 // @version      0.4.3
-// @downloadURL  https://gist.github.com/chyoyam-alt/a49d437d7d0e12df1cd17c507c78992e/raw/AIChatRadar.user.js
-// @updateURL    https://gist.github.com/chyoyam-alt/a49d437d7d0e12df1cd17c507c78992e/raw/AIChatRadar.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/AIChatRadar.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/AIChatRadar.user.js
 // @description  최근 로그 2개를 AI로 분석하고, 입력·출력 토큰과 예상 비용을 기록하며, 확인한 채팅방에만 추천 제목을 붙입니다.
 // @match        *://crack.wrtn.ai/*
 // @run-at       document-start

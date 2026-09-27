@@ -3,8 +3,8 @@
 // @namespace    crack-answer-cost
 // @version      1.0.0
 // @description  설치 후 실제로 측정된 크래커 차감량만 답변별로 표시합니다. 리롤 전환은 messageId 기준으로 따라가며, 답변 삭제 시 해당 표시 기록도 함께 삭제합니다.
-// @downloadURL  https://gist.github.com/chyoyam-alt/7a3cfea04d68525f1cdc6ccfe00e5665/raw/AnswerCost.user.js
-// @updateURL    https://gist.github.com/chyoyam-alt/7a3cfea04d68525f1cdc6ccfe00e5665/raw/AnswerCost.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/AnswerCost.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/AnswerCost.user.js
 // @match        *://crack.wrtn.ai/stories/*/episodes/*
 // @grant        unsafeWindow
 // @run-at       document-start
