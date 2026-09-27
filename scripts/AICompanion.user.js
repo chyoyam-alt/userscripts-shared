@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🧭 Crack AI Companion (크랙 AI 도우미)
 // @namespace    https://crack.wrtn.ai/
-// @version      1.2.2
+// @version      1.3.0
 // @description  Crack RP 로그를 ChatGPT로 보내고 찐빠 검사·질문·장기기억·유저노트·로어·커스텀 작업을 작업별 대화와 증분 전달로 관리합니다.
 // @match        https://crack.wrtn.ai/*
 // @match        https://chatgpt.com/*
@@ -30,7 +30,7 @@
 // @grant        unsafeWindow
 // @grant        window.focus
 // @grant        window.onurlchange
-// @run-at       document-start
+// @run-at       document-idle
 // @inject-into  content
 // @noframes
 // @license      MIT
@@ -40,7 +40,7 @@
     'use strict';
 
     /*
-     * Crack AI Companion v1.2.2
+     * Crack AI Companion v1.3.0
      * - Job-first transport with durable task conversations and verified submit/result handling.
      * - PC Chrome/iOS/Android delivery behavior is preserved from the proven pre-release build.
      * - Firefox TXT attachment runs inside a page-side runner on both desktop and Android to avoid userscript/page realm boundaries.
@@ -52,11 +52,17 @@
 
     const APP = Object.freeze({
         id: 'cgc',
-        version: '1.2.2',
+        version: '1.3.0',
         protocol: 'crack-gpt-companion/v4.2.0-durable-web-delivery',
         name: 'Crack AI Companion',
     });
 
+    // v1.3.0: every task uses a TXT attachment, regardless of length; reject non-TXT delivery before editor access.
+    // v1.2.7: never innerText a giant composer; show a heavy-composer badge; ignore editor mutations in completion watches.
+    // v1.2.6: resume late host readiness; validate before side effects; never clear/rewrite a failed editor insertion.
+    // v1.2.5: defer injection until document-idle; prohibit raw TXT-body paste and cap direct composer writes.
+    // v1.2.4: no GPT DOM/storage/worker initialization before the host composer is ready; bounded startup diagnostics.
+    // v1.2.3: native TXT-only desktop upload, current composer DOM, fragment-only handoff.
     // v1.2.2: acknowledge bootstrap before payload hydration; query handoff fallback and fresh Safari lore receipts.
     // v1.2.0: maintenance pass — less idle polling/replay work; delivery/title/result semantics stay unchanged.
     // v1.1.14: rename on verified conversation discovery; title work never waits for result/UI delivery.
@@ -77,8 +83,11 @@
     };
 
     const PROMPT_REVISION = 20;
-    const BRIDGE_REVISION = 35; // Completion-beacon monitoring and routing/reset safety require the same bridge on both pages.
-    const TXT_ATTACHMENT_THRESHOLD = 18000; // 긴 자료는 한 번에 TXT 첨부로 전달한다.
+    const BRIDGE_REVISION = 42; // Completion-beacon monitoring and routing/reset safety require the same bridge on both pages.
+    const MAX_INLINE_COMPOSER_CHARS = 18256; // Safety cap for the short file instruction and job marker, never a TXT routing threshold.
+    // v1.2.7: 이보다 큰 GPT 입력창은 innerText(전체 레이아웃 강제)로 읽지 않고, 대용량 잔존 내용으로 판단한다.
+    const CGC_COMPOSER_HEAVY_CHARS = 60000;
+    const CGC_COMPOSER_HEAVY_BLOCKS = 1500;
     const GM_PAYLOAD_CHUNK_CHARS = 180000; // 거대 로그는 GPT 메시지가 아니라 GM 내부 운반만 작은 조각으로 저장한다.
     const TRANSMISSION_PREVIEW_CHARS = 1600; // 영구 상태에 수십만 자 원문을 중복 보관하지 않는다.
 
@@ -312,6 +321,66 @@
         } catch { return ''; }
     }
     const CGC_EARLY_JOB_MARKER=cgcJobMarkerFromUrl(location.href);
+    const CGC_EARLY_SURFACE_MARKER=(()=>{try{const url=new URL(location.href);return new URLSearchParams(url.hash.slice(1)).get('cgc-surface')||url.searchParams.get('cgc_surface')||'';}catch{return '';}})();
+
+    // Capture handoff strings immediately on script entry, but leave the host's DOM and GM store alone.
+    // A normal GPT visit must be able to finish mounting before any companion worker starts.
+    const CgcStartup={
+        started:Date.now(),events:[],active:false,reads:0,lastRead:'',lastReadAt:0,
+        mark(phase,extra={}){
+            if(!isChatGPT)return;
+            const event={phase,ms:Date.now()-this.started,...extra};
+            this.events.push(event);if(this.events.length>16)this.events.shift();
+            // Bounded stage history remains available in sessionStorage for support.
+            try{sessionStorage.setItem('CGC_STARTUP_DIAGNOSTIC_V1',JSON.stringify({version:APP.version,events:this.events,reads:this.reads,lastRead:this.lastRead,lastReadAt:this.lastReadAt}));}catch{}
+        },
+        beforeRead(key){
+            if(!isChatGPT||!this.active)return;
+            this.reads++;this.lastRead=String(key).replace(/(?:request|job)-[a-z0-9-]+/ig,'job');this.lastReadAt=Date.now()-this.started;
+            // Only the current key and counters are recorded, never values, RP text or tokens.
+            try{sessionStorage.setItem('CGC_STARTUP_DIAGNOSTIC_V1',JSON.stringify({version:APP.version,events:this.events,reads:this.reads,lastRead:this.lastRead,lastReadAt:this.lastReadAt}));}catch{}
+        },
+        async waitUntilHostReady(){
+            if(await this.waitForHostReady())return true;
+            this.mark('host-deferred');
+            // A slow first load is not a failed job. Keep one low-frequency, read-only
+            // readiness check; no GM reads, payload hydration, DOM insertion or reload.
+            return new Promise(resolve=>{
+                let timer=0,settled=false,previous=null,stableSince=0;
+                const finish=value=>{
+                    if(settled)return;settled=true;clearTimeout(timer);
+                    window.removeEventListener('pagehide',onHide);
+                    window.removeEventListener('pageshow',onShow);resolve(value);
+                };
+                const check=()=>{
+                    timer=0;if(settled)return;
+                    const editor=document.readyState==='complete'?ChatGPTBridge.findComposer():null;
+                    const ready=Boolean(editor&&editor.isConnected&&editor.getAttribute('aria-disabled')!=='true');
+                    if(ready&&editor===previous&&Date.now()-stableSince>=1200){this.mark('host-ready-late');finish(true);return;}
+                    if(!ready||editor!==previous){previous=ready?editor:null;stableSince=Date.now();}
+                    timer=setTimeout(check,2000);
+                };
+                const onHide=event=>{clearTimeout(timer);timer=0;if(!event.persisted)finish(false);};
+                const onShow=()=>{if(!settled&&!timer){previous=null;stableSince=0;timer=setTimeout(check,0);}};
+                window.addEventListener('pagehide',onHide);window.addEventListener('pageshow',onShow);
+                timer=setTimeout(check,2000);
+            });
+        },
+        async waitForHostReady(timeout=90000){
+            this.mark('wait-host');
+            const started=Date.now();let stableSince=0,previous=null;
+            while(Date.now()-started<timeout){
+                // No body insertion, GM storage, styles, network requests or page-wide observers here.
+                const editor=document.readyState==='complete'?ChatGPTBridge.findComposer():null;
+                const ready=Boolean(editor&&editor.isConnected&&editor.getAttribute('aria-disabled')!=='true');
+                if(ready&&editor===previous){
+                    if(Date.now()-stableSince>=1200){this.mark('host-ready');return true;}
+                }else{stableSince=Date.now();previous=ready?editor:null;}
+                await sleep(300);
+            }
+            this.mark('host-not-ready');return false;
+        },
+    };
 
     function modernGM() {
         try { return typeof GM === 'object' && GM ? GM : null; }
@@ -363,6 +432,7 @@
     function readValue(key, fallback) {
         if (CGC_ASYNC_GM_STORAGE) return CGC_ASYNC_CACHE.has(key) && CGC_ASYNC_CACHE.get(key) != null ? CGC_ASYNC_CACHE.get(key) : fallback;
         try {
+            CgcStartup.beforeRead(key);
             const value = GM_getValue(key, fallback);
             return value == null ? fallback : value;
         } catch (error) {
@@ -487,7 +557,7 @@
                 const failed=await hydrateAsyncStorageKeys([jobStorageKey(jobId),KEY.state,WebDelivery.key(jobId),KEY.submitted],3500);
                 if(failed.length)throw new Error('GPT 작업 확인용 저장소를 읽지 못했어요. 페이지를 새로고침해 주세요.');
                 const job=readJob(jobId),receipt=readValue(WebDelivery.key(jobId),null);
-                if(validV3Job(job)&&!jobInvalidatedByReset(job)&&!['submitting','submitted','result'].includes(receipt?.phase)&&!ChatGPTBridge.findSubmittedAck(jobId)){
+                if(validV3Job(job)&&!jobInvalidatedByReset(job)&&!['submitting','uncertain','submitted','result','cancelled'].includes(receipt?.phase)&&!ChatGPTBridge.findSubmittedAck(jobId)){
                     ChatGPTBridge.instanceId=ChatGPTBridge.instanceId||uid('gpt-doc');
                     ChatGPTBridge.reportProgress(job,'bootstrap','GPT 작업 확인 · 초기화 중');
                     await flushStorageWrites();
@@ -2129,8 +2199,10 @@
         );
     }
 
-    function jobInvalidatedByReset(job,state=getState()) {
+    function jobInvalidatedByReset(job,state=undefined) {
         if(!job?.id||!job?.sessionKey||!job?.createdAt)return false;
+        // v1.2.7: 판정에는 초기화 시각 두 개만 필요하다. 전체 상태를 매번 두 번 깊은 복제하지 않고 읽기만 한다.
+        if(state===undefined){const raw=readValue(KEY.state,null);state=raw&&typeof raw==='object'&&raw.schema===1?raw:null;}
         const session=state?.sessions?.[job.sessionKey];if(!session)return false;
         const slotId=conversationSlotOf(job),slot=session?.conversations?.[slotId];
         const currentSessionReset=Number(session?.resetAt||0),currentSlotReset=Number(slot?.resetAt||0);
@@ -2206,30 +2278,25 @@
     }
 
     function makeJobUrl(url, jobId, forceReload=false) {
-        try {
-            const parsed = new URL(canonicalChatGptUrl(url) || CHATGPT_HOME);
-            // A reused popup may already be sitting on the exact same /c/... path. Hash-only navigation
-            // would not reload the userscript, so an old bridge could remain alive after an extension update.
-            // A one-shot query nonce forces a real document navigation; captureJobMarker removes it immediately.
-            if(forceReload)parsed.searchParams.set('cgc_boot',`${BRIDGE_REVISION}-${Date.now().toString(36)}-${String(jobId).slice(-8)}`);
+        const parsed=new URL(canonicalChatGptUrl(url)||CHATGPT_HOME);
+        // Newly reserved surfaces already navigate. Live surfaces use the GM dispatch ACK.
+        // Transport metadata must not change the server/SPA query during hydration.
+        if(CGC_PLATFORM.iOS||CGC_PLATFORM.android){
+            // Preserve mobile managers' query fallback if they drop URL fragments at startup.
             parsed.searchParams.set('cgc_job',jobId);
-            parsed.hash = `cgc-job=${encodeURIComponent(jobId)}`;
-            return parsed.href;
-        } catch {
-            return `${CHATGPT_HOME}?cgc_boot=${BRIDGE_REVISION}-${Date.now().toString(36)}&cgc_job=${encodeURIComponent(jobId)}#cgc-job=${encodeURIComponent(jobId)}`;
+            if(forceReload)parsed.searchParams.set('cgc_boot',BRIDGE_REVISION+'-'+Date.now().toString(36));
         }
+        parsed.hash=new URLSearchParams({'cgc-job':jobId}).toString();
+        return parsed.href;
     }
 
     function withSurfaceMarker(url, mode='popup') {
-        const surface=normalizeOpenMode(mode,'popup');
-        try{
-            const parsed=new URL(url||CHATGPT_HOME,CHATGPT_HOME);
-            parsed.searchParams.set('cgc_surface',surface);
-            return parsed.href;
-        }catch{
-            const join=String(url||CHATGPT_HOME).includes('?')?'&':'?';
-            return `${url||CHATGPT_HOME}${join}cgc_surface=${encodeURIComponent(surface)}`;
-        }
+        const parsed=new URL(url||CHATGPT_HOME,CHATGPT_HOME);
+        if(CGC_PLATFORM.iOS||CGC_PLATFORM.android){parsed.searchParams.set('cgc_surface',normalizeOpenMode(mode,'popup'));return parsed.href;}
+        const hash=new URLSearchParams(parsed.hash.slice(1));
+        hash.set('cgc-surface',normalizeOpenMode(mode,'popup'));
+        parsed.hash=hash.toString();
+        return parsed.href;
     }
 
     const ChatGptPopup = {
@@ -2599,6 +2666,7 @@
             if(!url)return '';
             const parsed=new URL(url,`${CHATGPT_ORIGIN}/`);
             if(parsed.origin!==CHATGPT_ORIGIN||parsed.username||parsed.password)return '';
+            for(const key of ['cgc_job','cgc_boot','cgc_surface'])parsed.searchParams.delete(key);
             if(stripHash)parsed.hash='';
             return parsed.href;
         }catch{return '';}
@@ -3006,7 +3074,7 @@
     }
 
     async function pruneExpiredTransportKeys() {
-        if(transportGcRunning||!cgcStorageReady||document.visibilityState==='hidden')return 0;
+        if(transportGcRunning||CgcTroubleshooting.snapshotting||!cgcStorageReady||document.visibilityState==='hidden')return 0;
         transportGcRunning=true;
         let removed=0;
         try{
@@ -3105,6 +3173,67 @@
             return removed;
         }finally{transportGcRunning=false;}
     }
+
+    const CgcTroubleshooting={
+        busy:false,snapshotting:false,
+        html(){return `<p class="pane-s">증상에 맞는 항목을 펼쳐 확인하세요. 이 화면을 열기만 해서는 데이터를 지우지 않습니다.</p>
+<details class="more" open><summary>Q. GPT가 로고에서 멈추거나, 다른 프로필에서만 잘 열려요.</summary>
+<p class="settings-help">A. 해당 프로필에 남은 ChatGPT 사이트 상태가 원인일 수 있어요. 다른 확장이나 네트워크 문제도 가능하므로, 데이터 용량만으로 원인을 단정하지 않습니다.</p>
+<ol class="settings-help"><li>도우미를 잠시 끄고, 해당 프로필의 GPT 탭과 팝업을 모두 닫으세요.</li><li>닫히지 않으면 PC Chrome에서 Shift + Esc를 누르고 해당 ChatGPT 작업만 종료하세요.</li><li>아래 설정 주소를 복사해 새 탭 주소창에 붙여 넣으세요.</li><li>설정의 사이트 검색에서 chatgpt.com을 찾고, 해당 항목의 데이터를 삭제하세요. 전체 사이트 데이터를 삭제할 필요는 없습니다.</li><li>GPT를 새 탭으로 열어 로그인하고, 정상 동작을 확인한 뒤 도우미를 켜세요.</li></ol>
+<p class="settings-help"><strong>주의: GPT에서 로그아웃될 수 있고, 보내지 않은 초안과 일부 사이트 설정이 사라질 수 있어요.</strong> 필요한 초안은 가능할 때 먼저 별도로 저장하세요. 계정에 저장된 대화를 삭제하는 절차는 아닙니다. 아래 도우미 백업에는 GPT 로그인·초안·사이트 데이터가 포함되지 않습니다.</p>
+<p class="hint-text">PC Chrome 기준 안내입니다. 다른 브라우저에서는 사이트별 저장 데이터 설정을 확인하세요.</p>
+<code>chrome://settings/content/all</code><div class="ac"><button class="mn key" data-ui-action="help-copy-settings">설정 주소 복사</button></div></details>
+<details class="more"><summary>Q. 도우미 데이터를 백업하고 싶어요.</summary>
+<p class="settings-help">A. 도우미의 설정·지침·방별 연결·작업 기록을 JSON 파일로 내려받습니다. 백업 중에는 새 작업을 실행하지 말고 다른 크랙·GPT 작업 창도 닫아 주세요. 여러 창의 동시 변경까지 하나의 시점으로 고정하는 백업은 아닙니다.</p>
+<p class="hint-text">백업에는 대화 내용과 사용자 지침 등 민감한 정보가 포함될 수 있어요. 안전한 곳에 보관하세요. 이 파일은 보관·수동 복구용이며 이 화면에는 가져오기 기능이 없습니다.</p>
+<button class="mn" data-ui-action="help-backup">도우미 전체 백업</button></details>
+<details class="more"><summary>Q. 오래된 작업 기록을 정리하면 GPT 멈춤도 해결되나요?</summary>
+<p class="settings-help">A. 도우미 저장소와 ChatGPT 사이트 데이터는 별개이므로 같은 해결 방법이 아닙니다. 이 기능은 먼저 백업을 내려받고, 저장 확인 후 기존 보존 규칙에 따라 오래된 완료·취소 작업과 만료된 전송 임시 자료를 정리합니다.</p>
+<p class="settings-help">설정·지침·방별 연결과 진행 중이거나 결과에 필요한 기록은 보존합니다. 최근 기록이나 상태가 불확실한 자료는 남기므로 정리 수가 0일 수도 있어요. 한 번에 점검하는 수에 제한이 있어 전체 정리를 보장하지 않습니다.</p>
+<p class="hint-text">다른 작업 창을 닫고 사용하세요. 삭제 후 이 화면에서 즉시 되돌릴 수는 없습니다. 백업 다운로드가 취소되거나 실패했다면 다음 확인 창에서 취소하세요.</p>
+<button class="mn" data-ui-action="help-cleanup">백업 후 오래된 기록 정리</button></details>
+<details class="more"><summary>Q. 왜 GPT 데이터 삭제 버튼은 없나요?</summary>
+<p class="settings-help">A. 멈춘 GPT 페이지에서는 도우미 버튼도 응답하지 않을 수 있고, 스크립트가 Chrome의 사이트 데이터 삭제와 같은 범위를 보장하기 어렵습니다. 그래서 크랙에서 복구 절차와 설정 주소를 제공하고, GPT 데이터는 사용자가 브라우저 설정에서 직접 삭제하도록 했어요.</p></details>`;},
+        async backup(){
+            if(transportGcRunning)throw new Error('자동 기록 정리 중입니다. 잠시 후 다시 시도해 주세요.');
+            this.snapshotting=true;
+            try{
+                await flushStorageWrites();
+                const api=modernGM();
+                const keys=typeof GM_listValues==='function'?await GM_listValues():await api.listValues();
+                if(!Array.isArray(keys))throw new Error('저장 항목 목록을 읽지 못해 백업을 중단했습니다.');
+                const values=Object.create(null);
+                for(const key of keys){
+                    const read=await settleWithTimeout(()=>typeof GM_getValue==='function'?GM_getValue(key):api.getValue(key),5000);
+                    if(!read.ok||typeof read.value==='undefined')throw new Error('일부 저장 항목을 읽지 못해 백업을 중단했습니다. 삭제는 실행하지 않았습니다.');
+                    values[key]=read.value;
+                }
+                const data={format:'cgc-storage-backup',schema:1,scriptVersion:APP.version,createdAt:new Date().toISOString(),values};
+                const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json;charset=utf-8'}));
+                const a=document.createElement('a');a.href=url;a.download='CGC-backup-'+new Date().toISOString().replace(/[:.]/g,'-')+'.json';
+                try{document.body.appendChild(a);a.click();}finally{a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);}
+                return keys.length;
+            }finally{this.snapshotting=false;}
+        },
+        async run(action,button){
+            if(this.busy)return;this.busy=true;button.disabled=true;
+            try{
+                if(action==='help-copy-settings'){
+                    if(!await copyText('chrome://settings/content/all'))throw new Error('복사하지 못했어요. 화면의 설정 주소를 직접 복사해 주세요.');
+                    CrackUI.toast('주소를 복사했어요. 새 탭 주소창에 붙여 넣으세요.');return;
+                }
+                if(!cgcStorageReady)throw new Error('저장소 준비가 끝난 뒤 다시 시도해 주세요.');
+                if(action==='help-cleanup'&&!confirm('다른 작업 창을 닫았나요? 먼저 백업 파일을 내려받습니다. 그다음 저장 확인을 해야 정리가 시작됩니다.'))return;
+                const count=await this.backup();
+                if(action==='help-backup'){CrackUI.toast('백업 다운로드를 요청했어요 ('+count+'개 항목). 파일이 저장됐는지 확인해 주세요.');return;}
+                if(!confirm('백업 JSON 파일이 실제로 저장됐나요? 취소하면 삭제하지 않습니다. 확인하면 오래된 불필요 기록만 정리하며 GPT 사이트 데이터는 바꾸지 않습니다.'))return;
+                if(transportGcRunning)throw new Error('다른 정리가 진행 중이에요. 잠시 후 다시 시도해 주세요.');
+                const removed=await pruneExpiredTransportKeys();
+                CrackUI.toast('이번 점검에서 저장 항목 '+removed+'개를 정리했어요. 진행 중·보존 대상 기록은 남겨 두었습니다.');
+            }catch(error){CrackUI.toast(error?.message||'작업을 완료하지 못했어요.',true);}
+            finally{this.busy=false;button.disabled=false;}
+        },
+    };
 
     function migrateLegacyConnectionState() {
         if(CGC_ASYNC_GM_STORAGE&&!cgcStorageReady)return;
@@ -4388,11 +4517,18 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             const url=URL.createObjectURL(new Blob([attachment.text],{type:'text/plain;charset=utf-8'}));
             const a=document.createElement('a');a.href=url;a.download=attachment.name;a.textContent='TXT 저장';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
         },
-        userRoots(){return [...document.querySelectorAll('[data-message-author-role="user"]')];},
-        identity(root){return root?.getAttribute('data-message-id')||root?.closest('[data-testid^="conversation-turn-"]')?.getAttribute('data-testid')||hashString(this.normalize(root?.innerText||root?.textContent));},
+        messageRole(root){return root?.getAttribute('data-message-author-role')||root?.getAttribute('data-turn')||root?.getAttribute('data-content-search-unit-key')?.split(':').pop()||'';},
+        messageRoots(){
+            const old=Array.from(document.querySelectorAll('[data-message-author-role="user"],[data-message-author-role="assistant"]'));
+            return old.length?old:Array.from(document.querySelectorAll('[data-content-search-unit-key$=":user"],[data-content-search-unit-key$=":assistant"]'));
+        },
+        userRoots(){return this.messageRoots().filter(root=>this.messageRole(root)==='user');},
+        identity(root){return root?.getAttribute('data-message-id')||(root?.closest('[data-turn-key]')?.getAttribute('data-turn-key')&&root?.getAttribute('data-content-search-unit-key')?root.closest('[data-turn-key]').getAttribute('data-turn-key')+':'+this.messageRole(root):'')||root?.getAttribute('data-content-search-unit-key')||root?.closest('[data-testid^="conversation-turn-"]')?.getAttribute('data-testid')||hashString(this.normalize(root?.innerText||root?.textContent));},
         matches(text,expected){
             text=this.normalize(text);
-            if(!expected||text.length<expected.length)return false;
+            if(!expected||!Number.isSafeInteger(expected.length)||expected.length<=0
+                ||typeof expected.head!=='string'||!expected.head.length||expected.head.length>expected.length
+                ||typeof expected.hash!=='string'||!expected.hash.length||text.length<expected.length)return false;
             let at=text.indexOf(expected.head);
             while(at>=0){if(hashString(text.slice(at,at+expected.length))===expected.hash)return true;at=text.indexOf(expected.head,at+1);}
             return false;
@@ -4407,11 +4543,11 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
         },
         assistantFor(receipt){
             const user=this.findUser(receipt);if(!user)return '';
-            const roots=[...document.querySelectorAll('[data-message-author-role="user"],[data-message-author-role="assistant"]')];
+            const roots=this.messageRoots();
             const at=roots.indexOf(user);
             for(let i=at+1;i<roots.length;i++){
-                if(roots[i].getAttribute('data-message-author-role')==='user')break;
-                if(roots[i].getAttribute('data-message-author-role')==='assistant')return ChatGPTBridge.assistantRootText(roots[i]);
+                if(this.messageRole(roots[i])==='user')break;
+                if(this.messageRole(roots[i])==='assistant')return ChatGPTBridge.assistantRootText(roots[i]);
             }
             return '';
         },
@@ -4425,28 +4561,28 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             });
             if(matchedUsers.length!==1)return empty;
             const user=matchedUsers[0];
-            const roots=[...document.querySelectorAll('[data-message-author-role="user"],[data-message-author-role="assistant"]')];
+            const roots=this.messageRoots();
             const at=roots.indexOf(user);if(at<0)return empty;
             let candidate=null,text='';
             for(let i=at+1;i<roots.length;i++){
-                const root=roots[i];if(root.getAttribute('data-message-author-role')==='user')break;
-                if(root.getAttribute('data-message-author-role')!=='assistant'||!isVisible(root))continue;
+                const root=roots[i];if(this.messageRole(root)==='user')break;
+                if(this.messageRole(root)!=='assistant'||!isVisible(root))continue;
                 const channel=root.getAttribute('data-message-channel')||root.getAttribute('data-channel')||'';
                 if(channel&&channel!=='final')continue;
                 const value=ChatGPTBridge.assistantRootText(root);
                 if(value){candidate=root;text=value;}
             }
             if(!candidate)return empty;
-            const turn=candidate.closest('[data-testid^="conversation-turn-"],article')||candidate;
+            const turn=candidate.closest('[data-testid^="conversation-turn-"],article,[data-content-search-turn-key]')||candidate;
             // A code block's Copy button and a finished reasoning block are not final-answer proof.
             const channelHost=candidate.closest('[data-message-channel],[data-channel]');
             const channel=channelHost?.getAttribute('data-message-channel')||channelHost?.getAttribute('data-channel')||'';
             if(channel&&channel!=='final')return empty;
             const streaming=turn.matches('[data-is-streaming="true"],[aria-busy="true"],[data-message-status="in_progress"]')
                 ||Boolean(turn.querySelector('[data-is-streaming="true"],[aria-busy="true"],[data-message-status="in_progress"]'));
-            const actions=[...turn.querySelectorAll('button[data-testid="copy-turn-action-button"],button[data-testid="good-response-turn-action-button"],button[data-testid="bad-response-turn-action-button"]')];
+            const actions=[...turn.querySelectorAll('button[data-testid="copy-turn-action-button"],button[data-testid="good-response-turn-action-button"],button[data-testid="bad-response-turn-action-button"],.turn-action-controls button[aria-label="응답 평가"]')];
             const hasFinalAction=actions.some(button=>!button.disabled&&button.getAttribute('aria-disabled')!=='true'&&isVisible(button));
-            return {text,final:!streaming&&hasFinalAction,streaming};
+            return {text,final:!streaming&&!ChatGPTBridge.isGenerationBusy()&&hasFinalAction,streaming};
         },
         remember(id){
             try{const ids=JSON.parse(sessionStorage.getItem(this.tabKey)||'[]');sessionStorage.setItem(this.tabKey,JSON.stringify([id,...ids.filter(x=>x!==id)].slice(0,12)));}catch{}
@@ -6437,7 +6573,8 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 }
                 if(receipt&&['submitted','result'].includes(receipt.phase))continue;
                 if(receipt?.phase==='submitting'&&age>120000&&!recentProgress){this.markPendingSubmissionUncertain(jobId,sessionKey,{phase:'recovery_timeout',message:'오래 멈춘 GPT 요청의 제출 여부를 확인할 수 없어요. 자동 재전송하지 않습니다.',toast:false});continue;}
-                const stale=!validV3Job(job)||(age>20000&&!recentProgress&&!receipt);
+                // Preserve the same 15-minute job lifetime used by the sender and GPT receiver.
+                const stale=!validV3Job(job);
                 if(stale)this.rollbackPendingJob(jobId,sessionKey,{phase:'recovery',message:'중단된 이전 GPT 요청을 자동 취소했습니다.',toast:false,status:'요청 취소',forceUnsubmitted:true});
             }
             this.reconcileLoreWorkers();
@@ -7030,12 +7167,12 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 if(toolId==='sync'&&!batch.length&&!refsChanged){ChatGptPopup.closeIfWaiting(reservedPopup);this.setInlineStatus();this.toast('새 로그나 변경된 참고자료가 없어요.');saveState(state);return;}
                 const targetInfo=toolId==='audit'?resolveAuditTarget(all,this.auditTargetId||''):null;if(this.auditTargetId&&targetInfo&&!targetInfo.requestedMatched){this.auditTargetId='';this.toast('선택한 검사 대상이 사라져 최신 답변으로 검사합니다.');}
                 const hashes=cgcPromptHashes(toolId==='sync'?'audit':toolId,settings);const forceProtocol=syncOp!=='APPEND'||slot.appliedCoreHash!==hashes.core||slot.appliedSourceHash!==hashes.source||slot.appliedTaskHash!==hashes.task;
-                const compiled=cgcCompileMainPrompt({toolId,slotId,jobSeq:slot.jobSeq,syncOp,deliveryOp,correction:branchCorrection,slot,messages:batch,allMessages:all,referenceResult:refs,settings,question,auditTarget:targetInfo,session,forceProtocol,acquisitionComplete:fetched.complete===true});const fullPrompt=compiled.text,useTxt=fullPrompt.length>=TXT_ATTACHMENT_THRESHOLD,txtFileName=useTxt?makeTxtTransferName(session.title||CrackAdapter.getTitle(),toolId):'',prompt=useTxt?buildTxtLead(txtFileName,toolId,toolId==='sync'):fullPrompt,attachment=useTxt?{name:txtFileName,text:fullPrompt,type:'text/plain'}:null;
+                const compiled=cgcCompileMainPrompt({toolId,slotId,jobSeq:slot.jobSeq,syncOp,deliveryOp,correction:branchCorrection,slot,messages:batch,allMessages:all,referenceResult:refs,settings,question,auditTarget:targetInfo,session,forceProtocol,acquisitionComplete:fetched.complete===true});const fullPrompt=compiled.text,txtFileName=makeTxtTransferName(session.title||CrackAdapter.getTitle(),toolId),prompt=buildTxtLead(txtFileName,toolId,toolId==='sync'),attachment={name:txtFileName,text:fullPrompt,type:'text/plain'};
                 const appendedSourceChars=syncOp==='APPEND'?(batch.reduce((n,m)=>n+String(m?.content||'').length,0)+Object.values(compiled.refs.sourceChars||{}).reduce((n,v)=>n+Number(v||0),0)):0;if(CrackAdapter.getRouteInfo()?.sessionKey!==route.sessionKey)throw new Error('자료를 읽는 동안 크랙 채팅방이 바뀌어 전송을 중단했어요.');
                 const rotating=syncOp==='SESSION_ROTATE';const previousUrl=slot.url||'',target=(fresh||rotating)?(getConfiguredGptUrl(settings)||CHATGPT_HOME):(slot.url||getConfiguredGptUrl(settings)||CHATGPT_HOME);const jobId=uid('request');const transportAfter=!fresh&&slotIsSync(slotId)?cgcTransportAfterSubmission(all,batch,slot,deliveryDecision?.mode==='branch_repair'?'rerolled':'ok'):cgcNormalizeTransportState(slot.transportState);slot.lastInspector=cgcInspectorRecord({toolId,slotId,conversationMode,openMode,syncOp,lease,rawCoverage:compiled.cov.rawCoverage,coverageQuality:compiled.cov.coverageQuality,sentMessages:batch.length,payloadChars:fullPrompt.length,appendedSourceChars,sourceRoles:compiled.refs.roles,sourceStatuses:compiled.refs.statuses,acquisitionComplete:compiled.cov.acquisitionComplete,taskEvidenceComplete:compiled.cov.taskEvidenceComplete,sourceChars:{RP_LOG:batch.reduce((n,m)=>n+String(m?.content||'').length,0),...(compiled.refs.sourceChars||{})},hashes:compiled.hashes,previousUrl,slotUrlPresent:Boolean(previousUrl),targetUrl:target,rotationReason:rotating?'explicit_rotation':'',rebaselineReason:syncReason,note:`reason=${syncReason}`});
-                const resetsBaseline=['BASELINE_REPLACE','SESSION_ROTATE'].includes(syncOp);const job={schema:12,protocol:APP.protocol,bridgeRevision:BRIDGE_REVISION,conversationSlot:slotId,scope:jobScopeOf({conversationSlot:slotId}),desiredChatTitle:`[${session.title||CrackAdapter.getTitle()}] ${ChatGptPopup.label(slotId)}`,displayLabel:customTask?.name||ChatGptPopup.label(slotId),id:jobId,batchId:uid('sync'),chainId:uid('chain'),partIndex:1,initialChain:syncOp==='BASELINE_INIT',resyncMode:resetsBaseline,resyncResetBaseline:resetsBaseline,conversationMode,openMode,syncTracking:!fresh,persistConversation:!fresh,sessionKey:route.sessionKey,storyId:route.storyId,episodeId:route.episodeId,title:session.title||CrackAdapter.getTitle(),toolId,requestedToolId:toolId,question,sessionResetAt:Number(runEpoch.sessionResetAt||0),slotResetAt:Number(runEpoch.slotResetAt||0),transportBaseRevision:Number(runEpoch.transportRevision||0),targetUrl:canonicalChatGptUrl(target)||CHATGPT_HOME,gptBaseUrl:getConfiguredGptUrl(settings),conversationUrl:(fresh||rotating)?'':(slot.url||''),messages:!fresh?batch.map(m=>({id:m.id,hash:m.hash})):[],contextHashUpdates:!fresh?compiled.refs.hashUpdates:{},contextChangedLabels:compiled.refs.changedLabels,contextInitializedAfter:!fresh,sourceCount:batch.length,sourceLabel:syncOp==='APPEND'?'신규 RP 원문':'RP 최신 기준선',sentCount:batch.length,remainingCount:0,transferMode:useTxt?'txt':'text',txtFileName,createdAt:Date.now(),syncOp,deliveryOp,branchCorrection:branchCorrection?cloneStateValue(branchCorrection):null,baselineLease:lease,rawCoverage:compiled.cov.rawCoverage,coverageQuality:compiled.cov.coverageQuality,acquisitionComplete:compiled.cov.acquisitionComplete===true,taskEvidenceComplete:compiled.cov.taskEvidenceComplete===true,sourceStatuses:compiled.refs.statuses||[],payloadChars:fullPrompt.length,appendedSourceChars,componentHashes:compiled.hashes,transportRevision:Number(transportAfter.revision||0),transportCursorAfter:{...transportAfter,lastJobId:jobId}};
+                const resetsBaseline=['BASELINE_REPLACE','SESSION_ROTATE'].includes(syncOp);const job={schema:12,protocol:APP.protocol,bridgeRevision:BRIDGE_REVISION,conversationSlot:slotId,scope:jobScopeOf({conversationSlot:slotId}),desiredChatTitle:`[${session.title||CrackAdapter.getTitle()}] ${ChatGptPopup.label(slotId)}`,displayLabel:customTask?.name||ChatGptPopup.label(slotId),id:jobId,batchId:uid('sync'),chainId:uid('chain'),partIndex:1,initialChain:syncOp==='BASELINE_INIT',resyncMode:resetsBaseline,resyncResetBaseline:resetsBaseline,conversationMode,openMode,syncTracking:!fresh,persistConversation:!fresh,sessionKey:route.sessionKey,storyId:route.storyId,episodeId:route.episodeId,title:session.title||CrackAdapter.getTitle(),toolId,requestedToolId:toolId,question,sessionResetAt:Number(runEpoch.sessionResetAt||0),slotResetAt:Number(runEpoch.slotResetAt||0),transportBaseRevision:Number(runEpoch.transportRevision||0),targetUrl:canonicalChatGptUrl(target)||CHATGPT_HOME,gptBaseUrl:getConfiguredGptUrl(settings),conversationUrl:(fresh||rotating)?'':(slot.url||''),messages:!fresh?batch.map(m=>({id:m.id,hash:m.hash})):[],contextHashUpdates:!fresh?compiled.refs.hashUpdates:{},contextChangedLabels:compiled.refs.changedLabels,contextInitializedAfter:!fresh,sourceCount:batch.length,sourceLabel:syncOp==='APPEND'?'신규 RP 원문':'RP 최신 기준선',sentCount:batch.length,remainingCount:0,transferMode:'txt',txtFileName,createdAt:Date.now(),syncOp,deliveryOp,branchCorrection:branchCorrection?cloneStateValue(branchCorrection):null,baselineLease:lease,rawCoverage:compiled.cov.rawCoverage,coverageQuality:compiled.cov.coverageQuality,acquisitionComplete:compiled.cov.acquisitionComplete===true,taskEvidenceComplete:compiled.cov.taskEvidenceComplete===true,sourceStatuses:compiled.refs.statuses||[],payloadChars:fullPrompt.length,appendedSourceChars,componentHashes:compiled.hashes,transportRevision:Number(transportAfter.revision||0),transportCursorAfter:{...transportAfter,lastJobId:jobId}};
                 await cgcAssertRunEpoch(route.sessionKey,slotId,runEpoch,{checkTransport:slotIsSync(slotId)&&!fresh});
-                createdJobId=jobId;setPendingJob(session,jobId,slotId);saveState(state);writeJobBundle(job,{jobId,prompt,attachment,recordPreview:makeRecordPreview(fullPrompt),createdAt:Date.now()});this.setInlineStatus('GPT 전달 중',true);this.updatePanelStatus(`${useTxt?'TXT 1개':'본문'} · ${syncOp} · ${openMode==='popup'?'팝업':'새 탭'}으로 전달 중...`);const handoff=await dispatchJobToChatGpt(job,settings,reservedPopup);this.setInlineStatus(handoff.mode==='reused'?(handoff.surfaceMode==='popup'?'기존 GPT 작은 창 전달':'기존 GPT 탭 전달'):handoff.surfaceMode==='popup'?'GPT 작은 창 열림':'GPT 새 탭 열림',true);this.watchJobProgress(jobId,route.sessionKey);
+                createdJobId=jobId;setPendingJob(session,jobId,slotId);saveState(state);writeJobBundle(job,{jobId,prompt,attachment,recordPreview:makeRecordPreview(fullPrompt),createdAt:Date.now()});this.setInlineStatus('GPT 전달 중',true);this.updatePanelStatus(`TXT 1개 · ${syncOp} · ${openMode==='popup'?'팝업':'새 탭'}으로 전달 중...`);const handoff=await dispatchJobToChatGpt(job,settings,reservedPopup);this.setInlineStatus(handoff.mode==='reused'?(handoff.surfaceMode==='popup'?'기존 GPT 작은 창 전달':'기존 GPT 탭 전달'):handoff.surfaceMode==='popup'?'GPT 작은 창 열림':'GPT 새 탭 열림',true);this.watchJobProgress(jobId,route.sessionKey);
             }catch(error){console.error(`[${APP.id}] start tool failed`,error);if(createdJobId)this.rollbackPendingJob(createdJobId,route.sessionKey,{phase:'dispatch',message:error.message||String(error),toast:false,status:'전송 실패'});ChatGptPopup.closeIfWaiting(reservedPopup);this.setInlineStatus();this.updatePanelStatus(error.message,true);this.toast(error.message,true);}finally{if(this.startingSessionKey===route.sessionKey)this.startingSessionKey='';}
         },
 
@@ -7414,7 +7551,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
         },
         openSettingsView(view='',promptKey='') {
             if(this.settingsDirty&&!confirm('저장하지 않은 변경을 버리고 이동할까요?'))return;
-            this.settingsView=['policy','prompts','promptEdit','customTasks','customEdit','advanced'].includes(view)?view:'';
+            this.settingsView=['policy','prompts','promptEdit','customTasks','customEdit','advanced','troubleshooting'].includes(view)?view:'';
             this.editingPromptKey=this.settingsView==='promptEdit'&&this.UI_PROMPTS.some(p=>p[0]===promptKey)?promptKey:'';
             if(this.settingsView==='promptEdit'&&!this.editingPromptKey)this.settingsView='prompts';
             if(this.settingsView!=='customEdit')this.editingCustomTaskId='';
@@ -7439,6 +7576,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             }
             if(button.dataset.uiStep){const input=this.panel.querySelector(`#${button.dataset.uiStep}`);if(input){const n=Number(input.value),min=Number(input.min||0),max=input.max?Number(input.max):Infinity;input.value=String(Math.min(max,Math.max(min,(Number.isFinite(n)?n:min)+Number(button.dataset.delta))));this.settingsDirty=true;}return true;}
             const action=button.dataset.uiAction;
+            if(['help-copy-settings','help-backup','help-cleanup'].includes(action)){e.preventDefault();void CgcTroubleshooting.run(action,button);return true;}
             if(action==='data-open'){e.preventDefault();this.selectTab('data');}
             if(action==='settings-view')this.openSettingsView(button.dataset.view||'',button.dataset.prompt||'');
             if(action==='custom-new')this.openCustomTaskEditor('');
@@ -7461,7 +7599,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
         refreshHeader(session=undefined) {
             if(!this.panel)return;
             const route=CrackAdapter.getRouteInfo();if(session===undefined)session=route?cgcUiSession(route.sessionKey):null;
-            const names={policy:'작업마다 따로 정하기',prompts:'지침',promptEdit:this.UI_PROMPTS.find(p=>p[0]===this.editingPromptKey)?.[1]||'지침 편집',customTasks:'커스텀 작업',customEdit:customTaskDefinition(this.editingCustomTaskId,getSettings())?.name||'커스텀 작업 만들기',advanced:'고급 설정'};
+            const names={policy:'작업마다 따로 정하기',prompts:'지침',promptEdit:this.UI_PROMPTS.find(p=>p[0]===this.editingPromptKey)?.[1]||'지침 편집',customTasks:'커스텀 작업',customEdit:customTaskDefinition(this.editingCustomTaskId,getSettings())?.name||'커스텀 작업 만들기',advanced:'고급 설정',troubleshooting:'문제 해결'};
             const sub=this.activeTab==='settings'&&this.settingsView||this.activeTab==='data'&&this.dataPreviewOpen;
             const title=this.panel.querySelector('#cgc-ui-title'),room=this.panel.querySelector('#cgc-ui-room'),back=this.panel.querySelector('#cgc-ui-back');
             if(title)title.textContent=this.activeTab==='settings'&&this.settingsView?names[this.settingsView]:this.activeTab==='data'&&this.dataPreviewOpen?'보낼 내용 미리 보기':session?.title||CrackAdapter.getTitle()||'현재 대화';
@@ -7775,7 +7913,9 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             const seg=(id,value,labels)=>this.uiSegment(id,value,labels),nav=(label,view)=>`<button class="r navrow" data-ui-action="settings-view" data-view="${view}"><span class="tt a">${label}</span>${this.uiIcon('chev','sm')}</button>`;
             let html='';
             if(!this.settingsView){
-                html=`<div class="pane-t">설정</div><p class="pane-s">보내는 방법과 지침을 내 방식대로</p><div class="gt"><b>보내는 방식</b></div><div class="grp"><div class="r col2"><div class="tt"><div class="a">기본 방식</div><div class="b">${s.policyPreset==='custom'?'작업별로 따로 정해져 있어요':'작업별 대화 방식에 함께 적용합니다'}</div></div>${seg('cgc-policy-preset',s.policyPreset||'recommended',{recommended:'이어보내기',full:'전체 다시',fresh:'매번 새 세션'})}</div><div class="r col2"><div class="a">GPT 창 여는 법</div>${seg('cgc-open-mode',s.openMode||'popup',{popup:'작은 창',tab:'새 탭'})}${CGC_PLATFORM.mobile?'<div class="b">모바일에서는 새 탭으로 엽니다.</div>':''}</div>${nav('작업마다 따로 정하기','policy')}</div><div class="gt"><b>편의</b></div><div class="grp"><div class="r"><div class="tt a">GPT 대화 이름 자동 정리</div>${this.uiSwitch('cgc-auto-rename-chat',s.autoRenameChatTitles!==false,'대화 이름 자동 정리')}</div><div class="r"><div class="tt"><div class="a">열린 GPT 창 재사용</div><div class="b">같은 대화 확인 또는 같은 방·작업의 전송에만 재사용해요</div></div>${this.uiSwitch('cgc-background-relay',s.backgroundRelay!==false,'열린 GPT 창 재사용')}</div></div><div class="gt"><b>연결된 GPT 대화</b></div>${this.UI_SLOTS.map(([id,label])=>{const slot=session?.conversations?.[id],hasHistory=Boolean(slot?.url)||(slot?cgcHasPriorSlotHistory(session,id,slot):false);return `<div class="link" data-ui-link="${id}"><span class="dot ${slot?.url?'':'no'}"></span><div class="tt"><div class="a">${label}</div><div class="b">${slot?.url?`연결됨 · ${escapeHtml(this.slotLedgerSummary(id,slot))}`:hasHistory?'주소 없음 · 복구/초기화 가능':'처음 실행하면 연결돼요'}</div></div><button class="mn" data-action="open-slot" data-slot="${id}">열기</button><button class="x" data-action="disconnect-slot" data-slot="${id}" aria-label="${label} 연결 끊기" ${hasHistory?'':'disabled'}>${this.uiIcon('x','sm')}</button></div>`;}).join('')}${(s.customTasks||[]).map(task=>{const slot=session?.conversations?.[task.id],hasHistory=Boolean(slot?.url)||(slot?cgcHasPriorSlotHistory(session,task.id,slot):false);return `<div class="link" data-ui-link="${escapeHtml(task.id)}"><span class="dot ${slot?.url?'':'no'}"></span><div class="tt"><div class="a">${escapeHtml(task.name)}</div><div class="b">커스텀 · ${slot?.url?`연결됨 · ${escapeHtml(this.slotLedgerSummary(task.id,slot))}`:hasHistory?'주소 없음 · 복구/초기화 가능':'처음 실행하면 연결돼요'}</div></div><button class="mn" data-action="open-slot" data-slot="${escapeHtml(task.id)}">열기</button><button class="x" data-action="disconnect-slot" data-slot="${escapeHtml(task.id)}" aria-label="${escapeHtml(task.name)} 연결 끊기" ${hasHistory?'':'disabled'}>${this.uiIcon('x','sm')}</button></div>`;}).join('')}<div class="gt"><b>더 보기</b></div><div class="grp">${nav('지침','prompts')}${nav('커스텀 작업','customTasks')}${nav('고급 설정','advanced')}</div><button class="plain danger" data-action="resync">${this.uiIcon('alert','sm')}<span>현재 방 CGC 기록 완전 초기화</span></button><p class="hint-text">v${APP.version}</p>`;
+                html=`<div class="pane-t">설정</div><p class="pane-s">보내는 방법과 지침을 내 방식대로</p><div class="gt"><b>보내는 방식</b></div><div class="grp"><div class="r col2"><div class="tt"><div class="a">기본 방식</div><div class="b">${s.policyPreset==='custom'?'작업별로 따로 정해져 있어요':'작업별 대화 방식에 함께 적용합니다'}</div></div>${seg('cgc-policy-preset',s.policyPreset||'recommended',{recommended:'이어보내기',full:'전체 다시',fresh:'매번 새 세션'})}</div><div class="r col2"><div class="a">GPT 창 여는 법</div>${seg('cgc-open-mode',s.openMode||'popup',{popup:'작은 창',tab:'새 탭'})}${CGC_PLATFORM.mobile?'<div class="b">모바일에서는 새 탭으로 엽니다.</div>':''}</div>${nav('작업마다 따로 정하기','policy')}</div><div class="gt"><b>편의</b></div><div class="grp"><div class="r"><div class="tt a">GPT 대화 이름 자동 정리</div>${this.uiSwitch('cgc-auto-rename-chat',s.autoRenameChatTitles!==false,'대화 이름 자동 정리')}</div><div class="r"><div class="tt"><div class="a">열린 GPT 창 재사용</div><div class="b">같은 대화 확인 또는 같은 방·작업의 전송에만 재사용해요</div></div>${this.uiSwitch('cgc-background-relay',s.backgroundRelay!==false,'열린 GPT 창 재사용')}</div></div><div class="gt"><b>연결된 GPT 대화</b></div>${this.UI_SLOTS.map(([id,label])=>{const slot=session?.conversations?.[id],hasHistory=Boolean(slot?.url)||(slot?cgcHasPriorSlotHistory(session,id,slot):false);return `<div class="link" data-ui-link="${id}"><span class="dot ${slot?.url?'':'no'}"></span><div class="tt"><div class="a">${label}</div><div class="b">${slot?.url?`연결됨 · ${escapeHtml(this.slotLedgerSummary(id,slot))}`:hasHistory?'주소 없음 · 복구/초기화 가능':'처음 실행하면 연결돼요'}</div></div><button class="mn" data-action="open-slot" data-slot="${id}">열기</button><button class="x" data-action="disconnect-slot" data-slot="${id}" aria-label="${label} 연결 끊기" ${hasHistory?'':'disabled'}>${this.uiIcon('x','sm')}</button></div>`;}).join('')}${(s.customTasks||[]).map(task=>{const slot=session?.conversations?.[task.id],hasHistory=Boolean(slot?.url)||(slot?cgcHasPriorSlotHistory(session,task.id,slot):false);return `<div class="link" data-ui-link="${escapeHtml(task.id)}"><span class="dot ${slot?.url?'':'no'}"></span><div class="tt"><div class="a">${escapeHtml(task.name)}</div><div class="b">커스텀 · ${slot?.url?`연결됨 · ${escapeHtml(this.slotLedgerSummary(task.id,slot))}`:hasHistory?'주소 없음 · 복구/초기화 가능':'처음 실행하면 연결돼요'}</div></div><button class="mn" data-action="open-slot" data-slot="${escapeHtml(task.id)}">열기</button><button class="x" data-action="disconnect-slot" data-slot="${escapeHtml(task.id)}" aria-label="${escapeHtml(task.name)} 연결 끊기" ${hasHistory?'':'disabled'}>${this.uiIcon('x','sm')}</button></div>`;}).join('')}<div class="gt"><b>더 보기</b></div><div class="grp">${nav('지침','prompts')}${nav('커스텀 작업','customTasks')}${nav('고급 설정','advanced')}${nav('문제 해결 · Q&A','troubleshooting')}</div><button class="plain danger" data-action="resync">${this.uiIcon('alert','sm')}<span>현재 방 CGC 기록 완전 초기화</span></button><p class="hint-text">v${APP.version}</p>`;
+            }else if(this.settingsView==='troubleshooting'){
+                html=CgcTroubleshooting.html();
             }else if(this.settingsView==='policy'){
                 html='<p class="pane-s">작업별로 대화와 창을 여는 방식을 정해요.</p>'+this.UI_SLOTS.map(([id,label])=>`<div class="gt"><b>${label}</b></div><div class="grp"><div class="r col2">${seg(`cgc-policy-${id}-conversation`,s[`${id}ConversationMode`],id==='memory2'?{persistent_full:'전체 다시',fresh_full:'매번 새 세션'}:this.MODE_LABEL)}${seg(`cgc-policy-${id}-open`,s[`${id}OpenMode`]||'inherit',this.OPEN_LABEL)}</div></div>`).join('')+`<div class="gt"><b>로어 만들기</b></div><div class="grp"><div class="r col2"><div class="b">조각마다 새 GPT 대화를 사용합니다.</div>${seg('cgc-policy-lore-open',s.loreOpenMode||'inherit',this.OPEN_LABEL)}</div></div>`;
             }else if(this.settingsView==='prompts'){
@@ -7821,7 +7961,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 const task=customTaskDefinition(this.editingCustomTaskId,s),input=host.querySelector('#cgc-custom-prompt');if(input)input.value=String(task?.prompt||'');
             }
             const footer=this.panel.querySelector('#cgc-settings-footer');
-            footer.hidden=['prompts','customTasks'].includes(this.settingsView);
+            footer.hidden=['prompts','customTasks','troubleshooting'].includes(this.settingsView);
             footer.innerHTML=this.settingsView==='promptEdit'?'<button class="mn" data-ui-action="settings-view" data-view="prompts">취소</button><button class="mn key" data-ui-action="prompt-save">저장</button>':this.settingsView==='customEdit'?'<button class="mn" data-ui-action="settings-view" data-view="customTasks">취소</button><button class="mn key" data-ui-action="custom-save">저장</button>':'<button class="mn key" data-action="save-settings">설정 저장</button>';
             this.renderTaskSourceSettings();this.updatePromptCount();this.refreshHeader();
         },
@@ -8205,8 +8345,9 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
 
         async init() {
             this.instanceId=this.instanceId||uid('gpt-doc');
+            CgcStartup.mark('bridge-titles');
             CgcConversationTitles.install();
-            // Capture a one-time job at document-start, before the ChatGPT SPA can rewrite the URL.
+            // Use the handoff marker captured at script entry, or the durable navigation marker.
             // A URL fragment is used for newly opened tabs; sessionStorage is used only when an
             // already-open ChatGPT tab must navigate once to another ChatGPT route. Both are consumed now.
             const cgcBootHref = location.href;
@@ -8233,11 +8374,14 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 currentHref:location.href,
                 bootstrapJobId:this.bootstrapJobId||'',
             });
+            CgcStartup.mark('bridge-register');
             await this.registerTab({surfaceMode:this.surfaceMode||''});
+            CgcStartup.mark('bridge-listeners');
             this.installDispatchListener();
             CgcJobLinks.installGpt();
             this.installUrlTracking();
             this.installLifecycleRefresh();
+            CgcStartup.mark('bridge-ui');
             CompanionTaskUI.install();
             if (this.bootstrapJobId) setTimeout(() => {void this.processJobById(this.bootstrapJobId).catch(showStartupError);}, 0);
             else setTimeout(()=>WebDelivery.recover().catch(error=>console.warn('[cgc] resume',error)),500);
@@ -8253,29 +8397,30 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
 
         captureSurfaceMarker(){
             try{
-                const current=new URL(location.href);
-                const raw=cleanText(current.searchParams.get('cgc_surface')||'');
+                const current=new URL(location.href),hash=new URLSearchParams(current.hash.slice(1));
+                const raw=cleanText(hash.get('cgc-surface')||current.searchParams.get('cgc_surface')||CGC_EARLY_SURFACE_MARKER||'');
                 if(!OPEN_MODE_VALUES.has(raw))return '';
                 this.surfaceMode=raw;
                 try{sessionStorage.setItem('CGC_WEB_SURFACE_MODE',raw);}catch{}
-                current.searchParams.delete('cgc_surface');
-                try{history.replaceState(history.state,'',`${current.pathname}${current.search}${current.hash}`);}catch{}
                 return raw;
             }catch{return '';}
         },
 
         captureJobMarker() {
-            try {
-                const current = new URL(location.href);
-                const hash = new URLSearchParams(current.hash.replace(/^#/, ''));
-                const jobId = cgcJobMarkerFromUrl(current.href);
-                if (!jobId) return '';
-                if(hash.has('cgc-job')){hash.delete('cgc-job');current.hash=hash.toString();}
-                current.searchParams.delete('cgc_job');
-                current.searchParams.delete('cgc_boot');
-                try { history.replaceState(history.state, '', `${current.pathname}${current.search}${current.hash}`); } catch { /* marker already captured */ }
-                return jobId;
-            } catch { return ''; }
+            // Read only at document-start. Rewriting the router URL here can interrupt hydration.
+            return cgcJobMarkerFromUrl(location.href);
+        },
+
+        cleanupHandoffMarkers(){
+            try{
+                const current=new URL(location.href),before=current.href;
+                const hash=new URLSearchParams(current.hash.slice(1));
+                if(hash.has('cgc-job')||hash.has('cgc-surface')){
+                    hash.delete('cgc-job');hash.delete('cgc-surface');current.hash=hash.toString();
+                }
+                for(const key of ['cgc_job','cgc_boot','cgc_surface'])current.searchParams.delete(key);
+                if(current.href!==before)history.replaceState(history.state,'',current.href);
+            }catch{}
         },
 
         captureNavigationJobMarker() {
@@ -8426,7 +8571,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             const controlFailed=await hydrateAsyncJobControl(event.jobId);
             if(controlFailed.length)return; // No ACK: the sender can open a fresh tab.
             const receipt=await refreshAsyncStorageKey(WebDelivery.key(event.jobId));
-            if(receipt&&['submitting','submitted','result'].includes(receipt.phase)){WebDelivery.remember(event.jobId);await WebDelivery.recover();return;}
+            if(await this.guardExistingDelivery(event.jobId,receipt))return;
             const job = readJob(event.jobId);
             if (!validV3Job(job)) return;
             if(event.roomKey&&job.sessionKey!==event.roomKey)return;
@@ -8610,6 +8755,23 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             return this.sameTarget(location.href,target);
         },
 
+        async guardExistingDelivery(jobId,receipt=undefined){
+            if(receipt===undefined)receipt=await refreshAsyncStorageKey(WebDelivery.key(jobId));
+            if(!receipt||!['submitting','uncertain','submitted','result','cancelled'].includes(receipt.phase))return false;
+            if(receipt.phase==='cancelled'){this.localToast('취소된 작업이라 입력과 첨부를 시작하지 않았어요.');return true;}
+            WebDelivery.remember(jobId);await WebDelivery.recover();
+            if(['submitting','uncertain'].includes(receipt.phase))this.localToast('이전 제출 여부를 확인 중이에요. 같은 작업의 입력과 첨부를 다시 시작하지 않습니다.');
+            return true;
+        },
+
+        validateDeliveryPayload(job,payload){
+            if(payload?.jobId!==job.id||typeof payload.prompt!=='string'||!payload.prompt.trim())throw new Error('저장된 전송 프롬프트를 찾지 못했어요.');
+            const prompt=payload.prompt+'\n\n[CGC-JOB: '+job.id+']',attachment=payload.attachment||null;
+            if(prompt.length>MAX_INLINE_COMPOSER_CHARS)throw Object.assign(new Error('작업 안내가 TXT 본문 기준을 초과했어요. 파일 첨부 전에 중단했습니다. 크랙에서 새 작업을 만들어 주세요.'),{code:'inline_payload_too_large'});
+            if(job.transferMode!=='txt'||!attachment||typeof attachment.text!=='string'||!attachment.text||attachment.chunkReadError)throw Object.assign(new Error('모든 작업은 TXT 첨부로만 전송합니다. TXT 자료가 없거나 온전하지 않아 중단했어요. 크랙에서 새 작업을 만들어 주세요.'),{code:'txt_attachment_required'});
+            return {prompt,attachment};
+        },
+
         async processJobById(jobId) {
             const controlFailed=await hydrateAsyncJobControl(jobId);
             if(controlFailed.length)throw new Error('GPT 작업 정보를 읽지 못했어요. 페이지를 새로고침해 주세요.');
@@ -8617,11 +8779,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             const receipt=await refreshAsyncStorageKey(WebDelivery.key(jobId));
             const candidateJob=receipt?.job||readJob(jobId);
             if(candidateJob&&jobInvalidatedByReset(candidateJob)){discardJobAfterReset(jobId);return this.localToast('초기화 이전의 오래된 크랙 작업을 폐기했어요.');}
-            if(receipt&&['submitting','submitted','result'].includes(receipt.phase)){
-                WebDelivery.remember(jobId);await WebDelivery.recover();
-                if(receipt.phase==='submitting')this.localToast('이전 전송 여부를 확인 중이에요. 같은 작업을 자동으로 다시 보내지 않습니다.');
-                return;
-            }
+            if(await this.guardExistingDelivery(jobId,receipt))return;
             const job=readJob(jobId);
             if(!validV3Job(job))return this.localToast('크랙 작업을 찾지 못했거나 만료됐어요. 크랙에서 다시 눌러 주세요.');
             const submitted=this.findSubmittedAck(job.id);
@@ -8635,6 +8793,11 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             if(!validV3Job(job)||this.runningJobs.has(job.id))return;
             await refreshAsyncStorageKey(KEY.state);
             if(jobInvalidatedByReset(job)){discardJobAfterReset(job.id);return;}
+            if(await this.guardExistingDelivery(job.id)){
+                if(alreadyClaimed&&!this.runningJobs.has(job.id)){this.releaseClaim(job.id);if(this.processingJobId===job.id)await this.markBusy('');}
+                return;
+            }
+            if(this.runningJobs.has(job.id))return;
             this.runningJobs.add(job.id);
             try{
             if(!alreadyClaimed&&!(await this.claimJob(job)))return;
@@ -8666,7 +8829,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                         // Existing Crack-room conversations are identity-sensitive. Merely being another
                         // /c/... page is NOT compatible: the conversation id must match exactly.
                         if(targetKind==='conversation' || targetKind==='customConversation'){
-                            const reachedExact=await this.waitForExactTarget(target,4500);
+                            const reachedExact=await this.waitForExactTarget(target,15000);
                             if(reachedExact){
                                 CGC_TRACE(job.id, 'nav-after', {
                                     source:'waitForExactTarget',
@@ -8676,23 +8839,6 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                                     sameTarget:this.sameTarget(location.href,target),
                                 });
                                 this.reportProgress(job,'navigate-settled','기존 GPT 대화 확인 · 현재 세션에서 계속 진행');
-                            }else if(!job.existingConversationRetry){
-                                // ChatGPT can briefly expose home/another SPA route while an existing /c/...
-                                // is still resolving. Retry the exact saved conversation once before treating
-                                // it as stale. sessionStorage carries the job across this one retry.
-                                job.existingConversationRetry=true;
-                                writeValue(jobStorageKey(job.id),job);
-                                phase='navigate-retry';
-                                this.reportProgress(job,phase,'기존 GPT 대화 재접속 확인 중');
-                                if(!this.stashNavigationJob(job.id))throw new Error('기존 GPT 대화 재접속용 작업 정보를 저장하지 못했어요.');
-                                await flushStorageWrites();
-                                CGC_TRACE(job.id, 'nav-before', {
-                                    reason:'existing-conversation-retry',
-                                    currentHref:location.href,
-                                    target,
-                                    jobConversationUrl:job.conversationUrl||'',
-                                });
-                                location.assign(target);return;
                             }else{
                                 throw new Error('저장된 GPT 대화에 접속하지 못했어요. 연결 주소를 유지했습니다. 로그인 후 같은 대화를 다시 열어 주세요.');
                             }
@@ -8728,11 +8874,14 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 if(payloadFailed.length)throw new Error('전송 자료를 온전히 읽지 못했어요. 지침만 전송하지 않고 중단했습니다.');
                 await refreshAsyncStorageKey(KEY.state);
                 if(jobInvalidatedByReset(job)){discardJobAfterReset(job.id);this.releaseClaim(job.id);await this.markBusy('');return;}
+                const payload=readPayload(job.id);
+                const {prompt,attachment}=this.validateDeliveryPayload(job,payload);
                 phase='composer';this.reportProgress(job,phase,'GPT 입력창 준비 중');
                 const composer=await this.waitForTurnReady(45000);if(!composer)throw new Error('ChatGPT 입력창이 준비되지 않았어요. 로그인 상태 또는 페이지 로딩을 확인해 주세요.');
-                const payload=readPayload(job.id);const prompt=payload?.jobId===job.id&&payload.prompt?`${payload.prompt}\n\n[CGC-JOB: ${job.id}]`:'';const attachment=payload?.jobId===job.id?payload.attachment:null;
-                if(!prompt)throw new Error('저장된 전송 프롬프트를 찾지 못했어요.');
-                if(attachment&&(!attachment.text||attachment.chunkReadError))throw new Error('RP 원문 TXT를 온전히 읽지 못했어요. 지침만 전송하지 않고 중단했습니다.');
+                if(await this.guardExistingDelivery(job.id)){this.releaseClaim(job.id);await this.markBusy('');return;}
+                this.cleanupHandoffMarkers();
+                const deliveryUrl=location.href;
+
                 if(this.hasComposerDraft(composer)){throw this.composerDraftBlockedError(composer);}
 
                 if(attachment?.text){
@@ -8749,16 +8898,13 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                         if(CGC_PLATFORM.android)throw attachError;
                         throw new Error(`TXT 자동 첨부에 실패했어요. 수동 붙여넣기로 전환하지 않았습니다. ${attachError?.message||attachError}`);
                     }
-                }else{
-                    phase='prompt';this.reportProgress(job,phase,'프롬프트 자동 입력 중');
-                    try{await this.fillComposerSmooth(composer,prompt);}
-                    catch(promptError){
-                        throw new Error(`프롬프트 자동 입력에 실패했어요. 수동 붙여넣기로 전환하지 않았습니다. ${promptError?.message||promptError}`);
-                    }
                 }
 
                 phase='send-ready';this.reportProgress(job,phase,'전송 버튼 준비 확인 중');
                 const send=await this.waitForSendButton(30000);if(!send)throw new Error('ChatGPT 전송 버튼이 활성화되지 않았어요. TXT 업로드가 아직 처리 중이거나 UI가 변경됐을 수 있어요.');
+                if(!this.sameTarget(location.href,deliveryUrl))throw new Error('전송 직전 GPT 대화가 바뀌어 중단했어요.');
+                if(!CGC_PLATFORM.iOS&&!CGC_PLATFORM.android&&!CGC_PLATFORM.firefox&&attachment?.text&&(!this.attachmentPreviewExists(attachment.name)||this.uploadLooksBusy()||this.uploadHasError()))throw new Error('전송 직전 TXT 첨부 완료 상태를 확인하지 못했어요.');
+                if(WebDelivery.normalize(this.getComposerText())!==WebDelivery.normalize(prompt))throw new Error('전송 대기 중 입력 내용이 바뀌어 자동 전송을 중단했어요.');
                 phase='send-click';this.reportProgress(job,phase,'자동 전송 클릭');
                 const cgcAssistantBefore=this.captureAssistantState();
                 await WebDelivery.beforeClick(job,cgcAssistantBefore);
@@ -8769,6 +8915,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                     jobTargetUrl:job.targetUrl||'',
                     targetKind:chatGptTargetKind(location.href),
                 });
+                if(!send.isConnected||send.disabled||send.getAttribute('aria-disabled')==='true'||!this.sameTarget(location.href,deliveryUrl)||WebDelivery.normalize(this.getComposerText())!==WebDelivery.normalize(prompt))throw new Error('전송 직전 입력 또는 화면이 바뀌어 중단했어요.');
                 send.click();
                 const confirmed=await this.waitForSubmissionSignal(9000,send);
                 CGC_TRACE(job.id, 'submit-after', {
@@ -8797,7 +8944,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
         },
 
         findComposer() {
-            const selectors=['#prompt-textarea','textarea[name="prompt-textarea"]','textarea[data-testid="prompt-textarea"]','div[contenteditable="true"][data-lexical-editor="true"]','main form div[contenteditable="true"]'];
+            const selectors=['[data-composer-markdown][contenteditable="true"][role="textbox"]','#prompt-textarea','textarea[name="prompt-textarea"]','textarea[data-testid="prompt-textarea"]','div[contenteditable="true"][data-lexical-editor="true"]','main form div[contenteditable="true"]'];
             for(const selector of selectors){
                 const candidates=Array.from(document.querySelectorAll(selector)).filter(isVisible);
                 if(!candidates.length)continue;
@@ -8817,11 +8964,28 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             }
             return null;
         },
-        getComposerText(composer=this.findComposer()){if(!composer)return'';if(composer instanceof HTMLTextAreaElement||composer instanceof HTMLInputElement)return String(composer.value||'');return String(composer.innerText||composer.textContent||'').replace(/\u200b/g,'');},
+        getComposerText(composer=this.findComposer()){
+            if(!composer)return'';
+            if(composer instanceof HTMLTextAreaElement||composer instanceof HTMLInputElement)return String(composer.value||'');
+            // v1.2.7: 대용량 입력창에서 innerText를 부르면 수십만 자 전체의 레이아웃을 강제한다. 이때는 textContent만 쓴다.
+            const raw=String(composer.textContent||'');
+            if(raw.length>CGC_COMPOSER_HEAVY_CHARS||(composer.childElementCount||0)>CGC_COMPOSER_HEAVY_BLOCKS)return raw.replace(/\u200b/g,'');
+            return String(composer.innerText||raw).replace(/\u200b/g,'');
+        },
+        composerHeavyState(composer=this.findComposer()){
+            // 읽기 전용. 입력창 내용을 바꾸지 않는다.
+            if(!composer)return {heavy:false,chars:0,blocks:0};
+            if(composer instanceof HTMLTextAreaElement||composer instanceof HTMLInputElement){const chars=String(composer.value||'').length;return {heavy:chars>CGC_COMPOSER_HEAVY_CHARS,chars,blocks:1};}
+            const blocks=composer.childElementCount||0,chars=String(composer.textContent||'').length;
+            return {heavy:chars>CGC_COMPOSER_HEAVY_CHARS||blocks>CGC_COMPOSER_HEAVY_BLOCKS,chars,blocks};
+        },
+        composerHeavyMessage(state){
+            return `GPT 입력창에 약 ${Number(state?.chars||0).toLocaleString()}자(문단 ${Number(state?.blocks||0).toLocaleString()}개)가 남아 있어 자동 작업을 시작하지 않았습니다. 필요한 초안을 먼저 저장한 뒤 입력창을 비워 주세요. GPT가 멈췄다면 크랙 설정 → 문제 해결을 확인하세요.`;
+        },
         composerDraftState(composer=this.findComposer()){
             const raw=this.getComposerText(composer);
             const nativeInput=composer instanceof HTMLTextAreaElement||composer instanceof HTMLInputElement;
-            const ignoreEditorScaffold=!nativeInput&&(CGC_PLATFORM.android||CGC_PLATFORM.firefox);
+            const ignoreEditorScaffold=!nativeInput;
             if(!ignoreEditorScaffold)return {hasDraft:Boolean(raw),raw,visible:raw,structuralOnly:false,rawLength:raw.length,codepoints:''};
             // ChatGPT's contenteditable editor can represent a visually empty paragraph with
             // newlines/NBSP, zero-width marks or bidi/control marks. Android and Firefox may
@@ -8839,6 +9003,8 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             return state.hasDraft;
         },
         composerDraftBlockedError(composer=this.findComposer(),message='ChatGPT 입력창에 작성 중인 내용이 있어 덮어쓰지 않았어요. 입력창을 비운 뒤 크랙에서 다시 시도해 주세요.'){
+            const heavy=this.composerHeavyState(composer);
+            if(heavy.heavy)return Object.assign(new Error(this.composerHeavyMessage(heavy)),{code:'composer_heavy'});
             if(!CGC_PLATFORM.android)return new Error(message);
             const state=this.composerDraftState(composer);
             console.warn(`[${APP.id}] Android composer draft guard blocked`,{rawLength:state.rawLength,codepoints:state.codepoints,tag:composer?.tagName||'',id:composer?.id||'',role:composer?.getAttribute?.('role')||''});
@@ -8847,34 +9013,16 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
         isGenerationBusy(){const selectors=['button[data-testid="stop-button"]','button[data-testid*="stop"]','button[aria-label="Stop generating"]','button[aria-label="Stop streaming"]','button[aria-label*="Stop"]','button[aria-label*="중지"]'];return selectors.some(selector=>Array.from(document.querySelectorAll(selector)).some(isVisible));},
         async waitForTurnReady(timeout){const started=Date.now();let stableSince=0;while(Date.now()-started<timeout){const composer=this.findComposer();const disabled=composer?.getAttribute?.('aria-disabled')==='true';const ready=Boolean(composer&&!disabled&&!this.isGenerationBusy());if(ready){if(!stableSince)stableSince=Date.now();if(Date.now()-stableSince>=450)return composer;}else stableSince=0;await sleep(180);}return null;},
 
-        async clearComposer(composer=this.findComposer()) {
-            if(!composer)return;composer.focus();
-            if(composer instanceof HTMLTextAreaElement||composer instanceof HTMLInputElement){const proto=composer instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;const setter=Object.getOwnPropertyDescriptor(proto,'value')?.set;setter?.call(composer,'');if(!setter)composer.value='';composer.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'deleteContentBackward'}));await sleep(80);return;}
-            // ProseMirror keeps state separate from visible DOM. Prefer an editor transaction via execCommand.
-            let cleared=false;
-            try{document.execCommand('selectAll',false,null);cleared=document.execCommand('delete',false,null);}catch{cleared=false;}
-            await sleep(80);
-            if(!cleared||this.hasComposerDraft(composer)){
-                try{composer.textContent='';composer.dispatchEvent(new InputEvent('beforeinput',{bubbles:true,cancelable:true,inputType:'deleteContentBackward'}));composer.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'deleteContentBackward'}));composer.dispatchEvent(new Event('change',{bubbles:true}));}catch{/* best effort */}
-            }
-            await sleep(100);
-        },
-
         findTextFileInput() {
-            const exact=document.querySelector('input#upload-files[type="file"]');
-            if(exact&&!exact.disabled)return exact;
-
-            // #upload-files가 바뀌는 빌드에서도 TXT/일반 파일 input을 우선 고른다.
-            // 이미지 전용 input을 잘못 집는 것을 막기 위해 accept 값을 점수화한다.
-            const inputs=Array.from(document.querySelectorAll('input[type="file"]')).filter(input=>!input.disabled);
+            const scope=this.composerAttachmentScope();if(!scope)return null;
             const score=input=>{
-                const accept=String(input.accept||'').toLowerCase();
-                if(/text\/plain|\.txt|text\/\*|document|application\//.test(accept))return 5;
+                const accept=String(input.getAttribute('accept')||'').toLowerCase();
                 if(!accept)return 4;
-                if(/image|video|audio/.test(accept)&&!/text|document|file|application/.test(accept))return 0;
-                return 2;
+                if(/text\/plain|\.txt|text\/\*|application\//.test(accept))return 5;
+                return 0;
             };
-            return inputs.sort((a,b)=>score(b)-score(a))[0]||null;
+            const inputs=Array.from(scope.querySelectorAll('input[type="file"]')).filter(input=>!input.disabled&&score(input)>0);
+            return inputs.find(input=>input.id==='upload-files')||inputs.sort((a,b)=>score(b)-score(a))[0]||null;
         },
 
         getPageConstructor(name) {
@@ -8909,15 +9057,25 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
         },
 
         composerAttachmentScope() {
-            const composer=this.findComposer();
-            return composer?.closest?.('form')
-                || composer?.closest?.('[data-testid*="composer"]')
-                || document.querySelector('main form')
-                || document.querySelector('main')
-                || document.body;
+            const composer=this.findComposer();if(!composer)return null;
+            // Current UI has no form. Pick the nearest shell containing its native file inputs.
+            for(let node=composer.parentElement;node&&node!==document.body;node=node.parentElement){
+                if(node.querySelector('input[type="file"]'))return node;
+                if(node.matches('form'))return node;
+            }
+            return composer.closest('[data-composer-surface-variant],[data-type="unified-composer"],#composer-background,[data-testid*="composer"]')||composer.parentElement;
         },
 
-        getAttachmentSignalSnapshot() {
+        attachmentUiNodes(){
+            const scope=this.composerAttachmentScope(),composer=this.findComposer();if(!scope)return [];
+            return Array.from(scope.querySelectorAll('[data-testid*="attachment"],[data-testid*="file"],[role="group"],[aria-label],[title]')).filter(node=>{
+                if(node===composer||composer?.contains(node)||node.contains(composer)||!isVisible(node)||node.tagName==='INPUT')return false;
+                const label=String(node.getAttribute('aria-label')||'');
+                return !/^(?:add |upload |attach |ファイルを追加|파일 등 추가|파일 추가|파일 업로드|파일 첨부|사진 첨부)/i.test(label);
+            });
+        },
+
+        getAttachmentSignalSnapshotLegacy() {
             const scope=this.composerAttachmentScope();const nodes=new Set();const labels=[];
             const selectors=[
                 '[role="group"][aria-label]',
@@ -8944,7 +9102,14 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             return {count:nodes.size,labels,text,textFileHint};
         },
 
-        attachmentPreviewExists(fileName,beforeCount=-1) {
+        getAttachmentSignalSnapshot() {
+            if(CGC_PLATFORM.iOS||CGC_PLATFORM.android||CGC_PLATFORM.firefox)return this.getAttachmentSignalSnapshotLegacy();
+            const labels=this.attachmentUiNodes().map(node=>[node.getAttribute('aria-label'),node.getAttribute('title'),String(node.textContent||'').slice(0,2048)].filter(Boolean).join(' ').replace(/\s+/g,' ').trim())
+                .filter(label=>/\.txt(?:\b|$)|remove (?:file|attachment)|(?:파일|첨부파일) (?:제거|삭제)|텍스트 파일|text file/i.test(label));
+            return {count:labels.length,labels,text:labels.join(' '),textFileHint:false};
+        },
+
+        attachmentPreviewExistsLegacy(fileName,beforeCount=-1) {
             const name=String(fileName||'').toLowerCase();
             const state=this.getAttachmentSignalSnapshot();
             if(name&&state.labels.some(label=>String(label).toLowerCase().includes(name)))return true;
@@ -8952,13 +9117,33 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             return false;
         },
 
-        uploadHasError() {
+        attachmentPreviewExists(fileName,beforeCount=-1) {
+            if(CGC_PLATFORM.iOS||CGC_PLATFORM.android||CGC_PLATFORM.firefox)return this.attachmentPreviewExistsLegacy(fileName,beforeCount);
+            const name=String(fileName||'').toLowerCase();if(!name)return false;
+            if(this.getAttachmentSignalSnapshot().labels.some(label=>label.toLowerCase().includes(name)))return true;
+            const scope=this.composerAttachmentScope(),composer=this.findComposer();if(!scope)return false;
+            return Array.from(scope.querySelectorAll('span,p,div')).some(node=>node!==composer&&!composer?.contains(node)&&!node.contains(composer)&&node.children.length===0&&isVisible(node)&&String(node.textContent||'').trim().toLowerCase()===name);
+        },
+
+        attachmentStatusText(){
+            const scope=this.composerAttachmentScope(),composer=this.findComposer();if(!scope)return '';
+            const nodes=new Set([...this.attachmentUiNodes(),...scope.querySelectorAll('[role="alert"],[role="status"]')]);
+            return Array.from(nodes).filter(node=>node!==composer&&!composer?.contains(node)&&!node.contains(composer))
+                .map(node=>String(node.textContent||'').slice(0,2048)).join(' ');
+        },
+
+        uploadHasErrorLegacy() {
             const scope=this.composerAttachmentScope();if(!scope)return false;
             const text=String(scope.textContent||'').replace(/\s+/g,' ');
             return /upload failed|failed to upload|file.*error|업로드.*실패|파일.*오류|첨부.*실패/i.test(text);
         },
 
-        uploadLooksBusy() {
+        uploadHasError() {
+            if(CGC_PLATFORM.iOS||CGC_PLATFORM.android||CGC_PLATFORM.firefox)return this.uploadHasErrorLegacy();
+            return /upload failed|failed to upload|file.*error|업로드.*실패|파일.*오류|첨부.*실패/i.test(this.attachmentStatusText());
+        },
+
+        uploadLooksBusyLegacy() {
             const scope=this.composerAttachmentScope();if(!scope)return false;
             const busySelectors=[
                 '[aria-busy="true"]',
@@ -8971,6 +9156,13 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             return /uploading|processing file|파일 업로드 중|업로드 중|파일 처리 중/i.test(text);
         },
 
+        uploadLooksBusy() {
+            if(CGC_PLATFORM.iOS||CGC_PLATFORM.android||CGC_PLATFORM.firefox)return this.uploadLooksBusyLegacy();
+            const scope=this.composerAttachmentScope();if(!scope)return false;
+            if(Array.from(scope.querySelectorAll('[aria-busy="true"],[role="progressbar"],[data-testid*="upload"][data-state="loading"]')).some(isVisible))return true;
+            return /uploading|processing file|파일 업로드 중|업로드 중|파일 처리 중/i.test(this.attachmentStatusText());
+        },
+
         inputContainsFile(input,file) {
             try{return Array.from(input?.files||[]).some(item=>item.name===file.name&&(item.size===file.size||!file.size));}catch{return false;}
         },
@@ -8981,9 +9173,8 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             const evaluate=()=>{
                 if(this.uploadHasError())return {done:true,value:false};
                 const preview=this.attachmentPreviewExists(fileName,beforeCount);
-                const inputPresent=!!(input&&file&&this.inputContainsFile(input,file));
-                const attachmentOnlySendReady=inputPresent&&!this.getComposerText(this.findComposer())&&!!this.findSendButton();
-                const ready=preview||attachmentOnlySendReady;
+                // A FileList assignment or enabled Send button is not server/UI acceptance.
+                const ready=preview||((CGC_PLATFORM.iOS||CGC_PLATFORM.android||CGC_PLATFORM.firefox)&&input&&file&&this.inputContainsFile(input,file)&&!this.getComposerText(this.findComposer())&&!!this.findSendButton());
                 if(ready&&!this.uploadLooksBusy())return {done:true,value:true};
                 return {done:false,value:false};
             };
@@ -8992,13 +9183,14 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             if(immediate.done)return immediate.value;
 
             return await new Promise(resolve=>{
-                let finished=false,observer=null,timer=0,fallback=0;
+                let finished=false,observer=null,timer=0,fallback=0,scheduled=0;
                 const finish=value=>{
                     if(finished)return;
                     finished=true;
                     try{observer?.disconnect();}catch{}
                     if(timer)clearTimeout(timer);
                     if(fallback)clearInterval(fallback);
+                    if(scheduled)clearTimeout(scheduled);
                     resolve(!!value);
                 };
                 const check=()=>{
@@ -9009,7 +9201,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
 
                 const scope=this.composerAttachmentScope()||document.body;
                 try{
-                    observer=new MutationObserver(check);
+                    observer=new MutationObserver(()=>{if(!scheduled)scheduled=setTimeout(()=>{scheduled=0;check();},100);});
                     observer.observe(scope,{
                         childList:true,
                         subtree:true,
@@ -9105,95 +9297,6 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 }
                 return await this.waitForAttachmentReady(file.name,before.count,10000);
             }catch(error){console.warn(`[${APP.id}] file-drop fallback failed`,error);return false;}
-        },
-
-        async tryBigPasteTxtAttachment(composer,attachment) {
-            const target=this.findComposer()||composer;if(!target||this.hasComposerDraft(target))return false;target.focus();
-            const before=this.getAttachmentSignalSnapshot();
-            let event=null;
-            try{
-                const dt=this.makePageDataTransfer();dt.setData('text/plain',attachment.text);
-                const ClipboardCtor=this.getPageConstructor('ClipboardEvent');
-                if(typeof ClipboardCtor==='function'){
-                    event=new ClipboardCtor('paste',{bubbles:true,cancelable:true,composed:true,clipboardData:dt});
-                    const pasted=event.clipboardData?.getData?.('text/plain');
-                    if(pasted!==String(attachment.text))event=null;
-                }
-            }catch{event=null;}
-
-            if(!event){
-                try{
-                    const ClipboardCtor=this.getPageConstructor('ClipboardEvent')||ClipboardEvent;
-                    event=new ClipboardCtor('paste',{bubbles:true,cancelable:true,composed:true});
-                    Object.defineProperty(event,'clipboardData',{value:{
-                        types:['text/plain'],
-                        getData:type=>type==='text/plain'?String(attachment.text):''
-                    }});
-                }catch{return false;}
-            }
-
-            target.dispatchEvent(event);
-
-            // 예전처럼 220ms마다 기다리며 확인하지 않는다. 붙여넣기→TXT 변환으로 composer DOM이 바뀌는
-            // 바로 그 순간 재검사하고, 카드가 생겼으며 processing 표시가 사라지면 즉시 true를 반환한다.
-            return await new Promise(resolve=>{
-                let finished=false,observer=null,timer=0,fallback=0;
-                let sawLargeBody=false,clearing=false;
-                const finish=async value=>{
-                    if(finished)return;
-                    finished=true;
-                    try{observer?.disconnect();}catch{}
-                    if(timer)clearTimeout(timer);
-                    if(fallback)clearInterval(fallback);
-                    if(!value&&sawLargeBody){
-                        const current=this.findComposer()||target;
-                        if(this.getComposerText(current))await this.clearComposer(current);
-                    }
-                    resolve(!!value);
-                };
-                const check=async()=>{
-                    if(finished||clearing)return;
-                    if(this.uploadHasError())return finish(false);
-
-                    const current=this.findComposer()||target;
-                    const body=this.getComposerText(current);
-                    const signal=this.getAttachmentSignalSnapshot();
-                    const appeared=this.attachmentPreviewExists(attachment.name,before.count)
-                        || (!before.textFileHint&&signal.textFileHint);
-                    const large=body.length>Math.min(6000,Math.floor(attachment.text.length*.28));
-                    if(large)sawLargeBody=true;
-
-                    if(!appeared)return;
-
-                    // TXT 카드가 생긴 뒤 원문 본문이 아직 같이 남아 있으면 중복 방지를 위해 즉시 제거한다.
-                    if(large){
-                        clearing=true;
-                        try{
-                            const latest=this.findComposer()||current;
-                            if(this.getComposerText(latest).length>Math.min(3000,Math.floor(attachment.text.length*.12)))await this.clearComposer(latest);
-                        }finally{clearing=false;}
-                    }
-
-                    // 카드가 있고 ChatGPT가 더 이상 업로드/파일 처리 중이 아니면 추가 안정화 sleep 없이 바로 진행한다.
-                    if(!this.uploadLooksBusy())return finish(true);
-                };
-
-                const scope=this.composerAttachmentScope()||document.body;
-                try{
-                    observer=new MutationObserver(()=>{void check();});
-                    observer.observe(scope,{
-                        childList:true,
-                        subtree:true,
-                        characterData:true,
-                        attributes:true,
-                        attributeFilter:['aria-busy','aria-label','aria-disabled','disabled','data-state','data-testid']
-                    });
-                }catch{/* polling safety net below */}
-
-                fallback=setInterval(()=>{void check();},500);
-                timer=setTimeout(()=>{void finish(false);},24000);
-                queueMicrotask(()=>{void check();});
-            });
         },
 
         androidAttachmentScope(){
@@ -9347,7 +9450,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             const emit=(request,kind,data={})=>document.dispatchEvent(new CustomEvent(config.response,{detail:JSON.stringify({version:1,token:config.token,id:request?.id||'',jobId:request?.jobId||'',kind,data})}));
             const fail=(code,message)=>Object.assign(new Error(message),{code});
             const visible=node=>Boolean(node?.isConnected&&node.getClientRects().length&&getComputedStyle(node).visibility!=='hidden'&&getComputedStyle(node).display!=='none');
-            const composer=()=>Array.from(document.querySelectorAll('#prompt-textarea,textarea[name="prompt-textarea"],textarea[data-testid="prompt-textarea"],div[contenteditable="true"][data-lexical-editor="true"],main form div[contenteditable="true"]')).find(visible)||null;
+            const composer=()=>Array.from(document.querySelectorAll('[data-composer-markdown][contenteditable="true"][role="textbox"],#prompt-textarea,textarea[name="prompt-textarea"],textarea[data-testid="prompt-textarea"],div[contenteditable="true"][data-lexical-editor="true"],main form div[contenteditable="true"]')).find(visible)||null;
             const scope=()=>{const el=composer();return el?.closest('[data-type="unified-composer"],#composer-background')||el?.closest('form')?.parentElement||el?.parentElement||null;};
             const hasDraft=()=>{const el=composer();return !el||Boolean(String('value' in el?el.value:(el.innerText||el.textContent||'')).replace(/[\s\u034f\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g,''));};
             const exactInput=()=>document.querySelector('input#upload-files[type="file"]');
@@ -9683,11 +9786,39 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             console.warn('[CGC-FX] Firefox upload diagnostic',this._firefoxLastUploadDiagnostic);
             throw Object.assign(new Error(`Firefox TXT 자동 첨부 실패 · ${direct?.reason||'ATTACH_ERROR'} ${diag}`),{code:direct?.reason||'ATTACH_ERROR'});
         },
+        async attachDesktopTextPayload(attachment,job){
+            // One native file event per job. Never materialize the RP body inside ProseMirror.
+            const path=location.pathname;
+            let input=this.findTextFileInput();
+            const started=Date.now();
+            while(!input&&Date.now()-started<8000){await sleep(200);if(location.pathname!==path)throw new Error('GPT 대화가 바뀌어 첨부를 중단했어요.');input=this.findTextFileInput();}
+            if(!input)throw new Error('TXT를 받을 파일 입력 요소가 없어요. GPT 파일 첨부 메뉴를 확인해 주세요.');
+            if(this.hasComposerDraft())throw this.composerDraftBlockedError();
+            const before=this.getAttachmentSignalSnapshot();
+            if(before.count||this.uploadLooksBusy()||input.files?.length)throw new Error('기존 첨부 또는 처리 중인 파일이 있어요. 먼저 파일 상태를 확인해 주세요.');
+            const fenceKey=job?.id?'CGC_TXT_ATTEMPT_V123_'+job.id:'';
+            if(fenceKey){
+                try{if(sessionStorage.getItem(fenceKey))throw new Error('이 작업은 이미 TXT 첨부를 시도했어요. 파일 상태를 확인한 뒤 크랙에서 새 요청으로 재시도해 주세요.');}
+                catch(error){throw error;}
+            }
+            const file=this.makePageTextFile(attachment),dt=this.makePageDataTransfer(file);
+            input.files=dt.files;
+            if(!this.inputContainsFile(input,file))throw new Error('TXT 파일을 입력 요소에 전달하지 못했어요.');
+            // Store before dispatch: uncertain/late acceptance must never start a second upload.
+            if(fenceKey){try{sessionStorage.setItem(fenceKey,'dispatched');}catch{input.value='';throw new Error('중복 첨부 방지 정보를 저장하지 못했어요.');}}
+            input.dispatchEvent(this.makePageEvent('change'));
+            const ready=await this.waitForAttachmentReady(file.name,before.count,30000);
+            if(location.pathname!==path)throw new Error('첨부 중 GPT 대화가 바뀌어 자동 전송을 중단했어요.');
+            if(!ready)throw Object.assign(new Error('TXT 첨부 완료를 30초 안에 확인하지 못했어요. 원문 붙여넣기와 중복 업로드를 중단했습니다. GPT 파일 카드 상태를 확인해 주세요.'),{code:'attachment_pending'});
+            return true;
+        },
+
         async attachTextPayloadAsTxt(composer,attachment,job=null) {
             if(!attachment?.text)throw new Error('TXT로 첨부할 자료가 비어 있어요.');
             if(this.hasComposerDraft(composer))throw this.composerDraftBlockedError(composer,'GPT 입력창에 기존 내용이 있어 TXT 첨부를 중단했어요.');
             if(CGC_PLATFORM.android)return this.attachAndroidTextPayload(composer,attachment,job);
             if(CGC_PLATFORM.firefox)return this.attachFirefoxTextPayload(composer,attachment,job);
+            if(!CGC_PLATFORM.iOS&&!CGC_PLATFORM.android)return this.attachDesktopTextPayload(attachment,job);
             const initial=this.getAttachmentSignalSnapshot();
             if(initial.count>0)throw new Error('ChatGPT 입력창에 기존 첨부파일이 있어요. 기존 첨부를 비운 뒤 다시 시도해 주세요.');
             const attempt=async run=>{
@@ -9701,38 +9832,43 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 if(this.hasComposerDraft(this.findComposer()||composer))throw this.composerDraftBlockedError(this.findComposer()||composer);
                 return false;
             };
-            const large=String(attachment.text).length>=10000;
             if(CGC_PLATFORM.mobile&&await attempt(()=>this.tryDirectTxtAttachment(attachment)))return true;
-            if(!CGC_PLATFORM.mobile&&large&&await attempt(()=>this.tryBigPasteTxtAttachment(composer,attachment)))return true;
             if(!CGC_PLATFORM.mobile&&await attempt(()=>this.tryDirectTxtAttachment(attachment)))return true;
-            if(CGC_PLATFORM.mobile&&large&&await attempt(()=>this.tryBigPasteTxtAttachment(composer,attachment)))return true;
             if(await attempt(()=>this.tryFilePasteAttachment(composer,attachment)))return true;
             if(!CGC_PLATFORM.iOS&&await attempt(()=>this.tryFileDropAttachment(composer,attachment)))return true;
-            if(!large&&await attempt(()=>this.tryBigPasteTxtAttachment(composer,attachment)))return true;
             throw new Error('TXT 자동 첨부를 확인하지 못했어요. GPT 입력창과 연결 상태를 확인해 주세요.');
         },
 
         async fillComposerSmooth(composer,text) {
+            text=String(text??'');
+            // Validate before focus, clear, execCommand, DOM writes or input events. A stale
+            // payload must never put the TXT body into ProseMirror's main-thread serializer.
+            if(text.length>MAX_INLINE_COMPOSER_CHARS)throw Object.assign(new Error('본문 자동 입력이 '+text.length.toLocaleString()+'자로 TXT 기준을 초과했어요. 입력창 과부하를 막기 위해 중단했습니다. 크랙을 새로고침한 뒤 TXT 작업을 다시 만들어 주세요.'),{code:'inline_payload_too_large'});
+            if(this.hasComposerDraft(composer))throw this.composerDraftBlockedError(composer,'ChatGPT 입력창에 기존 내용이 남아 있어 자동 삽입을 중단했어요.');
             composer.focus();
             if(composer instanceof HTMLTextAreaElement||composer instanceof HTMLInputElement){const proto=composer instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;const setter=Object.getOwnPropertyDescriptor(proto,'value')?.set;setter?.call(composer,text);if(!setter)composer.value=text;composer.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:text}));composer.dispatchEvent(new Event('change',{bubbles:true}));await sleep(100);if(!await this.waitForComposerExactText(text,5000))throw new Error('프롬프트 입력이 끝까지 반영되지 않았어요.');return;}
             if(this.hasComposerDraft(composer))throw this.composerDraftBlockedError(composer,'ChatGPT 입력창에 기존 내용이 남아 있어 자동 삽입을 중단했어요.');
-            // Prefer execCommand: it updates ProseMirror's internal state, unlike DOM-only textContent writes on some builds.
-            let inserted=false;
-            try{inserted=document.execCommand('insertText',false,text);}catch{inserted=false;}
+            // One insertion only. A failed/partial write or concurrent user edit must never
+            // trigger selectAll/delete, a DOM rewrite, or a second insertion.
+            if(document.activeElement!==composer&&!composer.contains(document.activeElement))throw new Error('GPT 입력창 포커스를 확인하지 못해 자동 입력을 중단했어요.');
+            try{document.execCommand('insertText',false,text);}catch{throw new Error('GPT 입력창이 자동 입력을 받지 못했어요. 기존 내용은 유지했습니다.');}
             await sleep(140);
-            if(!inserted||WebDelivery.normalize(this.getComposerText(composer))!==WebDelivery.normalize(text)){
-                await this.clearComposer(composer);composer.focus();
-                try{composer.textContent=text;composer.dispatchEvent(new InputEvent('beforeinput',{bubbles:true,cancelable:true,inputType:'insertText',data:text}));composer.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:text}));composer.dispatchEvent(new Event('change',{bubbles:true}));}catch{/* final DOM fallback */}
-                await sleep(140);
-            }
+            if(!composer.isConnected||WebDelivery.normalize(this.getComposerText(composer))!==WebDelivery.normalize(text))throw new Error('프롬프트 입력 결과가 달라 중단했어요. 입력창 내용은 지우거나 다시 쓰지 않았습니다.');
             if(!(await this.waitForComposerExactText(text,5000)))throw new Error('프롬프트 입력이 끝까지 반영되지 않았어요.');
         },
         async waitForComposerExactText(expected,timeout){const started=Date.now();while(Date.now()-started<timeout){if(WebDelivery.normalize(this.getComposerText())===WebDelivery.normalize(expected))return true;await sleep(140);}return false;},
 
         findSendButton() {
-            const selectors=['#composer-submit-button','button[data-testid="send-button"]','button[data-testid*="send-button"]','button[aria-label="Send prompt"]','button[aria-label="Send message"]','main form button[type="submit"]'];
-            for(const selector of selectors){for(const button of document.querySelectorAll(selector)){if(!isVisible(button)||button.disabled||button.getAttribute('aria-disabled')==='true')continue;const label=`${button.getAttribute('aria-label')||''} ${button.getAttribute('data-testid')||''}`;if(/stop|중지/i.test(label))continue;return button;}}return null;
+            const scope=this.composerAttachmentScope();if(!scope)return null;
+            const selectors=['#composer-submit-button','button[data-testid="send-button"]','button[data-testid*="send-button"]','button[aria-label="Send prompt"]','button[aria-label="Send message"]','button[aria-label="보내기"][type="submit"]','button[aria-label="Send"][type="submit"]','form button[type="submit"]'];
+            for(const selector of selectors)for(const button of scope.querySelectorAll(selector)){
+                if(!isVisible(button)||button.disabled||button.getAttribute('aria-disabled')==='true')continue;
+                if(/stop|중지/i.test((button.getAttribute('aria-label')||'')+' '+(button.getAttribute('data-testid')||'')))continue;
+                return button;
+            }
+            return null;
         },
+
         async waitForSendButton(timeout){const started=Date.now();while(Date.now()-started<timeout){const button=this.findSendButton();if(button)return button;await sleep(180);}return null;},
         async waitForSubmissionSignal(timeout,clickedButton=null){
             const started=Date.now();while(Date.now()-started<timeout){
@@ -9755,6 +9891,8 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
         },
 
         getAssistantRoots() {
+            const current=WebDelivery.messageRoots().filter(root=>WebDelivery.messageRole(root)==='assistant'&&isVisible(root));
+            if(current.length)return current;
             const found=[];const seen=new Set();
             const selectors=['[data-message-author-role="assistant"]','article[data-turn="assistant"]','[data-testid^="conversation-turn-"][data-turn="assistant"]'];
             for(const sel of selectors)for(const el of document.querySelectorAll(sel)){if(!seen.has(el)&&isVisible(el)){seen.add(el);found.push(el);}}
@@ -9767,7 +9905,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             return found;
         },
         assistantRootText(root){
-            if(!root)return'';const md=root.querySelector('.markdown,.prose,[data-message-author-role="assistant"]')||root;
+            if(!root)return'';const md=root.querySelector('.markdown,.prose,[data-message-author-role="assistant"],[data-chatgpt-selection-message-id]')||root;
             const walk=node=>{if(node.nodeType===3)return node.textContent||'';if(node.nodeType!==1)return'';const tag=node.tagName?.toLowerCase();if(['button','script','style','svg'].includes(tag))return'';if(tag==='br')return'\n';const text=[...node.childNodes].map(walk).join('');if(tag==='li')return'\n- '+text.trim()+'\n';if(['p','div','pre','ul','ol','blockquote','h1','h2','h3','h4','section'].includes(tag))return'\n'+text+'\n';return text;};
             return cleanText(md.childNodes?.length?walk(md):(md.innerText||md.textContent||''));
         },
@@ -9947,7 +10085,9 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 }catch(error){console.warn('[cgc] completion retry',error);schedule(5000);}
                 finally{checking=false;}
             };
-            try{observer=new MutationObserver(()=>schedule(350));observer.observe(document.querySelector('main')||document.body||document.documentElement,
+            // v1.2.7: 입력창(편집 영역) 안의 변화는 답변 완료와 무관하다. 타자마다 대화 전체를 다시 읽지 않는다.
+            const outsideEditor=record=>{const node=record.target;const el=node&&node.nodeType===1?node:node?.parentElement;return !el?.closest?.('[contenteditable="true"],textarea');};
+            try{observer=new MutationObserver(records=>{if(records.some(outsideEditor))schedule(350);});observer.observe(document.querySelector('main')||document.body||document.documentElement,
                 {childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['data-is-streaming','data-message-status','aria-busy']});}catch{}
             document.addEventListener('visibilitychange',onWake,true);window.addEventListener('pageshow',onWake,true);window.addEventListener('focus',onWake,true);
             this.completionWatches.set(job.id,{kick:()=>schedule(80),cleanup});schedule(350);
@@ -10177,10 +10317,17 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             // ChatGPT must hydrate the one-time handoff before claiming it. Crack hydrates in the
             // background while its toolbar observer waits for a genuine composer mount point.
             if(isChatGPT){
-                showStartupStatus('시작됨 · 작업 확인 중');
+                CgcStartup.mark('entry',{hasJob:Boolean(CGC_EARLY_JOB_MARKER),documentState:document.readyState});
+                if(!await CgcStartup.waitUntilHostReady())return;
+                CgcStartup.active=true;
+                CgcStartup.mark('storage-start');
                 await bootstrapStorage();
+                CgcStartup.mark('storage-ready');
                 installSettingsCacheInvalidation();
+                CgcStartup.mark('bridge-start');
                 await ChatGPTBridge.init();
+                CgcStartup.mark('bridge-ready');
+                CgcStartup.active=false;
                 showStartupStatus('');
             }else if(isCrack){
                 await bootstrapStorage();
@@ -10195,6 +10342,6 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             }).catch(error=>console.warn(`[${APP.id}] async storage background warm failed`,error));
             if(isCrack)setTimeout(()=>{void pruneExpiredTransportKeys().catch(error=>console.warn(`[${APP.id}] cleanup skipped`,error));},8000);
             console.info(`[${APP.id}] ${APP.version} booted`,{isCrack,isChatGPT,asyncGmStorage:CGC_ASYNC_GM_STORAGE});
-        }catch(error){showStartupError(error);}
+        }catch(error){CgcStartup.mark('startup-error',{name:String(error?.name||'Error')});CgcStartup.active=false;showStartupError(error);}
     })();
 })();
