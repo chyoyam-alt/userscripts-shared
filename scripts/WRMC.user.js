@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         🪽 Wish RP Manager Core
 // @namespace    local.rp.context.manager
-// @version      1.1.2
+// @version      1.3.0
 // @description  Crack RP용 컨텍스트 주입·인지·자동 장기기억·자료집·전체 재구축을 하나로 관리합니다.
 // @author       User
 // @license      All Rights Reserved
 // @match        https://crack.wrtn.ai/stories/*/episodes/*
 // @match        https://crack.wrtn.ai/characters/*/chats/*
 // @match        https://crack.wrtn.ai/u/*/c/*
+// @connect      app.koofr.net
 // @connect      crack-api.wrtn.ai
 // @connect      contents-api.wrtn.ai
 // @connect      generativelanguage.googleapis.com
@@ -44,7 +45,7 @@
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '1.1.2';
+  const SCRIPT_VERSION = '1.3.0';
   const RUNTIME_KEY = '__WISH_RP_MANAGER_V1__';
   const RELOAD_GUARD_KEY = `WISH_RP_clean_reload_${SCRIPT_VERSION}`;
   const previousRuntime = window[RUNTIME_KEY];
@@ -4434,7 +4435,67 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
       };
       tx.oncomplete=resolve;tx.onerror=tx.onabort=()=>reject(tx.error||new Error('기억 변경 전 이력 저장 실패'));
     });
+    MemoryDiff.invalidate(room.chatId);
   }
+
+  // 정리 전후 비교: 기억 변경 직전마다 이미 저장되는 복구용 스냅숏(방당 최근 10개)을 읽기만 합니다. AI·네트워크 호출 없음.
+  const MemoryDiff=(()=>{
+    const REASON={'unified-before-commit':'기억 정리','unified-baseline':'정리 기준점','manual-ai-update':'지금 갱신','rebuild-231-before-apply':'전체 재구축 적용','manual-memory-baseline':'자동 시작점 설정',update:'기억 변경'};
+    const cache=new WeakMap(),loading=new WeakMap(),memo=new WeakMap();let revision=0;
+    const slot=(r,id)=>String(r?.slots?.find(s=>s.id===id)?.content||'');
+    const current=r=>({state:slot(r,'currentState'),log:slot(r,'logSummary')});
+    const snap=e=>({state:String(e?.currentState||''),log:String(e?.logSummary||'')});
+    function list(room){
+      return new Promise((resolve,reject)=>{
+        if(!state.db||!room?.chatId){resolve([]);return;}
+        const revisionAtStart=revision,prefix='memory:'+room.chatId+':';
+        const q=state.db.transaction(APP.historyStoreName,'readonly').objectStore(APP.historyStoreName).getAll(IDBKeyRange.bound(prefix,prefix+'\uffff'));
+        q.onsuccess=()=>{const rows=(q.result||[]).filter(x=>x&&x.chatId===room.chatId&&typeof x.currentState==='string').sort((a,b)=>Number(b.at)-Number(a.at)).slice(0,10).map(({id,chatId,at,reason,currentState,logSummary})=>({id,chatId,at,reason,currentState,logSummary}));if(revisionAtStart!==revision){resolve(list(room));return;}if(revisionAtStart===revision)cache.set(room,{revision,entry:rows[0]||null});resolve(rows);};
+        q.onerror=()=>reject(q.error||Error('정리 기록을 읽지 못했습니다.'));
+      });
+    }
+    function latest(room){
+      if(!room?.chatId||!state.db)return null;
+      const c=cache.get(room);if(c?.revision===revision)return c.entry;
+      if(!loading.has(room)){
+        const rev=revision;loading.set(room,rev);
+        list(room).catch(()=>{if(rev===revision)cache.set(room,{revision,entry:null});}).finally(()=>{
+          loading.delete(room);if(state.currentRoom===room)WUI?.paint?.();
+        });
+      }
+      return null;
+    }
+    function invalidate(){revision++;}
+    function uniq(rows){const seen=new Map();return rows.map(r=>{const n=(seen.get(r.key)||0)+1;seen.set(r.key,n);return n>1?{...r,key:r.key+'#'+n}:r;});}
+    function stateRows(text){const s=parseCurrentStateSections(text);if(s.length)return uniq(s.map(x=>({key:'s:'+x.title,title:x.title,body:String(x.body||'').trim()})));const t=String(text||'').trim();return t?[{key:'s:__raw',title:'현재상태 원문',body:t}]:[];}
+    function logRows(text){const rows=uniq(parseDatedLogBlocks(text).map(b=>({key:'l:'+(b.dateKey||'')+'|'+String(b.events||b.heading||'').trim(),title:b.titleText||b.heading||'날짜로그',body:String(b.body||'').trim()})));return rows.length?rows:String(text||'').trim()?[{key:'l:__raw',title:'날짜로그 원문',body:String(text).trim()}]:[];}
+    function diffRows(a,b){const A=new Map(a.map(r=>[r.key,r])),B=new Set(b.map(r=>r.key)),rows=[];
+      for(const r of b){const o=A.get(r.key);if(!o)rows.push({kind:'add',title:r.title,after:r.body});else if(o.body!==r.body)rows.push({kind:'chg',title:r.title,before:o.body,after:r.body});}
+      for(const r of a)if(!B.has(r.key))rows.push({kind:'del',title:r.title,before:r.body});
+      return {rows,same:b.filter(r=>A.has(r.key)&&A.get(r.key).body===r.body).length};}
+    const count=rows=>({add:rows.filter(r=>r.kind==='add').length,chg:rows.filter(r=>r.kind==='chg').length,del:rows.filter(r=>r.kind==='del').length});
+    function compare(before,after){
+      const s=diffRows(stateRows(before.state),stateRows(after.state)),l=diffRows(logRows(before.log),logRows(after.log));
+      return {state:s,log:l,counts:{state:count(s.rows),log:count(l.rows)},total:s.rows.length+l.rows.length};
+    }
+    function summary(room,entry){
+      const cur=current(room),m=memo.get(room);
+      if(m&&m.revision===revision&&m.id===entry.id&&m.state===cur.state&&m.log===cur.log)return m.result;
+      const next={revision,id:entry.id,state:cur.state,log:cur.log,result:null};memo.set(room,next);
+      const run=()=>{
+        if(memo.get(room)!==next||next.revision!==revision||state.currentRoom!==room){if(memo.get(room)===next)memo.delete(room);return;}
+        const live=current(room);if(live.state!==cur.state||live.log!==cur.log){memo.delete(room);return;}
+        try{next.result=compare(snap(entry),cur);}catch{next.result={total:0};}
+        WUI?.paint?.();
+      };
+      if(typeof requestIdleCallback==='function')requestIdleCallback(run,{timeout:1200});else setTimeout(run,0);
+      return null;
+    }
+    const seenKey=room=>'wish-memdiff-seen:'+room.chatId;
+    function seen(room){try{return localStorage.getItem(seenKey(room))||'';}catch{return '';}}
+    function dismiss(room,entry){if(!room)return;const e=entry||latest(room);if(!e)return;try{localStorage.setItem(seenKey(room),e.id);}catch{}}
+    return {REASON,list,latest,invalidate,compare,summary,seen,dismiss,current,snap};
+  })();
 
   function autoMemoryState(room) {
     normalizeRoomSlots(room);
@@ -7595,6 +7656,90 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
   function pruneLocalHistoryBackup(backup,keepRoomIds) {return coreBackupData(backup,keepRoomIds);}
 
 function openDefaultExtraPresetDialog(room){return WUIOpenPromise('presets',{wishRoom:room,draft:{list:structuredClone(loadDefaultExtraPreset().items).map(p=>({...p,ret:String(p.retentionTurns)}))}});}
+  // Optional manual storage adapter. No timers, startup requests or shared server.
+  const WishKoofr=(()=>{
+    const KEY='wish-core-koofr-temp-v1',BASE='https://app.koofr.net/dav/Koofr/',FOLDER=BASE+'Wish-Core-Backups/';
+    const FILE=/^wish-core_\d{13}_\d+rooms_[a-f0-9-]{36}\.json$/;
+    let busy=false,rows=[],error='',status='',account='';
+    const config=()=>{try{const x=GM_getValue(KEY,{});return {email:String(x.email||''),password:String(x.password||'')};}catch{return {email:'',password:''};}};
+    const ready=c=>!!c.email&&!!c.password;
+    const identity=c=>c.email+'\n'+c.password;
+    const view=()=>{const c=config();if(account!==identity(c)){rows=[];account=identity(c);}return {ready:ready(c),device:'Koofr · 개인 저장소',enc:false,list:rows,busy,loading:false,error,last:status};};
+    const safeFile=id=>{if(!FILE.test(String(id)))throw Error('Wish 백업 파일명이 아닙니다.');return FOLDER+id;};
+    function request(c,method,url,data,headers={}){
+      if(!ready(c))throw Error('Koofr 이메일과 앱 비밀번호를 입력해 주세요.');
+      if(!url.startsWith(BASE))throw Error('허용되지 않은 저장소 주소입니다.');
+      return new Promise((resolve,reject)=>{
+        const auth=btoa(Array.from(new TextEncoder().encode(c.email+':'+c.password),b=>String.fromCharCode(b)).join(''));
+        let handle,done=false;const fail=e=>{if(!done){done=true;reject(e);}};
+        const opts={method,url,data,headers:{Authorization:'Basic '+auth,...headers},anonymous:true,redirect:'error',timeout:60000,
+          onload:r=>{if(done)return;if(r.finalUrl&&new URL(r.finalUrl).origin!=='https://app.koofr.net')return fail(Error('저장소 리디렉션을 차단했습니다.'));done=true;resolve(r);},
+          onerror:()=>fail(Error('Koofr 연결 실패 · 확장 프로그램의 app.koofr.net 접근 권한과 WebDAV 지원을 확인해 주세요.')),
+          ontimeout:()=>fail(Error('Koofr 응답 시간이 초과됐습니다. 목록을 확인한 뒤 다시 시도해 주세요.')),
+          onabort:()=>fail(Error('Koofr 요청이 취소됐습니다.'))};
+        try{if(typeof GM_xmlhttpRequest==='function')handle=GM_xmlhttpRequest(opts);else if(typeof GM!=='undefined'&&GM.xmlHttpRequest){handle=GM.xmlHttpRequest(opts);handle?.catch?.(()=>fail(Error('확장 프로그램이 WebDAV 요청을 처리하지 못했습니다.')));}else fail(Error('GM 네트워크 기능이 없는 확장 프로그램입니다.'));}catch{fail(Error('확장 프로그램이 WebDAV 요청을 처리하지 못했습니다.'));}
+      });
+    }
+    function check(r,allowed=[200,207,201,204]){if(!allowed.includes(r.status))throw Error(r.status===401?'인증 실패 · 로그인 비밀번호가 아닌 Koofr 앱 비밀번호를 사용해 주세요.':r.status===403?'Koofr 접근 권한이 없습니다.':r.status===507?'Koofr 저장 공간이 부족합니다.':'Koofr 요청 실패 (HTTP '+r.status+')');return r;}
+    const xml='<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontentlength/><d:getlastmodified/><d:getetag/></d:prop></d:propfind>';
+    const prop=(c,url,depth)=>request(c,'PROPFIND',url,xml,{'Depth':String(depth),'Content-Type':'application/xml; charset=utf-8'});
+    function parse(text){
+      const doc=new DOMParser().parseFromString(text,'application/xml');if(doc.querySelector('parsererror')||doc.documentElement.localName!=='multistatus')throw Error('WebDAV 목록 응답 형식이 올바르지 않습니다.');
+      const value=(el,key)=>el.getElementsByTagNameNS('DAV:',key)[0]?.textContent||'';const out=[];
+      for(const el of doc.getElementsByTagNameNS('DAV:','response')){
+        const href=value(el,'href');let u;try{u=new URL(href,FOLDER);}catch{continue;}
+        if(u.origin!=='https://app.koofr.net'||!u.pathname.startsWith(new URL(FOLDER).pathname))continue;
+        let id;try{id=decodeURIComponent(u.pathname.slice(new URL(FOLDER).pathname.length));}catch{continue;}if(!FILE.test(id))continue;
+        const ps=[...el.getElementsByTagNameNS('DAV:','propstat')].find(p=>/\s200(?:\s|$)/.test(value(p,'status')));if(!ps||ps.getElementsByTagNameNS('DAV:','collection').length)continue;
+        const at=Number(id.split('_')[1]),size=Number(value(ps,'getcontentlength'))||0;
+        out.push({id,at,when:new Date(at).toLocaleString('ko-KR'),rooms:Number(id.match(/_(\d+)rooms_/)[1]),size:(size/1024).toFixed(1)+'KB',bytes:size,version:'Core',auto:false,dev:'내 Koofr',deviceId:'koofr',mine:false,etag:value(ps,'getetag'),roomNames:''});
+      }
+      return out.sort((a,b)=>b.at-a.at);
+    }
+    async function run(fn){if(busy)throw Error('진행 중인 저장소 작업이 끝난 뒤 다시 시도해 주세요.');busy=true;error='';WUI.paint();try{return await fn(config());}catch(e){error=String(e.message||e);throw e;}finally{busy=false;WUI.paint();}}
+    async function refreshWith(c){const r=await prop(c,FOLDER,1);const list=r.status===404?[]:parse(check(r,[207]).responseText);if(identity(c)!==identity(config()))throw Error('연결 정보가 바뀌었습니다. 다시 조회해 주세요.');rows=list;account=identity(c);return list;}
+    const refresh=()=>run(refreshWith);
+    function open(){view();WUI.openSheet('kvList');}
+    function settings(){if(busy)return;const c=config();WUI.openSheet('kvSettings',{saved:c,draft:{email:c.email,password:'',test:'',testMsg:''}});}
+    function draft(d){const email=String(d.draft.email||'').trim();return {email,password:String(d.draft.password||'').trim()||(email===d.saved.email?d.saved.password:'')};}
+    async function test(id){const d=WUI.ui.dlg(id);if(!d)return;await run(async()=>{d.draft.test='busy';WUI.paint();try{check(await prop(draft(d),BASE,0),[207]);d.draft.test='ok';d.draft.testMsg='연결 확인됨 · 저장 권한은 첫 백업 시 확인합니다.';}catch(e){d.draft.test='err';d.draft.testMsg=e.message;throw e;}});}
+    function save(id){if(busy)throw Error('연결 확인이 끝난 뒤 저장해 주세요.');const d=WUI.ui.dlg(id),c=draft(d);if(!ready(c)||c.email.includes(':'))throw Error('이메일과 앱 비밀번호를 확인해 주세요.');GM_setValue(KEY,c);rows=[];status='';error='';account=identity(c);d.saved={};d.draft.password='';WUI.closeSheet(d);}
+    function disconnect(){if(busy)return;GM_setValue(KEY,{});rows=[];status='';error='';WUI.paint();}
+    function subset(data,ids,settings){
+      const out=coreBackupData(data,ids),set=new Set(ids),links=new Set(out.rooms.flatMap(r=>[...(r.activeLorePackIds||[]),r.autoCharacterLibraryId,r.lastExtraLibraryId,autoLorePackId(r)]).filter(Boolean));
+      out.rooms=out.rooms.map(r=>({...r,pending:null}));out.characterLibraries=out.characterLibraries.filter(p=>set.has(String(p.ownerChatId))||links.has(p.scopeId));
+      out.autoHistory=(out.autoHistory||[]).filter(x=>!x.backup&&set.has(String(x.chatId)));
+      if(!settings)for(const key of ['guides','defaultExtraPreset','cognitionSettings'])delete out[key];
+      return validateManagerBackup(out);
+    }
+    async function backup(){
+      if(busy)return;const cfg=config();if(!ready(cfg))throw Error('연결 설정을 먼저 저장해 주세요.');
+      const all=await getAllRooms(),roomRows=all.map((r,i)=>({key:'r'+i,id:String(r.chatId),label:WishRoomNames.display(r)||r.label||'이름 없는 방',detail:'ID '+r.chatId,current:r.chatId===state.currentRoom?.chatId}));
+      const choice=await WUIOpenPromise('kvRooms',{rows:roomRows,draft:{pick:{},includeSettings:true}});if(!choice)return;
+      await run(async c=>{
+        if(identity(cfg)!==identity(c))throw Error('연결이 변경되어 백업을 취소했습니다.');
+        const data=subset(await createManagerBackup(),choice.ids,choice.settings);if(!data.rooms.length)throw Error('선택한 방이 없습니다.');
+        const text=JSON.stringify(data);
+        const mk=await request(c,'MKCOL',FOLDER);check(mk,[201,405]);
+        const id='wish-core_'+Date.now()+'_'+data.rooms.length+'rooms_'+crypto.randomUUID()+'.json';
+        check(await request(c,'PUT',safeFile(id),text,{'Content-Type':'application/json; charset=utf-8','If-None-Match':'*'}),[201,204]);
+        const verification=check(await request(c,'GET',safeFile(id)),[200]);if(verification.responseText!==text)throw Error('업로드 후 원문 검증에 실패했습니다. 저장소 목록을 확인해 주세요.');
+        status='저장·원문 검증 완료';await refreshWith(c);notify('Koofr에 '+data.rooms.length+'개 방을 저장했습니다.','success');
+      });
+    }
+    async function restore(id){let data,captured;
+      await run(async c=>{captured=identity(c);const row=rows.find(x=>x.id===id);if(!row)throw Error('목록을 다시 조회해 주세요.');const r=check(await request(c,'GET',safeFile(id)),[200]);try{data=validateManagerBackup(JSON.parse(r.responseText));}catch{throw Error('지원하는 Wish Core 백업이 아니거나 손상됐습니다.');}});
+      const choice=await openBackupImportDialog(data,await getAllRooms(),await getAllCharacterLibraries());if(!choice)return;
+      await run(async c=>{if(identity(c)!==captured)throw Error('연결이 바뀌어 복원을 취소했습니다.');const restored=await restoreManagerBackup(data,choice);await finishLocalRestoreUi(restored);MemoryDiff.invalidate();});
+    }
+    function select(id){const d=WUI.ui.dlg(id);if(d&&!busy){d.draft.selecting=!d.draft.selecting;d.draft.pick={};}}
+    function pick(arg){const [id,mode]=arg.split('|'),d=WUI.ui.dlg(id);if(d&&!busy)for(const row of rows)d.draft.pick[row.id]=mode==='all';}
+    function remove(id){const d=WUI.ui.dlg(id),selected=rows.filter(x=>d?.draft.pick?.[x.id]);if(!selected.length||busy)return;const captured=identity(config());WUI.ui.confirm('선택한 Koofr 백업 삭제',selected.length+'개 백업 파일을 저장소에서 삭제합니다. 로컬 방은 그대로 남습니다.','삭제',()=>run(async c=>{if(identity(c)!==captured)throw Error('연결이 바뀌어 삭제를 취소했습니다.');try{for(const row of selected){const r=await request(c,'DELETE',safeFile(row.id),undefined,row.etag?{'If-Match':row.etag}:{});check(r,[200,204,404]);rows=rows.filter(x=>x.id!==row.id);delete d.draft.pick[row.id];}}finally{WUI.paint();}}));}
+    function roomPick(arg){const [id,mode]=arg.split('|'),d=WUI.ui.dlg(id);if(d)for(const row of d.rows)d.draft.pick[row.key]=mode==='all'||mode==='current'&&row.current;}
+    function roomAccept(id){const d=WUI.ui.dlg(id);WUIResolve(id,{ids:d.rows.filter(r=>d.draft.pick[r.key]).map(r=>r.id),settings:!!d.draft.includeSettings});}
+    return {view,open,settings,test,save,disconnect,refresh,backup,restore,select,pick,remove,roomPick,roomAccept,parse,subset};
+  })();
+
   async function createManagerBackup() {return await WLOG.run("백업 파일 구성 중",async task=>{
     const names=[APP.storeName,APP.libraryStoreName,APP.cognitionStoreName,APP.runtimeStoreName,APP.historyStoreName];
     const data=await new Promise((resolve,reject)=>{
@@ -9507,7 +9652,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     else notify(restored.legacy?'백업 복원 완료 · 구형 백업에는 인지 기록이 없어 현재 인지 기록을 유지했습니다.':`백업 복원 완료 · 인지 ${restored.cognition}개 방 포함`,'success',5000);
   }
 
-  function openBackupImportDialog(data,existingRooms=[],existingLibraries=[]){const blocked=new Set(existingRooms.filter(r=>r.pending).map(r=>String(r.chatId))),all=(data.rooms||[]).filter(r=>r.chatId),rooms=all.filter(r=>!blocked.has(String(r.chatId))).map(r=>({id:String(r.chatId),label:r.backupDisplayName||WishRoomNames.display(r)||r.label||'RP '+shortId(r.chatId),current:String(r.chatId)===String(state.currentChatId)})),libs=(data.characterLibraries||[]).filter(l=>l.scopeId&&!(l.autoManaged&&blocked.has(String(l.ownerChatId)))).map(l=>({id:String(l.scopeId),label:l.name||l.title||l.scopeId,owner:all.some(r=>String(r.chatId)===String(l.ownerChatId))?String(l.ownerChatId):''}));const global=!!(data.guides||data.defaultExtraPreset||data.cognitionSettings);if(global)libs.push({id:'wish-global-settings',label:'공용 지침·프리셋·인지 설정 복원',});return WUIOpenPromise('backupImport',{src:'파일 백업',note:blocked.size?'주입 중인 '+blocked.size+'개 방은 선택 목록에서 제외했습니다. 복원할 방의 기존 데이터는 교체됩니다.':'선택한 방과 설정집의 데이터를 백업으로 교체합니다. API 연결 설정은 유지됩니다.',rooms,libs,blocked:[...blocked],draft:{pick:{}}});}
+  function openBackupImportDialog(data,existingRooms=[],existingLibraries=[]){const blocked=new Set(existingRooms.filter(r=>r.pending).map(r=>String(r.chatId))),all=(data.rooms||[]).filter(r=>r.chatId),rooms=all.filter(r=>!blocked.has(String(r.chatId))).map(r=>({id:String(r.chatId),label:r.backupDisplayName||WishRoomNames.display(r)||r.label||'RP '+shortId(r.chatId),sum:'방 ID '+r.chatId,current:String(r.chatId)===String(state.currentChatId)})),libs=(data.characterLibraries||[]).filter(l=>l.scopeId&&!(l.autoManaged&&blocked.has(String(l.ownerChatId)))).map(l=>({id:String(l.scopeId),label:l.name||l.title||l.scopeId,owner:all.some(r=>String(r.chatId)===String(l.ownerChatId))?String(l.ownerChatId):''}));const global=!!(data.guides||data.defaultExtraPreset||data.cognitionSettings);if(global)libs.push({id:'wish-global-settings',label:'공용 지침·프리셋·인지 설정 복원',});return WUIOpenPromise('backupImport',{src:'파일 백업',note:blocked.size?'주입 중인 '+blocked.size+'개 방은 선택 목록에서 제외했습니다. 복원할 방의 기존 데이터는 교체됩니다.':'선택한 방과 설정집의 데이터를 백업으로 교체합니다. API 연결 설정은 유지됩니다.',rooms,libs,blocked:[...blocked],draft:{pick:{}}});}
 
   // ---------------------------------------------------------------------------
   // Injection lifecycle
@@ -12878,6 +13023,24 @@ pre.m3-block.tall{max-height:none;min-height:340px}
 .m3-dn-in input{width:62px;padding:5px 6px;border-radius:6px;border:1px solid var(--m3-line);background:var(--m3-card2);color:var(--m3-fg);text-align:center;font-size:12px}
 .m3-dn-in input.sm{width:44px}
 .m3-dn-in input:focus{outline:none;border-color:var(--m3-accent-line);box-shadow:0 0 0 3px var(--m3-accent-soft)}
+.m3-cloud-group{margin:14px 0 4px}
+.m3-cloud-title{display:flex;align-items:center;gap:7px;padding:0 2px 8px;font-size:12.5px;font-weight:600;color:var(--m3-fg2)}
+.m3-cloud-title small{margin-left:auto;font-size:11px;font-weight:400;color:var(--m3-muted)}
+.m3-cloud-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:11px 13px;margin-bottom:8px;border:1px solid var(--m3-line);border-radius:var(--m3-r-card);background:var(--m3-card);box-shadow:var(--m3-shadow);transition:transform .3s var(--m3-spring),box-shadow .3s,border-color .25s}
+.m3-cloud-row:hover{transform:translateY(-2px);box-shadow:var(--m3-lift);border-color:var(--m3-accent-line)}
+.m3-cloud-row.auto{border-left:3px solid var(--m3-accent-line)}
+.m3-cloud-main{flex:1;min-width:150px}
+.m3-cloud-main strong{display:block;font-size:13px;font-weight:600}
+.m3-cloud-main small{display:block;margin-top:2px;font-size:11.5px;color:var(--m3-muted)}
+.m3-cloud-row{flex-wrap:wrap;gap:8px}
+.m3-cloud-pick{flex:1 1 200px;min-width:0;margin:0;border:0!important;background:transparent!important;box-shadow:none;padding:0;border-radius:0}
+.m3-cloud-info{flex:1 1 200px;min-width:0;cursor:default}
+.m3-cloud-info .m3-box{visibility:hidden}
+.m3-cloud-info small,.m3-cloud-pick small{display:block;color:var(--m3-muted);font-size:11px;margin-top:3px}
+.m3-cloud-names{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.m3-cloud-row{display:grid;grid-template-columns:minmax(0,1fr) auto}
+.m3-cloud-pick .m3-t{min-width:0;overflow-wrap:anywhere}
+.m3-cloud-actions{flex-wrap:wrap;justify-content:flex-end}
 .m3-dd{border:1px solid var(--m3-line);border-radius:var(--m3-r-ctl);margin-bottom:9px;overflow:hidden;transition:border-color .25s,box-shadow .25s}
 .m3-dd.is-on{border-color:var(--m3-accent-line);box-shadow:0 0 0 3px var(--m3-accent-soft)}
 .m3-dd .m3-cbx{margin:0;border:0;border-radius:0;border-bottom:1px solid var(--m3-line2)}
@@ -12984,6 +13147,9 @@ function createWishUI(AD) {
     wallet:'<path d="m9 7-2-4h10l-2 4M9 7h6c1 3 6 5 6 10 0 3-3 4-9 4s-9-1-9-4c0-5 5-7 6-10Z"/><path d="M9 7h6m-3 4v7m2-6h-3a1.5 1.5 0 000 3h2a1.5 1.5 0 010 3H9"/>',
     list:'<path d="M9 6h11M9 12h11M9 18h11"/><path d="M4.5 6h.01M4.5 12h.01M4.5 18h.01"/>',
     more:'<circle cx="5.5" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="18.5" cy="12" r="1.2" fill="currentColor"/>',
+    history:'<path d="M4 12a8 8 0 1 0 2.3-5.6"/><path d="M4 4v4h4"/><path d="M12 8v4l2.5 2"/>',
+    info:'<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/>',
+    cloud: '<path d="M7 18h10a4 4 0 0 0 .6-8A6 6 0 0 0 6.2 9.3 4.5 4.5 0 0 0 7 18z"/>',
     calendar:'<rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="M7.5 13.5h.01M12 13.5h.01M16.5 13.5h.01M7.5 17h.01M12 17h.01"/><rect x="15" y="15.5" width="3" height="3" rx=".7" fill="currentColor" stroke="none"/>',
     relation:'<circle cx="12" cy="5" r="2.4"/><circle cx="5.5" cy="19" r="2.4"/><circle cx="18.5" cy="19" r="2.4"/><path d="M12 7.4V12M5.5 16.6V12h13v4.6"/>',
     inbox: '<path d="M4 13h4l1.5 3h5L16 13h4"/><path d="M5.6 5h12.8L20 13v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-5z"/>',
@@ -13161,8 +13327,17 @@ function createWishUI(AD) {
     </section>`;
   }
   function injRows() {
-    const items = V.inj.items; if (!items.length) return empty('켜진 항목이 없습니다.');
-    return `<div class="m3-irows">${items.map(i => `<div class="m3-irow ${i.off ? 'is-off' : ''}" data-key="ir-${esc(i.rowKey??i.key)}">${kind(i.label || KLABEL[i.kind] || '', COL[i.kind] || COL.guide)}<span class="m3-t"><b>${esc(i.title)}</b><small>${esc(i.off ? i.offReason||'주입에서 제외' : i.why || '')}</small></span><em>${fmt(i.size)}</em></div>`).join('')}</div>`;
+    const items = V.inj.items; if(!V.inj.armed)return empty('주입 해제 상태 · 주입을 시작하면 포함·제외 이유를 확인할 수 있어요.'); if (!items.length) return empty('켜진 항목이 없습니다.');
+    const ORDER=['limit','pick','guard','off','me','stale'],IN=['in','cand'],keyed=items.map(i=>({i,k:injWhyKey(i)}));
+    const inCount=keyed.filter(x=>IN.includes(x.k)).length,out=keyed.length-inCount,byK=new Map();
+    for(const x of keyed)if(!IN.includes(x.k))byK.set(x.k,(byK.get(x.k)||0)+1);
+    const f=out&&(S.injWhy==='out'||byK.has(S.injWhy))?S.injWhy:'all',pass=x=>f==='all'||(f==='out'?!IN.includes(x.k):x.k===f);
+    const row=({i,k})=>`<div class="m3-irow ${i.off ? 'is-off' : ''} why-${k}" data-key="ir-${esc(i.rowKey??i.key)}">${kind(i.label || KLABEL[i.kind] || '', COL[i.kind] || COL.guide)}<span class="m3-t"><b>${esc(i.title)}</b><small>${i.off?injWhyTag(k):''}${esc(i.off ? i.offReason||'주입에서 제외' : i.why || '')}</small></span><em>${fmt(i.size)}</em></div>`;
+    const bar=out?`<div class="m3-whybar">${[['in',inCount],...ORDER.map(k=>[k,byK.get(k)||0])].filter(x=>x[1]).map(([k,n])=>`<i class="why-${k}" style="flex:${n}"></i>`).join('')}</div>`:'';
+    const chips=out?`<div class="m3-whychips">${[['all','전체'],['out','빠진 것만'],...ORDER.filter(k=>byK.get(k)).map(k=>[k,WHY_LABEL[k][0]+' '+byK.get(k)])].map(([k,l])=>`<button type="button" class="m3-whychip why-${k}" data-act="injWhy" data-arg="${k}" aria-pressed="${f===k}"><i></i>${esc(l)}</button>`).join('')}</div>`:'';
+    const shown=keyed.filter(pass);
+    const list=f==='all'?shown.map(row).join(''):ORDER.filter(k=>shown.some(x=>x.k===k)).map(k=>`<div class="m3-whygrp"><b>${WHY_LABEL[k][0]}</b><small>${shown.filter(x=>x.k===k).length}개</small></div>${shown.filter(x=>x.k===k).map(row).join('')}`).join('');
+    return `<div class="m3-whysum"><span><b>${inCount}</b> ${V.inj.verified?'들어감':'주입 후보'}</span><span class="${out?'is-out':''}"><b>${out}</b> 빠짐</span></div>${bar}${chips}<div class="m3-irows">${list||empty('이 조건에 맞는 항목이 없습니다.')}</div>`;
   }
   function reviewPanel(r) {
     return `<section class="m3-panel" data-key="rv-${esc(r.id)}" style="--cc:${COL.cog}"><div class="m3-row">${kind(r.kind || '인지', COL.cog)}<b class="m3-grow">${esc(r.desc)}</b></div>${r.quote ? `<blockquote class="m3-quote">${esc(r.quote)}</blockquote>` : ''}${r.acceptLabel ? '' : '<p class="m3-muted" style="margin-top:8px">바로 확정하기 어려운 항목이라 먼저 내용을 확인합니다.</p>'}<div class="m3-row m3-card-actions">${r.acceptLabel ? btn(esc(r.acceptLabel), 'rvAccept', { arg: r.id, cls: 'primary mini', icon: 'check' }) : btn('확인하기', 'rvOpen', { arg: r.id, cls: 'mini', icon: 'eye' })}${btn('이 후보 제외', 'rvDismiss', { arg: r.id, cls: 'quiet mini' })}</div></section>`;
@@ -13186,10 +13361,31 @@ function createWishUI(AD) {
     return `<div class="m3-toolbar"><span class="m3-muted m3-grow">${secs.length}섹션 · ${fmt(chars)}자</span><div class="m3-actions">${btn('원문 편집', 'raw', { arg: 'state', cls: 'mini', icon: 'edit' })}${chip('주입', 'state.inject', V.state.inject)}</div></div>
     ${secs.map((s, i) => card('st-' + s.id, `${i + 1}. ${esc(s.title)}`, `${fmt(s.size)}자`, `<p>${esc(s.body)}</p>`, btn('편집', 'stEdit', { arg: s.id, cls: 'mini', icon: 'edit' }) + btn('삭제', 'stDel', { arg: s.id, cls: 'danger mini' }), '', COL.state)).join('') || (raw.trim() ? card('st-raw', '현재상태 원문', '섹션 구분 없이 저장된 내용 · 원문 편집으로 수정', `<div style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(raw)}</div>`, '', '', COL.state) : empty('현재상태가 비어 있습니다. 지금 갱신이나 원문 편집으로 채울 수 있어요.'))}`;
   }
+  // 주입 제외 이유 표시 (기존 offReason 문장을 분류만 함 · 계산 로직 변경 없음)
+  const WHY_LABEL={in:['주입 중','ok'],cand:['주입 후보','ok'],limit:['한도 초과로 빠짐','warn'],pick:['AI 선별에서 빠짐','accent'],guard:['설정·분기 보호로 제외','danger'],me:['직접 제외',''],stale:['다음 갱신 때 다시 계산',''],off:['주입 설정에서 꺼짐',''],none:['현재 후보에 없음',''],logoff:['날짜로그 주입 꺼짐',''],idle:['주입 대기','']};
+  function injWhyKey(i){if(!V.inj.armed)return 'idle';if(!i)return 'none';if(!i.off)return V.inj.verified?'in':'cand';const r=String(i.offReason||'');
+    if(r.startsWith('로컬 한도 선별'))return 'limit';if(r.startsWith('AI 후보 선별'))return 'pick';if(r.startsWith('이번 세션에서 직접'))return 'me';if(r.includes('분기 보호'))return 'guard';if(r.startsWith('이전 주입 결과'))return 'stale';return 'off';}
+  const injWhyTag=(k,title='')=>`<span class="m3-why why-${k} ${WHY_LABEL[k][1]}"${title?` title="${esc(title)}"`:''}><i></i>${WHY_LABEL[k][0]}</span>`;
+  function logPlanItem(b){return (V.inj.items||[]).find(i=>i.kind==='log'&&(i.sourceKey===b.key||i.key==='log:'+b.key))||null;}
+  function logWhy(b){if(!V.logs.inject)return {k:'logoff'};if(!V.inj.armed)return {k:'idle'};const i=logPlanItem(b);if(!i)return {k:V.inj.armed?'none':'idle'};return {k:injWhyKey(i),i};}
+  function logWhyBox(b){const w=logWhy(b);if(w.k==='in'||w.k==='cand')return '';
+    const reason=String(w.i?.offReason||''),pre=Number(((reason.match(/선별 전 ([\d,]+)자/)||[])[1]||'').replace(/,/g,''))||0,max=Number(V.inj.max)||40000;
+    const text={limit:'이번 주입 후보 전체가 한도를 넘어서, 로컬 우선순위와 남은 공간에 따라 이번 주입에서 빠졌어요.',pick:'AI 선별을 사용한 결과에서 빠졌어요. 관련성·우선순위 또는 남은 글자 수가 영향을 줄 수 있어요.',guard:'주입 주기 설정이나 분기 보호 때문에 이번 턴에는 넣지 않았어요.',me:'이번 세션에서 직접 뺐어요.',stale:'지난 주입 기준 결과예요. 다음 갱신 때 다시 계산해요.',off:'주입 설정에서 제외되어 있어요.',none:'현재 주입 후보 목록에 없어요. 이 정보만으로 제외된 세부 이유를 확정할 수는 없어요.',logoff:'날짜로그 주입이 꺼져 있어요. 위 툴바의 주입을 켜면 다시 들어가요.',idle:'아직 이번 주입이 준비되지 않았어요.'}[w.k]||'';
+    const meter=w.k==='limit'&&pre>max?`<div class="m3-whymeter"><i></i><em style="left:${Math.min(100,max/pre*100).toFixed(1)}%"></em></div><div class="m3-whymm"><span>후보 ${fmt(pre)}자</span><span>한도 ${fmt(max)}자</span></div>`:'';
+    const act=['limit','pick','none'].includes(w.k)?btn('주입 로그 고르기','logPick',{cls:'mini',icon:'pin',feat:'logPick'}):'';
+    return `<div class="m3-whybox why-${w.k}"><b>${WHY_LABEL[w.k][0]}</b><span>${text}</span>${meter}${act?`<div class="m3-whyact">${act}</div>`:''}</div>`;}
+  function memAgo(at){const s=Math.max(0,(Date.now()-Number(at))/1000);if(s<60)return '방금';if(s<3600)return Math.floor(s/60)+'분 전';if(s<86400)return Math.floor(s/3600)+'시간 전';const d=new Date(Number(at));return (d.getMonth()+1)+'월 '+d.getDate()+'일';}
+  function memDiffStrip(){
+    const r=state.currentRoom;if(!r)return '';const e=MemoryDiff.latest(r);if(!e||MemoryDiff.seen(r)===e.id)return '';
+    let s;try{s=MemoryDiff.summary(r,e);}catch{return '';}if(!s?.total)return '';
+    const dd=c=>`<span class="m3-diff-count">${c.add?`<i class="add">+${c.add}</i>`:''}${c.chg?`<i class="chg">~${c.chg}</i>`:''}${c.del?`<i class="del">−${c.del}</i>`:''}</span>`;
+    const cs=s.counts.state,cl=s.counts.log,parts=[];if(cs.add+cs.chg+cs.del)parts.push('현재상태 '+dd(cs));if(cl.add+cl.chg+cl.del)parts.push('날짜로그 '+dd(cl));
+    return `<div class="m3-memdiff" data-key="memdiff-strip"><span class="m3-memdiff-ic">${ic('history')}</span><span class="m3-memdiff-t"><b>${esc(memAgo(e.at))} ${esc(MemoryDiff.REASON[e.reason]||'기억 변경')} 직전 기록</b> 이후 변경<br>${parts.join(' · ')}</span>${btn('비교 보기','memDiff',{cls:'mini',icon:'history'})}<button type="button" class="m3-memdiff-x" data-act="memDiffSeen" aria-label="닫기">${ic('close')}</button></div>`;
+  }
   function logBadges(b) {
-    const actual=V.inj.verified?(b.included?'주입 중':'이번 주입 제외'):(b.included?'주입 후보':'현재 제외');
     const mode=b.ex?'자동 제외':b.pin?'항상 호출':b.man?'직접 선택':'';
-    return `<span class="m3-log-badges">${mode?tag(mode,b.ex?'':b.pin?'warn':''):''}${tag(actual,b.included?'ok':'')}</span>`;
+    const w=logWhy(b);
+    return `<span class="m3-log-badges">${mode?tag(mode,b.ex?'':b.pin?'warn':''):''}${injWhyTag(w.k,w.i?.offReason||'')}</span>`;
   }
   function mLog() {
     const g=new Map();
@@ -13197,7 +13393,7 @@ function createWishUI(AD) {
     const groups=[...g].filter(([d])=>d!=='날짜 미상').reverse().concat([...g].filter(([d])=>d==='날짜 미상'));
     const dupN=Number(V.logs.dupDates)||0,moreOpen=S.openSet.has('log-more');
     return `<div class="m3-toolbar m3-logbar"><div class="m3-actions m3-grow"><span class="m3-viewseg" role="group" aria-label="보기 방식"><button type="button" class="is-on" aria-pressed="true">${ic('list')}<span>목록</span></button><button type="button" data-act="logCalendar" aria-pressed="false">${ic('calendar')}<span>달력</span></button></span>${btn('주입 로그 고르기','logPick',{cls:'mini',icon:'pin',feat:'logPick'})}${dupN&&has('dedupe')?`<button type="button" class="m3-dupwarn" data-act="logDedupe" title="중복 날짜 정리">${ic('alert')}<span>중복 <b>${dupN}</b></span></button>`:''}</div>${chip('주입','logs.inject',V.logs.inject)}<details class="m3-more" data-key="log-more" data-open="log-more"${moreOpen?' open':''}><summary class="m3-btn mini m3-more-btn" aria-label="정리 도구">${ic('more')}</summary><div class="m3-more-menu" role="menu"><div class="m3-more-h">정리 도구</div>${btn('원문 편집','raw',{arg:'log',cls:'mini',icon:'edit'})}${btn('날짜 표기 정리','logNorm',{cls:'mini',icon:'date',feat:'dateNorm'})}${btn('중복 날짜 정리'+(dupN?' · '+dupN+'개':''),'logDedupe',{cls:'mini',icon:'merge',feat:'dedupe'})}</div></details></div>
-    ${groups.map(([d,bs])=>`<section class="m3-date-group" data-key="dg-${esc(d)}"><div class="m3-date-head"><b>${esc(d)}</b><small>${bs.length}블록</small></div>${bs.map(b=>card('lg-'+b.id,esc(b.title),fmt(b.size)+'자',`<p>${esc(b.body)}</p>`,btn('편집','lgEdit',{arg:b.id,cls:'mini',icon:'edit'})+btn('삭제','lgDel',{arg:b.id,cls:'danger mini'}),logBadges(b))).join('')}</section>`).join('')||empty('날짜로그가 비어 있습니다.')}`;
+    ${groups.map(([d,bs])=>`<section class="m3-date-group" data-key="dg-${esc(d)}"><div class="m3-date-head"><b>${esc(d)}</b><small>${bs.length}블록</small></div>${bs.map(b=>card('lg-'+b.id,esc(b.title),fmt(b.size)+'자',logWhyBox(b)+`<p>${esc(b.body)}</p>`,btn('편집','lgEdit',{arg:b.id,cls:'mini',icon:'edit'})+btn('삭제','lgDel',{arg:b.id,cls:'danger mini'}),logBadges(b))).join('')}</section>`).join('')||empty('날짜로그가 비어 있습니다.')}`;
   }
   function mRelationships() {
     const rows=V.relationships.rows;
@@ -13223,7 +13419,7 @@ function createWishUI(AD) {
     const t = [['state', '현재상태'], ['log', '날짜로그'], ['char', '캐릭터'], ['extra', '기타·OOC']].filter(([k]) => k !== 'speech' || has('speech'));
     if (!t.some(x => x[0] === S.mem)) S.mem = 'state';
     const sub = { state: mState, log: mLog, speech: mSpeech, char: mChar, extra: mExtra }[S.mem]();
-    return `${pageHead('기억 '+help(helpSections([['하이브리드 회수','전체 기억은 저장소에 보존하고, 최근 기억과 현재 맥락에 관련된 날짜로그·자료만 골라 주입합니다.'],['오래된 기억','에리식 의미검색과 키워드 검색이 전체 과거 기록에서 오래된 사건을 다시 찾습니다.'],['보조 AI 재검토','설정한 경우 제한된 후보만 응답 완료 뒤 재검토하며, USER 전송 직전에는 기다리지 않습니다.'],['안전선','40,000자 안전선은 유지하고 서버 500이면 같은 선택본을 36,000자까지 한 번만 줄입니다.']])), '<span class="m3-actions">'+(has('search') ? btn('검색', 'search', { cls: 'quiet mini', icon: 'search' }) : '')+btn('설정','nav',{arg:'settings',cls:'quiet mini',icon:'set'})+btn('기억 묶음 정리','unifiedMemory',{cls:'mini',icon:'spark'})+'</span>')}${tabs(t, S.mem, 'memSub')}<div class="m3-sub" data-key="mem-${S.mem}">${sub}</div>`;
+    return `${pageHead('기억 '+help(helpSections([['하이브리드 회수','전체 기억은 저장소에 보존하고, 최근 기억과 현재 맥락에 관련된 날짜로그·자료만 골라 주입합니다.'],['오래된 기억','에리식 의미검색과 키워드 검색이 전체 과거 기록에서 오래된 사건을 다시 찾습니다.'],['보조 AI 재검토','설정한 경우 제한된 후보만 응답 완료 뒤 재검토하며, USER 전송 직전에는 기다리지 않습니다.'],['안전선','40,000자 안전선은 유지하고 서버 500이면 같은 선택본을 36,000자까지 한 번만 줄입니다.']])), '<span class="m3-actions">'+(has('search') ? btn('검색', 'search', { cls: 'quiet mini', icon: 'search' }) : '')+btn('설정','nav',{arg:'settings',cls:'quiet mini',icon:'set'})+btn('기억 묶음 정리','unifiedMemory',{cls:'mini',icon:'spark'})+'</span>')}${memDiffStrip()}${tabs(t, S.mem, 'memSub')}<div class="m3-sub" data-key="mem-${S.mem}">${sub}</div>`;
   }
 
   
@@ -13283,7 +13479,7 @@ function createWishUI(AD) {
  (j?'<div class="m3-hbar m3-topgap"><i style="width:'+ (rows.length?done/rows.length*100:0)+'%"></i></div><p class="m3-muted">'+esc(j.message||'')+' · 판독 완료 '+done+'/'+rows.length+'</p>'+rows.map(s=>'<div class="m3-seg" data-key="segment-'+s.index+'"><span class="m3-n '+(s.status==='complete'?'m3-done':s.status==='running'?'m3-run':'')+'">'+s.index+'</span><span class="m3-t">'+s.messages+'메시지 · '+fmt(s.chars)+'자'+(s.error?'<br><small class="m3-error">'+esc(s.error)+'</small>':'')+'</span><span class="m3-s">'+esc(status[s.status]||s.status)+'</span></div>').join('')+'<div class="m3-row m3-card-actions">'+(j.status==='complete'&&j.ready?btn('전체 결과 적용','rebuildApply',{cls:'primary mini',dis:run}):'')+btn('대화 다시 읽기','rebuildRead',{cls:'quiet mini',dis:run})+btn('구간 목록 비우기','rebuildClear',{cls:'danger mini',dis:run})+'</div>':'')+'</section>'+
  '<section class="m3-panel" data-key="external"><b>외부 AI로 전체 재구축</b><div class="m3-muted">현재상태·날짜별 기억·인지·호칭·말투·관계감정선을 함께 재구축합니다. 번호 순서대로 모든 TXT를 읽힌 뒤 최종 JSON 하나를 가져오세요. 관계만 채우려면 인물 → 관계·감정선의 전용 버튼을 사용하세요.</div><div class="m3-row m3-card-actions">'+btn('지침 + TXT 받기','rebuildExport',{cls:'mini',dis:run})+btn('JSON 가져오기','rebuildImport',{cls:'mini',dis:run})+btn('지침','promptGuides',{arg:'externalAll',cls:'mini',icon:'doc'})+'</div><hr class="m3-secondary-divider"><div data-key="secondary-rebuild"><b>외부 AI로 2차 재구축</b><div class="m3-muted">현재 방 자료를 카드별 고밀도 기록체로 압축합니다. 사건·원문·팩 구분을 보존합니다.</div><div class="m3-row m3-card-actions">'+btn('지침 + TXT 받기','secondaryExport',{cls:'mini',dis:run})+btn('JSON 가져오기','secondaryImport',{cls:'mini',dis:run})+btn('지침','promptGuides',{arg:'externalSecondary',cls:'mini',icon:'doc'})+'</div>'+(SecondaryRebuild.summary(state.currentRoom).count?'<div class="m3-toolbar m3-topgap"><span class="m3-muted">등록 압축본 '+SecondaryRebuild.summary(state.currentRoom).count+'본문 · '+(SecondaryRebuild.summary(state.currentRoom).enabled?'사용 켜짐':'사용 꺼짐')+'</span>'+btn('적용본 관리','secondaryManage',{cls:'quiet mini'})+'</div>':'')+'</div></section>'+
  '<section class="m3-panel" data-key="room-copy"><b class="m3-title-help">다른 방 자료 복사하기 '+help(helpSections([['독립 사본','원본 방과 연결하지 않고 현재 방 안에 독립 복사합니다. 이후 어느 한쪽이 자동 갱신돼도 다른 방은 바뀌지 않습니다.'],['선택 복사','현재상태·날짜로그·캐릭터/OOC·자료집·인물인지·은폐·호칭말투를 필요한 것만 체크해 복사합니다.'],['안전 범위','주입 중 상태, AI cursor·근거 manifest, 재구축 staging, 자동화 실행상태는 방 사이에 이식하지 않습니다.']]))+'</b><div class="m3-muted">분기·새 방으로 기존 정사 자료를 옮길 때 사용합니다. 내용을 펼쳐 확인하고 섹션·사건·카드를 개별 선택합니다. 자료집은 별도 참고 팩으로 보관합니다.</div><div class="m3-row m3-card-actions">'+btn('다른 방에서 선택 복사','roomCopy',{cls:'mini',icon:'copy',dis:run})+'</div></section>'+
- '<section class="m3-panel" data-key="backup"><div class="m3-row m3-sp"><div class="m3-t"><b class="m3-title-help">백업 · 복원 '+help(helpSections([['파일 백업','이 기기의 Wish 자료를 파일로 저장하고, 복원할 방과 자료를 선택합니다.'],['재구축과의 차이','백업 복원은 저장본을 되돌립니다. 전체 재구축은 과거 대화를 AI로 다시 읽습니다.']]))+'</b><div class="m3-muted">필요한 자료를 로컬 백업 파일로 보관합니다.</div></div></div><div class="m3-row m3-card-actions">'+btn('백업 저장','fileBackup',{cls:'mini'})+btn('백업 복원','fileRestore',{cls:'mini'})+btn('로컬 데이터 정리','localRooms',{cls:'mini',icon:'database'})+'</div></section>'+
+ '<section class="m3-panel" data-key="backup"><div class="m3-row m3-sp"><div class="m3-t"><b class="m3-title-help">백업 · 복원 '+help(helpSections([['파일 백업','이 기기의 Wish 자료를 파일로 저장하고, 복원할 방과 자료를 선택합니다.'],['재구축과의 차이','백업 복원은 저장본을 되돌립니다. 전체 재구축은 과거 대화를 AI로 다시 읽습니다.']]))+'</b><div class="m3-muted">필요한 자료를 로컬 백업 파일로 보관합니다.</div></div></div><div class="m3-row m3-card-actions">'+btn('클라우드 백업','kvOpen',{cls:'mini',icon:'cloud'})+btn('백업 저장','fileBackup',{cls:'mini'})+btn('백업 복원','fileRestore',{cls:'mini'})+btn('로컬 데이터 정리','localRooms',{cls:'mini',icon:'database'})+'</div></section>'+
  '<section class="m3-panel" data-key="room-reset"><b class="m3-title-help">이 방 데이터 초기화</b><p class="m3-muted">현재 방의 기억·인지·설정·작업 이력과 방 전용 자동 자료를 초기화합니다. 크랙 대화는 유지하며 실행 전에 확인합니다.</p><div class="m3-actions m3-topgap">'+btn('이 방 데이터 초기화','reset',{cls:'mini m3-reset-action',icon:'trash'})+'</div></section>';
 }
 
@@ -13299,7 +13495,7 @@ function createWishUI(AD) {
       `<section class="m3-panel" data-key="economy-settings"><div class="m3-panel-head"><b class="m3-title-help">API 사용량 절약 ${help('실험 기능 · 현재 방에만 적용합니다. 둘 다 OFF이면 2.5.8 방식입니다. OFF는 이미 갱신된 기억을 되돌리지는 않습니다. 처음 켜기 전 기억·인지·자료 백업을 보관하며, 복원용 파일은 기존 백업/복원 화면에서 가져올 수 있습니다. RP 원문은 이 백업으로 되돌리지 않습니다.')}</b><span class="m3-actions m3-economy-actions">${btn('절약 적용 전 백업 받기','economyBackup',{cls:'mini'})}${btn('절약 설정 저장','economySave',{cls:'mini'})}</span></div>${helpToggle('현재상태 변경분 갱신','apiEconomy.delta',V.apiEconomy?.delta,'변경된 원문 구간만 수정하고 나머지 문구는 보존합니다. 수정·추가·종료에 신규 RP 근거와 요청 토큰을 검증합니다. 애매한 편집은 원본을 유지하고 오류를 표시합니다. 날짜별 사건·자료·인지는 기존 증분 방식을 유지합니다.')}${helpToggle('색인으로 후보 선별','apiEconomy.index',V.apiEconomy?.index,'전체 후보가 40,000자를 초과할 때만 기존 선별 설정에 따라 사용합니다. 첫 선별에서 원문과 점수를 읽고 짧은 발췌 색인을 함께 준비하므로 첫 호출은 더 커질 수 있습니다. 다음 호출부터 같은 원문의 색인을 사용하며 실제 주입은 원문입니다. 자료 변경·색인 부적합·캐시 소실 때는 원문으로 돌아갑니다. 핵심 단서 누락 가능성은 실전 비교가 필요합니다.')}<p class="m3-muted">${esc(V.apiEconomy?.status||'')}</p></section>`+
       `<section class="m3-panel" data-key="recall-settings"><div class="m3-panel-head"><b class="m3-title-help">선택된 기억 AI 재검토 ${help(recallHelp)}</b>${btn('재검토 설정 저장','recallSave',{cls:'mini'})}</div><div class="m3-setting-row m3-recall-mode"><label for="wish-recall-mode">재검토 방식</label>${selc('recall.mode',mode,[['local','에리·키워드 결과만 사용'],['priority','AI로 후보 순서 재검토'],['both','AI로 관련성·순서 재검토'],['semantic','AI로 관련성만 재검토']],'m3-select',' id="wish-recall-mode" aria-label="선택된 기억 AI 재검토"')}</div><p class="m3-muted">최근·관련 기억 검색은 유지 · 원문·서식 포함 전체 후보가 40,000자를 초과할 때만 AI 선별 · 관련 후보를 40,000자 안전선까지 포함 · 전송 시 40,000자 초과 후보만 AI 선별 · 임베딩·자동 정리는 별도</p>${helpToggle('AI로 관련성 재확인','recall.semantic',q.semantic,'사용하도록 설정한 전체 후보가 원문·서식 포함 40,000자를 초과하면 보조 AI가 문맥 관련성을 확인합니다. 제외 항목은 유지하며, 키워드가 일치하지 않는 후보도 평가합니다. 기존 검색 벡터는 재사용하고 전송 직전 새 임베딩 요청은 하지 않습니다.')}${helpToggle('AI로 우선순위 정하기','recall.selector',q.selector,'현재 질문·미해결 약속·위험과 직접 연결된 후보부터 40,000자 안전선 안에 배치합니다. 실패하면 에리·키워드 순위를 그대로 사용합니다.')}</section>`+
       `<section class="m3-panel" data-key="api-guides"><div class="m3-panel-head"><b>API 추출 지침</b>${btn('지침','promptGuides',{arg:'apiCommon',cls:'mini',icon:'doc'})}</div><p class="m3-muted">기억·인물·후보 선별 등 지침을 선택해 편집합니다. 모든 방 공통 · 기본값 복원 가능</p></section>`+
-      `<section class="m3-panel" data-key="usage-settings"><div class="m3-panel-head"><b>AI 사용량 가계부</b>${btn('가계부','usageLedger',{cls:'mini',icon:'wallet'})}</div><p class="m3-muted">날짜별 호출 횟수와 예상 비용(USD) · 추가 API 호출 없음</p></section>`+advanced;
+      `<section class="m3-panel" data-key="usage-settings"><div class="m3-panel-head"><b>AI 사용량 가계부</b>${btn('가계부','usageLedger',{cls:'mini',icon:'wallet'})}</div><p class="m3-muted">날짜별 호출 횟수와 예상 비용(USD) · 추가 API 호출 없음</p></section>`+`<section class="m3-panel" data-key="memdiff-settings"><div class="m3-panel-head"><b>정리 전후 비교</b>${btn('정리 기록','memDiff',{cls:'mini',icon:'history'})}</div><p class="m3-muted">현재상태·날짜로그 · 방마다 최근 10회 · 추가 API 호출 없음</p></section>`+advanced;
   }
   const NAV = [['check', '확인', 'inbox'], ['memory', '기억', 'memory'], ['lore', '자료집', 'book'], ['cognition', '인물', 'people'], ['tools', '자료 관리', 'tools'], ['settings', '설정', 'set']];
   const navList = () => NAV.filter(([k]) => (k !== 'lore' || has('lore')));
@@ -13636,7 +13832,53 @@ svg.ic-calendar rect:last-of-type,svg.ic-relation circle,svg.ic-list path,svg.ic
 .hd-ic svg.ic-relation path{stroke-dasharray:30;animation:wiIcDraw .8s ease .3s backwards}
 .hd-ic svg.ic-wallet{animation:wiIcSwing .8s ease .35s}
 @media(prefers-reduced-motion:reduce){.hd-ic,svg.ic,svg.ic *{animation:none!important}}
-`;
+
+/* ── 정리 전후 비교 ── */
+[data-kind=diff] .two{min-height:0;overflow:hidden}
+[data-kind=diff] .pane-l,[data-kind=diff] .pane-r{min-height:0;overflow:auto;contain:none}
+[data-kind=diff] .dcard summary{cursor:pointer;list-style:none;margin:0}
+[data-kind=diff] .dcard summary::-webkit-details-marker{display:none}
+[data-kind=diff] .dcard summary::after{content:'⌄';color:var(--m3-muted)}
+[data-kind=diff] .dcard[open] summary{margin-bottom:6px}
+[data-kind=diff] .dcard[open] summary::after{transform:rotate(180deg)}
+@media(max-width:759px){[data-kind=diff] .two{grid-template-columns:1fr;grid-template-rows:minmax(80px,150px) minmax(0,1fr)}}
+@media(prefers-reduced-motion:reduce){[data-kind=diff] .dcard,[data-kind=diff] .tl button{animation:none}}
+
+[data-kind=diff] .m3-shell{height:min(720px,calc(100dvh - 32px))}
+@media(min-width:760px){[data-kind=diff] .two{grid-template-columns:240px minmax(0,1fr)}}
+.tl{background:var(--m3-bg)}
+.tl-h{font-size:11px;font-weight:600;color:var(--m3-muted);margin:0 4px 8px}
+.tl button{position:relative;display:block;width:100%;text-align:left;padding:9px 10px 9px 26px;border-radius:9px;margin-bottom:3px;transition:background .2s;animation:rise .35s var(--spring) both;animation-delay:calc(var(--i)*35ms)}
+.tl button::before{content:"";position:absolute;left:11px;top:14px;width:7px;height:7px;border-radius:50%;background:var(--m3-line);box-shadow:0 0 0 3px var(--m3-bg)}
+.tl button::after{content:"";position:absolute;left:14px;top:24px;bottom:-12px;width:1px;background:var(--m3-line)}
+.tl button:last-child::after{display:none}
+.tl button:hover{background:var(--m3-card2)}
+.tl button.sel{background:var(--m3-card);box-shadow:var(--m3-shadow)}
+.tl button.sel::before{background:var(--m3-accent)}
+.tl .r{display:block;font-size:12px;font-weight:600;color:var(--m3-fg)}
+.tl .a{display:block;font-size:10.5px;color:var(--m3-muted);margin-top:2px}
+.dd{display:flex;gap:4px;margin-top:5px;flex-wrap:wrap}
+.dd i{font-style:normal;font-size:10.5px;font-weight:650;padding:0 6px;border-radius:5px}
+.dd .add{color:var(--m3-ok);background:color-mix(in srgb,var(--m3-ok) 14%,transparent)}
+.dd .chg{color:var(--m3-warn);background:color-mix(in srgb,var(--m3-warn) 14%,transparent)}
+.dd .del{color:var(--m3-danger);background:color-mix(in srgb,var(--m3-danger) 12%,transparent)}
+.dd .none{color:var(--m3-muted);font-weight:400}
+.df-top{display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.df-top b{font-size:13.5px}
+.df-top .seg small{opacity:.7;margin-left:2px}
+.dcard{position:relative;border:1px solid var(--m3-line);border-radius:11px;background:var(--m3-card);padding:11px 13px 11px 16px;margin-bottom:8px;animation:rise .4s var(--spring) both;animation-delay:calc(var(--i)*45ms)}
+.dcard::after{content:"";position:absolute;left:0;top:12px;bottom:12px;width:3px;border-radius:0 3px 3px 0;background:var(--dc)}
+.dcard.add{--dc:var(--m3-ok)}.dcard.chg{--dc:var(--m3-warn)}.dcard.del{--dc:var(--m3-danger)}
+.dh{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.dh b{font-size:12.5px;font-weight:650;flex:1;min-width:0;overflow-wrap:anywhere}
+.tagx{font-size:10px;font-weight:700;padding:1px 7px;border-radius:5px;color:var(--dc);background:color-mix(in srgb,var(--dc) 13%,transparent)}
+.dtx{font-size:12.5px;line-height:1.8;color:var(--m3-fg2);white-space:pre-wrap;overflow-wrap:anywhere}
+.dtx ins{text-decoration:none;background:color-mix(in srgb,var(--m3-ok) 20%,transparent);color:var(--m3-fg);border-radius:3px;padding:0 1px}
+.dtx del{text-decoration:line-through;text-decoration-color:var(--m3-danger);background:color-mix(in srgb,var(--m3-danger) 12%,transparent);color:var(--m3-muted);border-radius:3px;padding:0 1px}
+.dcard.del .dtx{color:var(--m3-muted);text-decoration:line-through;text-decoration-color:color-mix(in srgb,var(--m3-danger) 60%,transparent)}
+.same{font-size:11.5px;color:var(--m3-muted);text-align:center;padding:10px;border:1px dashed var(--m3-line);border-radius:9px;margin-top:4px}
+.scope{display:flex;gap:8px;align-items:flex-start;margin-top:12px;padding:9px 11px;border-radius:9px;background:var(--m3-card2);font-size:11px;line-height:1.6;color:var(--m3-muted)}
+.scope svg.ic{margin-top:2px}`;
   const APPROVED_TEMPLATES={
 cost:`<div class="m3-shell">
  <div class="m3-head"><span class="hd-ic"></span><strong>AI 사용량</strong><span class="grow"></span>
@@ -13687,11 +13929,16 @@ map:`<div class="m3-shell">
    <p class="note map-n">저장된 호칭·말투 · 관계·감정선 · 인지 자료만 사용 · 추가 API 호출 없음</p>
   </div>
   <div class="pane-r" data-det></div>
- </div></div>`
+ </div></div>`,
+diff:`<div class="m3-shell">
+ <div class="m3-head"><span class="hd-ic"></span><strong>정리 전후 비교</strong><small data-count></small><span class="grow"></span>
+  <button class="icb" aria-label="닫기" data-ic="close"></button></div>
+ <div class="m3-body two"><div class="pane-l tl" data-tl></div><div class="pane-r" data-df></div></div></div>`
   };
 
   // 뷰 전용 아이콘(IC에 없는 방향·검색 등). IC 값이 있으면 IC를 우선 사용.
   const APPROVED_IC={
+    history:'<path d="M4 12a8 8 0 1 0 2.3-5.6"/><path d="M4 4v4h4"/><path d="M12 8v4l2.5 2"/>',info:'<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/>',
     left:'<path d="m15 6-6 6 6 6"/>',right:'<path d="m9 6 6 6-6 6"/>',chev:'<path d="m6 9 6 6 6-6"/>',close:'<path d="M6 6l12 12M18 6 6 18"/>',
     search:'<circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/>',clock:'<circle cx="12" cy="12" r="8"/><path d="M12 8v4l2.5 2.5"/>',
     lock:'<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>'
@@ -13700,12 +13947,50 @@ map:`<div class="m3-shell">
   function approvedIcons(ui){ui.querySelectorAll('[data-ic]').forEach(el=>{el.innerHTML=approvedIcon(el.dataset.ic);});}
   // Markup, tokens and diagram geometry come from wish-features-456-settings.html.
   // A shadow root isolates the approved design from the manager's legacy CSS.
+  async function localDiffOpen(){const r=state.currentRoom;if(!r)return;const cps=await MemoryDiff.list(r);if(state.currentRoom!==r)return;MemoryDiff.dismiss(r,cps[0]);openSheet('memoryDiff',{cps,cur:MemoryDiff.current(r),draft:{i:0,tab:'state',mode:'diff'}});}
   function localUsageOpen(){const snap=WishUsage.snapshot();openSheet('usageLedger',{snap,draft:{month:WishUsage.day().slice(0,7)}});}
   function calendarSelect(d,year){d.draft.year=Number(year);const rows=d.calendar.rows.filter(r=>d.calendar.valid(r)&&r.year===Number(year)&&r.month&&r.day);d.draft.month=rows.at(-1)?.month||1;d.draft.day=rows.at(-1)?.day||0;}
-  function localCalendarOpen(){const calendar=WishLocalViews.calendar(state.currentRoom),d=openSheet('logCalendar',{calendar,logState:new Map(V.logs.blocks.map(b=>[b.key,{included:b.included,verified:V.inj.verified}])),injectionOn:V.inj.armed,logsOn:V.logs.inject,draft:{}});calendarSelect(d,calendar.years.at(-1)||0);}
+  function localCalendarOpen(){const calendar=WishLocalViews.calendar(state.currentRoom),d=openSheet('logCalendar',{calendar,logState:new Map(V.logs.blocks.map(b=>{const w=logWhy(b);return [b.key,{included:b.included,verified:V.inj.verified,why:w.k,reason:w.i?.offReason||''}];})),injectionOn:V.inj.armed,logsOn:V.logs.inject,draft:{}});calendarSelect(d,calendar.years.at(-1)||0);}
   function localGraphOpen(){openSheet('relationMap',{graph:WishLocalViews.graph(V),draft:{page:0}});}
   function approvedSheet(d,kind,title){return `<div class="m3-dialog m3-ui ${d.leaving?'m3-leaving':''}" data-key="${d.id}" data-dlg="${d.id}" role="dialog" aria-modal="true" aria-label="${title}"><div data-approved-view="${kind}" data-approved-id="${d.id}" style="width:min(${kind==='cost'?420:900}px,calc(100vw - 24px));max-height:calc(100dvh - 32px);overflow:auto;border-radius:16px"></div></div>`;}
-  const vUsageLedger=d=>approvedSheet(d,'cost','AI 사용량'),vLogCalendar=d=>approvedSheet(d,'cal','날짜로그'),vRelationMap=d=>approvedSheet(d,'map','인물 관계도');
+  const vUsageLedger=d=>approvedSheet(d,'cost','AI 사용량'),vLogCalendar=d=>approvedSheet(d,'cal','날짜로그'),vRelationMap=d=>approvedSheet(d,'map','인물 관계도'),vMemoryDiff=d=>approvedSheet(d,'diff','정리 전후 비교');
+  function approvedDiff(ui,d){
+    approvedIcons(ui);ui.querySelector('.hd-ic').innerHTML=approvedIcon('history');
+    const q=s=>ui.querySelector(s),cps=d.cps||[];
+    q('[data-count]').textContent=cps.length?'이 방 최근 '+cps.length+'회':'';
+    if(!cps.length){q('.two').innerHTML='<p class="empty" style="grid-column:1/-1;padding:40px 16px">아직 정리 기록이 없어요.<br>기억 정리·지금 갱신·재구축 적용 직전에 자동으로 저장돼요.</p>';return;}
+    const after=k=>k===0?d.cur:MemoryDiff.snap(cps[k-1]);
+    const results=new Map();const result=k=>{if(!results.has(k)){try{results.set(k,MemoryDiff.compare(MemoryDiff.snap(cps[k]),after(k)));}catch{results.set(k,null);}}return results.get(k);};
+    const reason=e=>MemoryDiff.REASON[e.reason]||'기억 변경';
+    const when=at=>{const x=new Date(Number(at));return (x.getMonth()+1)+'월 '+x.getDate()+'일 '+String(x.getHours()).padStart(2,'0')+':'+String(x.getMinutes()).padStart(2,'0');};
+    const delta=c=>{const a=c.state.add+c.log.add,ch=c.state.chg+c.log.chg,dl=c.state.del+c.log.del;return `<span class="dd">${a?`<i class="add">+${a}</i>`:''}${ch?`<i class="chg">~${ch}</i>`:''}${dl?`<i class="del">−${dl}</i>`:''}${a||ch||dl?'':'<i class="none">변경 없음</i>'}</span>`;};
+    const tokens=s=>String(s||'').split(/(\s+)/).filter(x=>x!=='');
+    function wdiff(a,b){const A=tokens(a),B=tokens(b),n=A.length,m=B.length;
+      if(n+m>10000||n*m>250000)return `<del>${esc(a)}</del><br><ins>${esc(b)}</ins>`;
+      const L=Array.from({length:n+1},()=>new Uint16Array(m+1));
+      for(let i=n-1;i>=0;i--)for(let j=m-1;j>=0;j--)L[i][j]=A[i]===B[j]?L[i+1][j+1]+1:Math.max(L[i+1][j],L[i][j+1]);
+      const ws=x=>!x.trim();let i=0,j=0,o='';
+      while(i<n&&j<m){if(A[i]===B[j]){o+=esc(A[i]);i++;j++;}else if(L[i+1][j]>=L[i][j+1]){o+=ws(A[i])?esc(A[i]):`<del>${esc(A[i])}</del>`;i++;}else{o+=ws(B[j])?esc(B[j]):`<ins>${esc(B[j])}</ins>`;j++;}}
+      while(i<n){o+=ws(A[i])?'':`<del>${esc(A[i])}</del>`;i++;}while(j<m){o+=ws(B[j])?esc(B[j]):`<ins>${esc(B[j])}</ins>`;j++;}return o;}
+    d.draft.i=Math.min(Math.max(0,Number(d.draft.i)||0),cps.length-1);d.draft.tab=d.draft.tab||'state';d.draft.mode=d.draft.mode||'diff';
+    const tl=q('[data-tl]');
+    tl.innerHTML='<div class="tl-h">정리 기록</div>'+cps.map((e,k)=>`<button type="button" data-cp="${k}" class="${k===d.draft.i?'sel':''}" style="--i:${k}"><span class="r">${esc(reason(e))}</span><span class="a">${when(e.at)}</span><span data-delta></span></button>`).join('');
+    tl.onclick=ev=>{const b=ev.target.closest('[data-cp]');if(!b)return;d.draft.i=Number(b.dataset.cp);tl.querySelectorAll('[data-cp]').forEach(x=>x.classList.toggle('sel',x===b));render();};
+    function render(){const k=d.draft.i,e=cps[k],r=result(k),box=q('[data-df]');if(r)tl.querySelector('[data-cp="'+k+'"] [data-delta]').innerHTML=delta(r.counts);
+      if(!r){box.innerHTML='<p class="empty">이 기록은 비교할 수 없어요.</p>';return;}
+      const part=r[d.draft.tab],visible=part.rows.filter(x=>d.draft.mode!=='after'||x.kind!=='del'),limit=d.draft.limit||30,L={add:'추가',chg:'변경',del:'삭제'};
+      const body=x=>x.kind==='add'?(d.draft.mode==='diff'?`<ins>${esc(x.after)}</ins>`:esc(x.after)):x.kind==='del'?esc(x.before):(d.draft.mode==='diff'?wdiff(x.before,x.after):esc(x.after));
+      box.innerHTML=`<div class="df-top"><b>${esc(reason(e))} · ${when(e.at)}</b><div class="seg" data-tab>${[['state','현재상태',r.state.rows.length],['log','날짜로그',r.log.rows.length]].map(([v,l,n])=>`<button type="button" data-v="${v}" aria-pressed="${d.draft.tab===v}">${l} <small>${n}</small></button>`).join('')}</div><span class="grow"></span><div class="seg" data-mode>${[['diff','바뀐 곳 표시'],['after','바뀐 뒤만']].map(([v,l])=>`<button type="button" data-v="${v}" aria-pressed="${d.draft.mode===v}">${l}</button>`).join('')}</div></div>`
+        +(visible.slice(0,limit).map((x,n)=>`<details class="dcard ${x.kind}" style="--i:${Math.min(n,5)}" data-diff-row="${n}"${Math.max((x.before||'').length,(x.after||'').length)<=1200?' open':''}><summary class="dh"><b>${esc(x.title)}</b><span class="tagx">${L[x.kind]}</span></summary><div class="dtx">${Math.max((x.before||'').length,(x.after||'').length)<=1200?body(x):''}</div></details>`).join('')||'<p class="empty">표시할 변경 후 내용이 없어요.</p>')+(visible.length>limit?'<button type="button" class="seg" data-more>변경 카드 더 보기</button>':'')
+        +(part.same?`<div class="same">바뀌지 않은 ${d.draft.tab==='state'?'섹션':'카드'} ${part.same}개는 숨김</div>`:'')
+        +`<div class="scope">${approvedIcon('info')}<span>${k===0?'이 기록 직전 모습과 지금을 비교해요.':'이 기록 직전 모습과 다음 기록 직전 모습을 비교해요.'} 정리 성공 여부를 뜻하지 않으며, 그 사이 직접 고친 내용도 함께 보여요. 복구 자료에는 현재상태·날짜로그만 있어서 인지·자료집·호칭은 비교하지 않아요. 방마다 최근 10회까지 남아요. 추가 API 호출 없음.</span></div>`;
+      box.querySelectorAll('[data-diff-row]').forEach(el=>{el.ontoggle=()=>{if(el.open&&!el.dataset.loaded){el.querySelector('.dtx').innerHTML=body(visible[Number(el.dataset.diffRow)]);el.dataset.loaded='1';}};});
+      const more=box.querySelector('[data-more]');if(more)more.onclick=()=>{d.draft.limit=limit+30;render();};
+      box.querySelector('[data-tab]').onclick=ev=>{const b=ev.target.closest('button');if(!b)return;d.draft.tab=b.dataset.v;d.draft.limit=30;render();};
+      box.querySelector('[data-mode]').onclick=ev=>{const b=ev.target.closest('button');if(!b)return;d.draft.mode=b.dataset.v;render();};
+      box.scrollTop=0;}
+    render();
+  }
   function mountApprovedViews(){
     root.querySelectorAll('[data-approved-view]').forEach(host=>{
       if(host.shadowRoot)return;const d=findDlg(host.dataset.approvedId);if(!d)return;
@@ -13713,7 +13998,7 @@ map:`<div class="m3-shell">
       const ui=document.createElement('div');ui.className='m3-ui'+(document.body.getAttribute('data-theme')==='dark'||(!document.body.hasAttribute('data-theme')&&matchMedia('(prefers-color-scheme: dark)').matches)?' dark':'');ui.dataset.kind=host.dataset.approvedView;
       ui.innerHTML=APPROVED_TEMPLATES[ui.dataset.kind];shadow.append(ui);
       const close=()=>closeSheet(d);ui.querySelectorAll('.m3-head [aria-label="닫기"]').forEach(b=>b.onclick=close);
-      ({cost:approvedCost,map:approvedMap,cal:approvedCal})[ui.dataset.kind](ui,d,close);
+      ({cost:approvedCost,map:approvedMap,cal:approvedCal,diff:approvedDiff})[ui.dataset.kind](ui,d,close);
     });
   }
   function approvedCost(ui,d){
@@ -13772,7 +14057,7 @@ map:`<div class="m3-shell">
     const LBL={inj:'주입 중',cand:'주입 후보',off:'주입 안 함'};
     const st=r=>{const s=d.logState.get(r.key);if(d.injectionOn===false||d.logsOn===false||!s?.included)return 'off';return s.verified?'inj':'cand';};
     const title=r=>r.events||String(r.heading||'').replace(/^\[|\]$/g,'')||'제목 없음';
-    const card=(r,i,dateChip)=>`<details class="lc" style="--i:${i}"><summary><span class="lc-t">${dateChip?`<span class="lc-d">${esc(r.fullDate||'')}</span>`:''}${esc(title(r))}</span><span class="st ${st(r)}">${LBL[st(r)]}</span><span class="chev">${approvedIcon('chev')}</span>${r.body?`<span class="lc-x">${esc(r.body)}</span>`:''}</summary><div class="lc-b">${r.body?esc(r.body):'<span class="muted">본문 없음</span>'}</div></details>`;
+    const card=(r,i,dateChip)=>`<details class="lc" style="--i:${i}"><summary><span class="lc-t">${dateChip?`<span class="lc-d">${esc(r.fullDate||'')}</span>`:''}${esc(title(r))}</span><span class="st ${st(r)}">${esc(WHY_LABEL[d.logState.get(r.key)?.why]?.[0]||LBL[st(r)])}</span><span class="chev">${approvedIcon('chev')}</span>${r.body?`<span class="lc-x">${esc(r.body)}</span>`:''}</summary><div class="lc-b">${d.logState.get(r.key)?.reason?`<div class="scope">${esc(d.logState.get(r.key).reason)}</div>`:''}${r.body?esc(r.body):'<span class="muted">본문 없음</span>'}</div></details>`;
     q('[data-count]').textContent='카드 '+rows.length+'개';
     const other=rows.filter(r=>!dated(r)),kind=r=>r.isUnknown?'날짜 미상':r.isSpecialDate?'연호·기원전':r.isCustomDate?'작품 고유 표기':r.isYearOnly?'연도만':(r.month&&r.day)?'월·일만 (연도 없음)':'기타';
     const nd=q('[data-nd]');nd.hidden=!other.length;q('[data-nd-sum]').textContent='날짜가 정확하지 않은 기록 '+other.length+'개';
@@ -13889,7 +14174,7 @@ map:`<div class="m3-shell">
   }
 
   const DLG = {
-    usageLedger:vUsageLedger,logCalendar:vLogCalendar,relationMap:vRelationMap,
+    usageLedger:vUsageLedger,logCalendar:vLogCalendar,relationMap:vRelationMap,memoryDiff:vMemoryDiff,
     txtDownloads(d) {
       const files=d.files||[],requested=files.filter(file=>file.requested).length;
       const size=bytes=>bytes<1024?fmt(bytes)+' B':bytes<1048576?(bytes/1024).toLocaleString('ko-KR',{maximumFractionDigits:1})+' KB':(bytes/1048576).toLocaleString('ko-KR',{maximumFractionDigits:1})+' MB';
@@ -14001,6 +14286,14 @@ map:`<div class="m3-shell">
     roomName:roomNameDialogView,
     loreSplit:loreSplitDialogView,
     /* props: { src, rooms:[{id,label,sum,diff,current}], libs:[{id,label,sum,diff,owner}], draft:{ pick:{} } } → act bkApply(dlgId) */
+    kvSettings(d){const c=d.draft,busy=WishKoofr.view().busy;return sheet(d,{title:'Koofr 연결',body:`<section class="m3-grp"><div class="m3-gt">${ic('cloud')}개인 저장소</div>${field('이메일',inp(D(d,'email'),c.email,'Koofr 가입 이메일'))}${field('앱 비밀번호',inp(D(d,'password'),c.password,'저장된 비밀번호 유지','password'),'Koofr → Preferences → Password에서 Wish용 비밀번호를 만드세요. 로그인 비밀번호와 다릅니다.')}<p class="m3-muted">저장 위치: Koofr / Wish-Core-Backups<br>연결 정보는 이 확장 프로그램에만 저장하며 백업에 포함하지 않습니다.</p><a href="https://app.koofr.net/help/webdav" target="_blank" rel="noopener noreferrer">앱 비밀번호 발급 안내</a></section><div class="m3-status ${c.test==='ok'?'m3-ok':c.test==='err'?'m3-err':''}">${ic(c.test==='ok'?'check':'cloud')}<span>${esc(c.test==='busy'?'연결 확인 중…':c.testMsg||'버튼을 누를 때만 통신합니다. 백업은 암호화하지 않은 JSON 파일입니다.')}</span></div>`,foot:`${btn('연결 테스트','kvTest',{arg:d.id,cls:'mini',dis:busy})}${SP}${closeBtn(d,'취소')}${btn('저장','kvSave',{arg:d.id,cls:'primary',dis:busy})}`});},
+    kvRooms(d){const n=d.rows.filter(r=>d.draft.pick[r.key]).length;return sheet(d,{title:'백업할 방 선택',desc:'같은 이름이어도 방 ID로 구분합니다',body:`<div class="m3-row m3-bottomgap">${btn('현재 방만','kvRoomPick',{arg:d.id+'|current',cls:'mini'})}${btn('전체 선택','kvRoomPick',{arg:d.id+'|all',cls:'mini'})}${btn('선택 해제','kvRoomPick',{arg:d.id+'|none',cls:'quiet mini'})}</div>${d.rows.map(r=>`<label class="m3-cbx ${d.draft.pick[r.key]?'is-on':''}" data-key="kv-${r.key}"><input type="checkbox" data-bind="${D(d,'pick.'+r.key)}"${d.draft.pick[r.key]?' checked':''}><span class="m3-box"></span><span class="m3-t"><b>${esc(r.label)}${r.current?tag('현재 방','ok'):''}</b><small>${esc(r.detail)}</small></span></label>`).join('')||empty('저장된 방이 없습니다.')}<section class="m3-grp m3-topgap">${tog('공용 지침·설정도 함께 저장',D(d,'includeSettings'),d.draft.includeSettings,'선택한 방의 기억·인지·관계·연결 자료집은 항상 함께 저장합니다. API 키는 포함하지 않습니다.')}</section>`,foot:`<span class="m3-muted">${n}개 방 선택</span>${SP}${closeBtn(d,'취소')}${btn('선택한 방 백업','kvRoomAccept',{arg:d.id,cls:'primary',dis:!n})}`});},
+    kvList(d){const c=WishKoofr.view(),groups=new Map();d.draft.pick||={};const selecting=!!d.draft.selecting,pick=d.draft.pick,n=c.list.filter(b=>pick[b.id]).length;
+      for(const b of c.list){const key=b.deviceId||b.dev||'unknown';if(!groups.has(key))groups.set(key,{id:key,name:b.dev||'이름 없는 기기',mine:b.mine,rows:[]});groups.get(key).rows.push(b);}
+      const info=b=>`<b>${esc(b.when)}</b><small>${b.rooms}개 방 · ${esc(b.size)} · Core 백업 · ${b.auto?'자동':'수동'}${b.encrypted?' · 암호화':''}</small>${b.roomNames?'<small class="m3-cloud-names" title="'+esc(b.roomNames)+'">'+esc(b.roomNames)+'</small>':''}`;
+      const rows=[...groups.values()].sort((a,b)=>Number(b.mine)-Number(a.mine)).map(g=>`<div class="m3-cloud-group" data-key="device-${esc(g.id)}"><div class="m3-cloud-title">${g.mine?'<span class="m3-chip known">이 기기</span>':''}${esc(g.name)}<small>${g.rows.length}개</small></div>${g.rows.map(b=>`<div class="m3-cloud-row ${b.auto?'auto':''}" data-key="backup-${esc(b.id)}">${selecting?`<label class="m3-cbx m3-cloud-pick ${pick[b.id]?'is-on':''}" style="padding:0;margin:0"><input type="checkbox" data-bind="${D(d,'pick.'+enc(b.id))}"${pick[b.id]?' checked':''}${c.busy?' disabled':''}><span class="m3-box"></span><span class="m3-t">${info(b)}</span></label>`:`<div class="m3-cloud-info m3-cbx m3-cloud-pick" style="padding:0;margin:0"><span class="m3-box" aria-hidden="true"></span><span class="m3-t">${info(b)}</span></div>`}<div class="m3-row m3-cloud-actions">${btn('복원','kvRestore',{arg:b.id,cls:'mini',dis:c.busy})}</div></div>`).join('')}</div>`).join('');
+      return sheet(d,{title:'클라우드 백업 · Koofr',body:`<section class="m3-panel" data-key="cloud-head"><b>${c.ready?'연결됨':'연결 설정이 필요합니다'}</b><div class="m3-muted">${esc(c.device)} · ${c.enc?'암호화 켜짐':'암호화 꺼짐'}${c.last?' · '+esc(c.last):''}</div><div class="m3-status m3-topgap">수동 저장·불러오기 · 자동 업로드·자동 삭제 없음</div><div class="m3-row m3-card-actions">${btn('방 골라 백업','kvBackup',{cls:'primary mini',dis:!c.ready||c.loading||c.busy})}${btn('목록 새로고침','kvRefresh',{cls:'mini',dis:!c.ready||c.loading||c.busy})}${btn('연결 설정','kvSettings',{cls:'quiet mini',dis:c.busy})}${c.ready?btn('연결 해제','kvDisconnect',{cls:'quiet mini',dis:c.busy}):''}</div></section>${c.retentionWarning?'<div class="m3-status m3-warning">'+esc(c.retentionWarning)+'</div>':''}${c.error?'<section class="m3-panel m3-alert"><b>목록을 불러오지 못했습니다</b><p>'+esc(c.error)+'</p></section>':''}${c.loading?'<p class="m3-muted" role="status">목록 확인 중…</p>':''}${rows||empty(c.ready?'목록 새로고침을 눌러 저장된 백업을 확인하세요.':'Koofr 이메일과 앱 비밀번호를 먼저 설정해 주세요.')}`,foot:`${btn(selecting?'선택 취소':'선택','kvSelect',{arg:d.id,cls:'quiet mini',dis:c.busy})}${selecting?btn('전체 선택','kvPick',{arg:d.id+'|all',cls:'quiet mini',dis:c.busy})+btn('선택 해제','kvPick',{arg:d.id+'|none',cls:'quiet mini',dis:c.busy}):''}${SP}${selecting?btn(n+'개 삭제','kvRemove',{arg:d.id,cls:'danger mini',dis:!n||c.busy}):''}${closeBtn(d)}`});
+    },
     backupImport(d) {
       const pk = d.draft.pick, onOf = x => !!(pk[x.id] || (x.owner && pk[x.owner]));
       const row = x => { const on = onOf(x), dis = !!(x.owner && pk[x.owner]); return `<label class="m3-cbx ${on ? 'is-on' : ''} ${dis ? 'is-dis' : ''}" data-key="bi-${esc(x.id)}"><input type="checkbox" data-bind="${D(d, 'pick.' + enc(x.id))}"${on ? ' checked' : ''}${dis ? ' disabled' : ''}><span class="m3-box"></span><span class="m3-t"><b>${esc(x.label)}${x.current ? tag('현재 방', 'ok') : ''}${x.diff ? tag(esc(x.diff), x.diff === '신규' ? 'ok' : x.diff === '변경 있음' ? 'warn' : '') : ''}</b><small>${esc(x.sum || '')}${x.owner ? ' · 방을 고르면 같이 복원' : ''}</small></span></label>`; };
@@ -14112,7 +14405,7 @@ map:`<div class="m3-shell">
     const nl = navList(), idx = Math.max(0, nl.findIndex(t => t[0] === S.tab)), badge = { check: V.reviews.length, cognition: V.reviews.length };
     const nav = () => nl.map(([k, l, i]) => `<button type="button" data-act="nav" data-arg="${k}" aria-current="${S.tab === k ? 'page' : 'false'}">${ic(i)}<span>${l}</span>${badge[k] ? `<em class="m3-nb">${badge[k]}</em>` : ''}</button>`).join('');
     const st = (S.pos ? `left:${S.pos.x}px;top:${S.pos.y}px;` : '') + (S.size ? `width:${S.size.w}px;height:${S.size.h}px;` : '');
-    const tools = [['api', 'key', '보조 AI 연결', ''], ['search', 'search', '검색', 'search'], ['closePanel', 'close', '닫기', '']].filter(t => !t[3] || has(t[3]));
+    const tools = [['api', 'key', '보조 AI 연결', ''], ['kvOpen', 'cloud', 'Koofr 클라우드 백업', ''], ['search', 'search', '검색', 'search'], ['closePanel', 'close', '닫기', '']].filter(t => !t[3] || has(t[3]));
     const jl = jobLabel(), sv = V.save;
     return `<div class="m3-overlay ${S.leaving ? 'leaving' : ''}" data-key="ov"><div class="m3-shell ${S.pos ? 'placed' : ''}" style="${st}" role="dialog" aria-label="Wish RP Manager Core">
     <header data-key="shell-header" class="m3-head ${S.dragging ? 'dragging' : ''}" data-drag><div class="m3-id"><div class="m3-room-titlebar"><strong>${esc(V.room.name)}</strong><button type="button" class="m3-ico" data-act="roomName" title="채팅방 이름 변경" aria-label="채팅방 이름 변경">${ic('edit')}</button></div>${V.room.story?`<div class="m3-room-story">${esc(V.room.story)}${V.room.local?' · Wish 표시 이름':''}</div>`:''}<div class="m3-sub-line">${live()}${V.version ? `<span>·</span><span>Wish Core ${esc(V.version)}</span>` : ''}${sv.saving || sv.at ? `<span>·</span><span class="m3-save ${sv.saving ? 'saving' : ''}">${sv.saving ? '저장 중…' : '저장됨 ' + esc(sv.at)}</span>` : ''}</div></div><div class="m3-headtools">${tools.map(([a, i, l]) => `<button type="button" class="m3-ico" data-act="${a}" aria-label="${l}" title="${l}">${ic(i)}</button>`).join('')}</div></header>
@@ -14264,7 +14557,8 @@ map:`<div class="m3-shell">
 
   /* ───────── 19. 내장 동작 (화면 전용) ───────── */
   const BUILTIN = {
-    usageLedger:localUsageOpen,logCalendar:localCalendarOpen,relationMap:localGraphOpen,
+    kvOpen:()=>WishKoofr.open(),kvSettings:()=>WishKoofr.settings(),kvRefresh:()=>WishKoofr.refresh(),kvBackup:()=>WishKoofr.backup(),kvRestore:id=>WishKoofr.restore(id),kvTest:id=>WishKoofr.test(id),kvSave:id=>WishKoofr.save(id),kvDisconnect:()=>WishKoofr.disconnect(),kvSelect:id=>WishKoofr.select(id),kvPick:a=>WishKoofr.pick(a),kvRemove:id=>WishKoofr.remove(id),kvRoomPick:a=>WishKoofr.roomPick(a),kvRoomAccept:id=>WishKoofr.roomAccept(id),
+    usageLedger:localUsageOpen,logCalendar:localCalendarOpen,relationMap:localGraphOpen,memDiff:localDiffOpen,memDiffSeen:()=>{MemoryDiff.dismiss(state.currentRoom);},injWhy:a=>{S.injWhy=a;},
     secondaryExpand:arg=>{const [id,key]=arg.split('|'),d=findDlg(id);if(d&&!d.busy){d.draft.open||={};d.draft.open[key]=!d.draft.open[key];}},
     secondaryMore:id=>{const d=findDlg(id);if(d&&!d.busy)d.draft.limit=(Number(d.draft.limit)||30)+30;},
     secondaryPick:arg=>{const [id,mode]=arg.split('|');SecondaryRebuild.selectReviewRows(findDlg(id),mode);},
@@ -14566,7 +14860,7 @@ function WUIOpenPromise(type,props){return new Promise(resolve=>{const d=WUI.ope
 function WUIResolve(id,value){const p=WUICache.pending.get(id);if(p){WUICache.pending.delete(id);p.resolve(value);}WUI.closeSheet(id);}
 function WUIWatchClosedSheets(){const observer=new MutationObserver(()=>{for(const [id,p] of WUICache.pending)if(!WUI.ui.dlg(id)){WUICache.pending.delete(id);p.resolve(false);}});observer.observe(document.getElementById('wish-rp-root'),{subtree:true,childList:true});}
 async function WUIOnOpen(){const id=getChatIdFromPath();if(!id){notify('채팅방 화면에서만 사용할 수 있습니다.','warn');WUI.close();return;}await ensureCurrentRoom(id);WUIRefreshSettings();void WishRoomNames.read(id).then(()=>WUI.paint()).catch(()=>{});state.modal=document.getElementById('wish-rp-root');v2ScheduleAsyncRefresh(state.currentRoom);void WUIRefreshTurnCount(state.currentRoom,true);U3.schedule(state.currentRoom);void R31.load(state.currentRoom).catch(e=>notify(e.message,'warn'));WUI.paint();}
-function WUIStyles(){if(!document.getElementById('wish-logbar-style')){const lb=document.createElement('style');lb.id='wish-logbar-style';lb.textContent='#wish-rp-root .m3-logbar{flex-wrap:nowrap;gap:6px}#wish-rp-root .m3-logbar>.m3-actions{gap:6px;flex-wrap:nowrap}#wish-rp-root .m3-viewseg{display:inline-flex;flex:none;padding:2px;border-radius:9px;background:var(--m3-card2);border:1px solid var(--m3-line)}#wish-rp-root .m3-viewseg>button{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;padding:4px 10px;border:0;border-radius:7px;background:transparent;color:var(--m3-muted);cursor:pointer;transition:background .25s,color .25s}#wish-rp-root .m3-viewseg>button:hover{color:var(--m3-fg)}#wish-rp-root .m3-viewseg>button.is-on{background:var(--m3-card);color:var(--m3-fg);font-weight:600;box-shadow:var(--m3-shadow);cursor:default}#wish-rp-root .m3-viewseg svg.ic{width:13px;height:13px}#wish-rp-root .m3-dupwarn{display:inline-flex;align-items:center;gap:5px;flex:none;font-size:11.5px;padding:4px 10px;border-radius:999px;cursor:pointer;color:var(--m3-warn);background:color-mix(in srgb,var(--m3-warn) 12%,transparent);border:1px solid color-mix(in srgb,var(--m3-warn) 30%,transparent);animation:wishDupPop .45s cubic-bezier(.34,1.42,.5,1)}#wish-rp-root .m3-dupwarn b{font-weight:650}#wish-rp-root .m3-dupwarn svg.ic{width:13px;height:13px}@keyframes wishDupPop{from{opacity:0;transform:scale(.8)}}#wish-rp-root .m3-more{position:relative;flex:none}#wish-rp-root .m3-more>summary{list-style:none;padding:5px 7px!important;cursor:pointer}#wish-rp-root .m3-more>summary::-webkit-details-marker{display:none}#wish-rp-root .m3-more[open]>summary{background:var(--m3-accent-soft)!important;color:var(--m3-accent);border-color:var(--m3-accent-line)!important}#wish-rp-root .m3-more-menu{position:absolute;right:0;top:calc(100% + 6px);z-index:30;min-width:200px;padding:5px;border-radius:11px;border:1px solid var(--m3-line);background:var(--m3-sheet);box-shadow:var(--m3-shell-shadow);display:flex;flex-direction:column;gap:1px;transform-origin:top right;animation:wishMoreDrop .28s cubic-bezier(.34,1.42,.5,1)}@keyframes wishMoreDrop{from{opacity:0;transform:translateY(-4px) scale(.96)}}#wish-rp-root .m3-more-menu .m3-btn{width:100%;justify-content:flex-start;border-color:transparent!important;background:transparent!important;padding:8px 10px;font-size:12.5px}#wish-rp-root .m3-more-menu .m3-btn:hover{background:var(--m3-card2)!important;transform:none}#wish-rp-root .m3-more-h{font-size:10.5px;color:var(--m3-muted);padding:6px 10px 3px}@media(prefers-reduced-motion:reduce){#wish-rp-root .m3-dupwarn,#wish-rp-root .m3-more-menu{animation:none}}#wish-rp-root svg.ic-calendar rect:last-of-type,#wish-rp-root svg.ic-relation circle,#wish-rp-root svg.ic-list path,#wish-rp-root svg.ic-more circle,#wish-rp-root svg.ic-wallet{transform-box:fill-box;transform-origin:center}#wish-rp-root svg.ic-wallet{transform-origin:50% 12%}#wish-rp-root :hover>svg.ic-calendar{animation:wiIcTilt .6s cubic-bezier(.34,1.42,.5,1)}#wish-rp-root :hover>svg.ic-calendar rect:last-of-type{animation:wiIcBlink .6s cubic-bezier(.34,1.42,.5,1)}#wish-rp-root :hover>svg.ic-relation path{stroke-dasharray:30;animation:wiIcDraw .7s ease}#wish-rp-root :hover>svg.ic-relation circle{animation:wiIcPop .5s cubic-bezier(.34,1.42,.5,1) backwards}#wish-rp-root :hover>svg.ic-relation circle:nth-of-type(2){animation-delay:.12s}#wish-rp-root :hover>svg.ic-relation circle:nth-of-type(3){animation-delay:.24s}#wish-rp-root :hover>svg.ic-list path:first-of-type{animation:wiIcNudge .45s ease}#wish-rp-root :hover>svg.ic-list path:last-of-type{animation:wiIcPop .45s cubic-bezier(.34,1.42,.5,1)}#wish-rp-root :hover>svg.ic-more circle,#wish-rp-root [open]>summary>svg.ic-more circle{animation:wiIcHop .5s ease}#wish-rp-root :hover>svg.ic-more circle:nth-of-type(2),#wish-rp-root [open]>summary>svg.ic-more circle:nth-of-type(2){animation-delay:.08s}#wish-rp-root :hover>svg.ic-more circle:nth-of-type(3),#wish-rp-root [open]>summary>svg.ic-more circle:nth-of-type(3){animation-delay:.16s}#wish-rp-root :hover>svg.ic-wallet{animation:wiIcSwing .75s ease}@keyframes wiIcTilt{30%{transform:rotate(-8deg)}60%{transform:rotate(4deg)}}@keyframes wiIcBlink{0%{transform:scale(1)}35%{transform:scale(0)}70%{transform:scale(1.35)}100%{transform:scale(1)}}@keyframes wiIcDraw{from{stroke-dashoffset:30}to{stroke-dashoffset:0}}@keyframes wiIcPop{from{transform:scale(.3)}to{transform:scale(1)}}@keyframes wiIcNudge{40%{transform:translateX(2.5px)}}@keyframes wiIcHop{40%{transform:translateY(-3px)}}@keyframes wiIcSwing{20%{transform:rotate(12deg)}45%{transform:rotate(-9deg)}70%{transform:rotate(5deg)}}@media(prefers-reduced-motion:reduce){#wish-rp-root svg.ic,#wish-rp-root svg.ic *{animation:none!important}}';document.head.append(lb);}if(!document.getElementById('wish-local-views-style')){const st=document.createElement('style');st.id='wish-local-views-style';st.textContent="#wish-rp-root .m3-date-group[data-key^=\"dg-\"] .m3-card::after{display:none!important}";document.head.append(st);}if(!document.getElementById('wish-252-style')){const css=document.createElement('style');css.id='wish-252-style';css.textContent=`
+function WUIStyles(){if(!document.getElementById('wish-logbar-style')){const lb=document.createElement('style');lb.id='wish-logbar-style';lb.textContent='#wish-rp-root .m3-logbar{flex-wrap:nowrap;gap:6px}#wish-rp-root .m3-logbar>.m3-actions{gap:6px;flex-wrap:nowrap}#wish-rp-root .m3-viewseg{display:inline-flex;flex:none;padding:2px;border-radius:9px;background:var(--m3-card2);border:1px solid var(--m3-line)}#wish-rp-root .m3-viewseg>button{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;padding:4px 10px;border:0;border-radius:7px;background:transparent;color:var(--m3-muted);cursor:pointer;transition:background .25s,color .25s}#wish-rp-root .m3-viewseg>button:hover{color:var(--m3-fg)}#wish-rp-root .m3-viewseg>button.is-on{background:var(--m3-card);color:var(--m3-fg);font-weight:600;box-shadow:var(--m3-shadow);cursor:default}#wish-rp-root .m3-viewseg svg.ic{width:13px;height:13px}#wish-rp-root .m3-dupwarn{display:inline-flex;align-items:center;gap:5px;flex:none;font-size:11.5px;padding:4px 10px;border-radius:999px;cursor:pointer;color:var(--m3-warn);background:color-mix(in srgb,var(--m3-warn) 12%,transparent);border:1px solid color-mix(in srgb,var(--m3-warn) 30%,transparent);animation:wishDupPop .45s cubic-bezier(.34,1.42,.5,1)}#wish-rp-root .m3-dupwarn b{font-weight:650}#wish-rp-root .m3-dupwarn svg.ic{width:13px;height:13px}@keyframes wishDupPop{from{opacity:0;transform:scale(.8)}}#wish-rp-root .m3-more{position:relative;flex:none}#wish-rp-root .m3-more>summary{list-style:none;padding:5px 7px!important;cursor:pointer}#wish-rp-root .m3-more>summary::-webkit-details-marker{display:none}#wish-rp-root .m3-more[open]>summary{background:var(--m3-accent-soft)!important;color:var(--m3-accent);border-color:var(--m3-accent-line)!important}#wish-rp-root .m3-more-menu{position:absolute;right:0;top:calc(100% + 6px);z-index:30;min-width:200px;padding:5px;border-radius:11px;border:1px solid var(--m3-line);background:var(--m3-sheet);box-shadow:var(--m3-shell-shadow);display:flex;flex-direction:column;gap:1px;transform-origin:top right;animation:wishMoreDrop .28s cubic-bezier(.34,1.42,.5,1)}@keyframes wishMoreDrop{from{opacity:0;transform:translateY(-4px) scale(.96)}}#wish-rp-root .m3-more-menu .m3-btn{width:100%;justify-content:flex-start;border-color:transparent!important;background:transparent!important;padding:8px 10px;font-size:12.5px}#wish-rp-root .m3-more-menu .m3-btn:hover{background:var(--m3-card2)!important;transform:none}#wish-rp-root .m3-more-h{font-size:10.5px;color:var(--m3-muted);padding:6px 10px 3px}@media(prefers-reduced-motion:reduce){#wish-rp-root .m3-dupwarn,#wish-rp-root .m3-more-menu{animation:none}}#wish-rp-root svg.ic-calendar rect:last-of-type,#wish-rp-root svg.ic-relation circle,#wish-rp-root svg.ic-list path,#wish-rp-root svg.ic-more circle,#wish-rp-root svg.ic-wallet{transform-box:fill-box;transform-origin:center}#wish-rp-root svg.ic-wallet{transform-origin:50% 12%}#wish-rp-root :hover>svg.ic-calendar{animation:wiIcTilt .6s cubic-bezier(.34,1.42,.5,1)}#wish-rp-root :hover>svg.ic-calendar rect:last-of-type{animation:wiIcBlink .6s cubic-bezier(.34,1.42,.5,1)}#wish-rp-root :hover>svg.ic-relation path{stroke-dasharray:30;animation:wiIcDraw .7s ease}#wish-rp-root :hover>svg.ic-relation circle{animation:wiIcPop .5s cubic-bezier(.34,1.42,.5,1) backwards}#wish-rp-root :hover>svg.ic-relation circle:nth-of-type(2){animation-delay:.12s}#wish-rp-root :hover>svg.ic-relation circle:nth-of-type(3){animation-delay:.24s}#wish-rp-root :hover>svg.ic-list path:first-of-type{animation:wiIcNudge .45s ease}#wish-rp-root :hover>svg.ic-list path:last-of-type{animation:wiIcPop .45s cubic-bezier(.34,1.42,.5,1)}#wish-rp-root :hover>svg.ic-more circle,#wish-rp-root [open]>summary>svg.ic-more circle{animation:wiIcHop .5s ease}#wish-rp-root :hover>svg.ic-more circle:nth-of-type(2),#wish-rp-root [open]>summary>svg.ic-more circle:nth-of-type(2){animation-delay:.08s}#wish-rp-root :hover>svg.ic-more circle:nth-of-type(3),#wish-rp-root [open]>summary>svg.ic-more circle:nth-of-type(3){animation-delay:.16s}#wish-rp-root :hover>svg.ic-wallet{animation:wiIcSwing .75s ease}@keyframes wiIcTilt{30%{transform:rotate(-8deg)}60%{transform:rotate(4deg)}}@keyframes wiIcBlink{0%{transform:scale(1)}35%{transform:scale(0)}70%{transform:scale(1.35)}100%{transform:scale(1)}}@keyframes wiIcDraw{from{stroke-dashoffset:30}to{stroke-dashoffset:0}}@keyframes wiIcPop{from{transform:scale(.3)}to{transform:scale(1)}}@keyframes wiIcNudge{40%{transform:translateX(2.5px)}}@keyframes wiIcHop{40%{transform:translateY(-3px)}}@keyframes wiIcSwing{20%{transform:rotate(12deg)}45%{transform:rotate(-9deg)}70%{transform:rotate(5deg)}}@media(prefers-reduced-motion:reduce){#wish-rp-root svg.ic,#wish-rp-root svg.ic *{animation:none!important}}#wish-rp-root .m3-why{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;white-space:nowrap;color:var(--m3-muted);background:var(--m3-card2);vertical-align:middle}#wish-rp-root .m3-why i{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}#wish-rp-root .m3-why.ok{color:var(--m3-ok);background:color-mix(in srgb,var(--m3-ok) 12%,transparent)}#wish-rp-root .m3-why.warn{color:var(--m3-warn);background:color-mix(in srgb,var(--m3-warn) 13%,transparent)}#wish-rp-root .m3-why.accent{color:var(--m3-accent);background:var(--m3-accent-soft)}#wish-rp-root .m3-why.danger{color:var(--m3-danger);background:color-mix(in srgb,var(--m3-danger) 11%,transparent)}#wish-rp-root .m3-irow small .m3-why{font-size:10px;padding:1px 7px;margin-right:5px}#wish-rp-root .m3-whybox{--wc:var(--m3-muted);display:grid;gap:4px;margin:0 0 10px;padding:10px 12px;border-radius:9px;background:var(--m3-card2);border-left:3px solid var(--wc);font-size:12px;line-height:1.6;color:var(--m3-fg2);animation:wishWhyIn .3s ease}#wish-rp-root .m3-whybox b{color:var(--wc);font-size:12px;font-weight:650}#wish-rp-root .m3-whybox.why-limit{--wc:var(--m3-warn)}#wish-rp-root .m3-whybox.why-pick{--wc:var(--m3-accent)}#wish-rp-root .m3-whybox.why-guard{--wc:var(--m3-danger)}#wish-rp-root .m3-whymeter{position:relative;height:6px;border-radius:3px;background:var(--m3-line);margin-top:4px;overflow:hidden}#wish-rp-root .m3-whymeter i{position:absolute;inset:0;background:var(--m3-warn);border-radius:3px;opacity:.75}#wish-rp-root .m3-whymeter em{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--m3-fg)}#wish-rp-root .m3-whymm{display:flex;justify-content:space-between;font-size:10.5px;color:var(--m3-muted)}#wish-rp-root .m3-whyact{margin-top:4px}@keyframes wishWhyIn{from{opacity:0;transform:translateY(-3px)}}#wish-rp-root .m3-whysum{display:flex;align-items:baseline;gap:14px;margin:6px 0 8px;font-size:11.5px;color:var(--m3-muted)}#wish-rp-root .m3-whysum b{font-size:18px;font-weight:750;color:var(--m3-fg);margin-right:2px;font-variant-numeric:tabular-nums}#wish-rp-root .m3-whysum .is-out b{color:var(--m3-warn)}#wish-rp-root .m3-whybar{display:flex;gap:2px;height:7px;border-radius:4px;overflow:hidden;margin-bottom:9px}#wish-rp-root .m3-whybar i{display:block;height:100%;background:var(--m3-muted);opacity:.55}#wish-rp-root .m3-whybar .why-in,#wish-rp-root .m3-whybar .why-cand{background:var(--m3-ok);opacity:.85}#wish-rp-root .m3-whybar .why-limit{background:var(--m3-warn);opacity:.9}#wish-rp-root .m3-whybar .why-pick{background:var(--m3-accent);opacity:.9}#wish-rp-root .m3-whybar .why-guard{background:var(--m3-danger);opacity:.85}#wish-rp-root .m3-whychips{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:6px}#wish-rp-root .m3-whychip{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 10px;border-radius:999px;border:1px solid var(--m3-line);background:var(--m3-card);color:var(--m3-fg2);cursor:pointer;transition:background .2s,color .2s,border-color .2s}#wish-rp-root .m3-whychip i{width:7px;height:7px;border-radius:2px;background:var(--m3-muted)}#wish-rp-root .m3-whychip.why-all i,#wish-rp-root .m3-whychip.why-out i{display:none}#wish-rp-root .m3-whychip.why-limit i{background:var(--m3-warn)}#wish-rp-root .m3-whychip.why-pick i{background:var(--m3-accent)}#wish-rp-root .m3-whychip.why-guard i{background:var(--m3-danger)}#wish-rp-root .m3-whychip[aria-pressed=true]{background:var(--m3-accent-soft);color:var(--m3-accent);border-color:var(--m3-accent-line);font-weight:600}#wish-rp-root .m3-whygrp{display:flex;align-items:baseline;gap:6px;margin:10px 0 2px;font-size:11.5px}#wish-rp-root .m3-whygrp b{font-weight:650;color:var(--m3-fg2)}#wish-rp-root .m3-whygrp small{color:var(--m3-muted)}#wish-rp-root .m3-memdiff{display:flex;align-items:center;gap:10px;padding:10px 12px;margin:0 0 12px;border-radius:11px;border:1px solid var(--m3-accent-line);background:var(--m3-accent-soft);animation:wishWhyIn .35s ease}#wish-rp-root .m3-memdiff-ic{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;background:var(--m3-card);color:var(--m3-accent);flex:none}#wish-rp-root .m3-memdiff-t{flex:1;min-width:0;font-size:12px;line-height:1.55;color:var(--m3-fg2)}#wish-rp-root .m3-memdiff-t b{color:var(--m3-fg);font-weight:650}#wish-rp-root .m3-memdiff-x{display:grid;place-items:center;width:26px;height:26px;border-radius:7px;color:var(--m3-muted);background:transparent;border:0;cursor:pointer}#wish-rp-root .m3-memdiff-x:hover{background:var(--m3-card);color:var(--m3-fg)}#wish-rp-root .m3-diff-count{display:inline-flex;gap:4px;margin-left:2px}#wish-rp-root .m3-diff-count i{font-style:normal;font-size:10.5px;font-weight:650;padding:0 6px;border-radius:5px}#wish-rp-root .m3-diff-count .add{color:var(--m3-ok);background:color-mix(in srgb,var(--m3-ok) 14%,transparent)}#wish-rp-root .m3-diff-count .chg{color:var(--m3-warn);background:color-mix(in srgb,var(--m3-warn) 14%,transparent)}#wish-rp-root .m3-diff-count .del{color:var(--m3-danger);background:color-mix(in srgb,var(--m3-danger) 12%,transparent)}@media(prefers-reduced-motion:reduce){#wish-rp-root .m3-whybox,#wish-rp-root .m3-memdiff{animation:none}}';document.head.append(lb);}if(!document.getElementById('wish-local-views-style')){const st=document.createElement('style');st.id='wish-local-views-style';st.textContent="#wish-rp-root .m3-date-group[data-key^=\"dg-\"] .m3-card::after{display:none!important}";document.head.append(st);}if(!document.getElementById('wish-252-style')){const css=document.createElement('style');css.id='wish-252-style';css.textContent=`
 
 .m3-local-room{margin-bottom:7px}.m3-local-room .m3-t{min-width:0;overflow-wrap:anywhere}.m3-local-room .m3-t small{line-height:1.5;margin-top:3px}
 .m3-economy-actions{display:flex;flex-wrap:nowrap;gap:7px;margin-left:auto}
