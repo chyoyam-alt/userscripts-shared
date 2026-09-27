@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         👾 Crack INFO Game HUD (미니 RPG HUD)
 // @namespace    crack-info-game-hud-clean
-// @version      3.5.8
+// @version      3.5.9
 // @description  크랙 채팅 최신 답변을 게임식 로그·관계도·HUD 코멘트로 정리하고, PET/마스코트·토큰 사용량·암호화 클라우드 인계·펫 다이어리를 지원합니다.
 // @author       뤼부이
 // @updateURL    https://gist.github.com/chyoyam-alt/e7370c75740314a4a34e4c1d2d4ed9d2/raw/INFOGameHUD.user.js
@@ -29,7 +29,7 @@
   if (window.__CIGH_CLEAN_V240_RELEASE_LOADED__) return;
   window.__CIGH_CLEAN_V240_RELEASE_LOADED__ = true;
 
-  const VERSION = '3.5.8';
+  const VERSION = '3.5.9';
   const FAB_ID = 'cigh-clean-fab';
   const PANEL_ID = 'cigh-clean-panel';
   const POPUP_ID = 'cigh-clean-popup';
@@ -9090,26 +9090,46 @@
     const rect = inputHost.getBoundingClientRect?.();
     if (!rect || rect.width <= 0 || rect.height <= 0) return false;
 
+    // The outer host includes padding and flex gaps after empty suggestion rows.
+    // Dock to its first visible in-flow child, not that empty outer edge.
+    let anchorTop = rect.top;
+    if (inputHost.matches('div.pointer-events-auto')) {
+      let contentTop = Infinity;
+      for (const child of inputHost.children) {
+        if (!(child instanceof HTMLElement)) continue;
+        const childStyle = getComputedStyle(child);
+        if (childStyle.display === 'none' || childStyle.visibility === 'hidden'
+          || childStyle.visibility === 'collapse' || childStyle.position === 'absolute'
+          || childStyle.position === 'fixed') continue;
+        const childRect = child.getBoundingClientRect();
+        if (childRect.width <= 0 || childRect.height <= 0) continue;
+        contentTop = Math.min(contentTop, childRect.top);
+      }
+      if (Number.isFinite(contentTop)) anchorTop = contentTop;
+    }
+
     const vp = viewportSize();
     const left = clamp(Math.round(rect.left), 0, Math.max(0, vp.width - 1));
     const width = Math.max(1, Math.min(Math.round(rect.width), vp.width - left));
-    let bottom = Math.max(0, vp.height - rect.top + 1);
+    let bottom = Math.max(0, vp.height - anchorTop + 1);
 
-    ticker.style.left = `${left}px`;
-    ticker.style.width = `${width}px`;
+    ticker.style.left = left + 'px';
+    ticker.style.width = width + 'px';
     ticker.style.right = 'auto';
     ticker.style.top = 'auto';
-    ticker.style.bottom = `${bottom}px`;
+    ticker.style.bottom = bottom + 'px';
     setTickerBoxVisible(ticker);
 
     const livePopup = document.getElementById('igx-live-popup');
     if (livePopup && shouldShowTickerBox()) {
+      const popupStyle = getComputedStyle(livePopup);
       const tickerRect = ticker.getBoundingClientRect?.();
       const popupRect = livePopup.getBoundingClientRect?.();
-      if (rectsIntersect(tickerRect, popupRect)) {
-        const overlapY = Math.max(0, Math.min(tickerRect.bottom, popupRect.bottom) - Math.max(tickerRect.top, popupRect.top));
-        bottom += Math.ceil(overlapY);
-        ticker.style.bottom = `${bottom}px`;
+      if (popupStyle.display !== 'none' && popupStyle.visibility !== 'hidden'
+        && popupStyle.visibility !== 'collapse' && rectsIntersect(tickerRect, popupRect)) {
+        // Align above the popup even when it fully contains the ticker vertically.
+        bottom = Math.max(bottom, vp.height - popupRect.top + 1);
+        ticker.style.bottom = bottom + 'px';
       }
     }
 
