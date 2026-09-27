@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🌧️ Crack Ambient Weather FX (시간대 배경 & 날씨 효과)
 // @namespace    crack-ambient-weather-fx
-// @version      2.6.4
+// @version      2.6.7
 // @description  Crack 채팅방에 시간대 배경·화면 효과·키워드 자동 전환·사운드를 추가합니다.
 // @downloadURL  https://gist.github.com/chyoyam-alt/e68afc01c22bc0e734b586244086714c/raw/AmbientWeatherFX.user.js
 // @updateURL    https://gist.github.com/chyoyam-alt/e68afc01c22bc0e734b586244086714c/raw/AmbientWeatherFX.user.js
@@ -249,7 +249,7 @@
   // v2.6.3: time parser NFKC normalization — supports PM．10:23 / AM．7:05 and full-width AM/PM, digits, colon variants.
   const SCRIPT_NAME = 'Crack Ambient Weather FX';
   // v2.6.4: liquid-glass settings UI, fixed status header and idle launcher animation.
-  const VERSION = '2.6.4';
+  const VERSION = '2.6.7';
   const STORE_KEY = 'cawf_settings_v1';
   const GUARD_KEY = '__CAWF_AMBIENT_WEATHER_FX_V257_LOADED__';
 
@@ -1968,6 +1968,33 @@
     return a || 1;
   }
 
+  // Keep one motion template; resolve particle variables only when particles are built.
+  const UNDERWATER_FLOAT_KEYFRAMES = `@keyframes cawf-uw-float {
+        0% {
+          transform: translate3d(0, 1.2vh, 0) rotate(0deg) scale(calc(var(--scale-start, 1) * .92));
+          opacity: 0;
+        }
+        14% {
+          opacity: calc(var(--alpha, .22) * .56);
+        }
+        30% {
+          transform: translate3d(calc(var(--sway, 1.2vw) * -.34), calc(var(--dy, -10vh) * .18), 0) rotate(calc(var(--tilt-mid, 2.6deg) * -.35)) scale(calc(var(--scale-start, 1) * .99));
+          opacity: calc(var(--alpha, .22) * .92);
+        }
+        58% {
+          transform: translate3d(calc(var(--sway, 1.2vw) * .42), calc(var(--dy, -10vh) * .52), 0) rotate(var(--tilt-mid, 2.6deg)) scale(calc(var(--scale-end, 1.08) * .98));
+          opacity: var(--alpha, .22);
+        }
+        84% {
+          transform: translate3d(calc(var(--dx, 3.2vw) * .78), calc(var(--dy, -10vh) * .82), 0) rotate(calc(var(--tilt-end, 4deg) * -.32)) scale(calc(var(--scale-end, 1.08) * 1.01));
+          opacity: calc(var(--alpha, .22) * .72);
+        }
+        100% {
+          transform: translate3d(var(--dx, 3.2vw), var(--dy, -10vh), 0) rotate(var(--tilt-end, 4deg)) scale(var(--scale-end, 1.08));
+          opacity: 0;
+        }
+      }`;
+
   function injectStyle() {
     document.getElementById(IDS.style)?.remove();
 
@@ -3514,31 +3541,7 @@
         100% { transform: translate3d(1.4%, 0, 0) scaleX(1.01); opacity: .26; }
       }
 
-      @keyframes cawf-uw-float {
-        0% {
-          transform: translate3d(0, 1.2vh, 0) rotate(0deg) scale(calc(var(--scale-start, 1) * .92));
-          opacity: 0;
-        }
-        14% {
-          opacity: calc(var(--alpha, .22) * .56);
-        }
-        30% {
-          transform: translate3d(calc(var(--sway, 1.2vw) * -.34), calc(var(--dy, -10vh) * .18), 0) rotate(calc(var(--tilt-mid, 2.6deg) * -.35)) scale(calc(var(--scale-start, 1) * .99));
-          opacity: calc(var(--alpha, .22) * .92);
-        }
-        58% {
-          transform: translate3d(calc(var(--sway, 1.2vw) * .42), calc(var(--dy, -10vh) * .52), 0) rotate(var(--tilt-mid, 2.6deg)) scale(calc(var(--scale-end, 1.08) * .98));
-          opacity: var(--alpha, .22);
-        }
-        84% {
-          transform: translate3d(calc(var(--dx, 3.2vw) * .78), calc(var(--dy, -10vh) * .82), 0) rotate(calc(var(--tilt-end, 4deg) * -.32)) scale(calc(var(--scale-end, 1.08) * 1.01));
-          opacity: calc(var(--alpha, .22) * .72);
-        }
-        100% {
-          transform: translate3d(var(--dx, 3.2vw), var(--dy, -10vh), 0) rotate(var(--tilt-end, 4deg)) scale(var(--scale-end, 1.08));
-          opacity: 0;
-        }
-      }
+      ${UNDERWATER_FLOAT_KEYFRAMES}
 
       .cawf-uw-rays {
         position: absolute;
@@ -5351,8 +5354,10 @@
       }
       const amount = normalizeChoice(state.settings.intensity, ['low', 'medium', 'high'], 'medium');
       const particleTarget = amount === 'high' ? 74 : amount === 'low' ? 32 : 52;
-      if (drift.children.length !== particleTarget || drift.dataset.cawfAmount !== amount) {
+      let motionStyle = uwLayer.querySelector(':scope > style.cawf-uw-motion-style');
+      if (drift.children.length !== particleTarget || drift.dataset.cawfAmount !== amount || !motionStyle) {
         const frag = document.createDocumentFragment();
+        const motionRules = [];
         const ratio = particleTarget / 62;
         const groups = [
           { cls: 'cawf-uw-particle', count: Math.max(8, Math.round(22 * ratio)), minSize: 3.6, maxSize: 6.9, minDur: 19, maxDur: 32, minAlpha: .24, maxAlpha: .48, minBlur: 0, maxBlur: .25 },
@@ -5379,9 +5384,22 @@
             el.style.setProperty('--tilt-end', `${rand(-5.5, 5.5).toFixed(2)}deg`);
             el.style.setProperty('--scale-start', rand(.90, 1.02).toFixed(3));
             el.style.setProperty('--scale-end', rand(1.02, 1.18).toFixed(3));
+            // No per-frame JS: keep native CSS timing/pause behavior and responsive vw/vh.
+            const motionName = 'cawf-uw-float-' + motionRules.length;
+            motionRules.push(UNDERWATER_FLOAT_KEYFRAMES.replace('cawf-uw-float', motionName)
+              .replace(/var\((--[\w-]+)(?:,\s*([^)]*))?\)/g,
+                (_, key, fallback) => el.style.getPropertyValue(key).trim() || fallback || '0'));
+            el.style.animationName = motionName;
             frag.appendChild(el);
           }
         }
+        // Replace, never append rules across intensity changes; removing the layer removes them too.
+        if (!motionStyle) {
+          motionStyle = document.createElement('style');
+          motionStyle.className = 'cawf-uw-motion-style';
+          uwLayer.appendChild(motionStyle);
+        }
+        motionStyle.textContent = motionRules.join('\n');
         drift.dataset.cawfAmount = amount;
         drift.replaceChildren(frag);
       }
@@ -5763,7 +5781,7 @@ function panelHTML(){
   
   <header class="cawfg-head stg" style="--i:0">
     <div class="cawfg-app" aria-hidden="true"><span data-app-ico>🌧️</span></div>
-    <div class="cawfg-title"><strong>날씨·시간대 FX</strong><small>최신 AI 로그를 읽고 자동으로 바꿔요 · v2.6.4</small></div>
+    <div class="cawfg-title"><strong>날씨·시간대 FX</strong><small>최신 AI 로그를 읽고 자동으로 바꿔요 · v2.6.7</small></div>
     ${sw('enabled', '전체 사용', 'lg')}
     <button type="button" class="cawfg-ib" data-cawf-close aria-label="설정 닫기">${ICON.close}</button>
   </header>
@@ -9814,6 +9832,71 @@ function ensureNightSkyCanvas(force = false) {
     log('fireworks rocket-trail canvas started', reason, signature);
   }
 
+  // Read only our own stylesheet once. Particle variables are immutable after creation;
+  // global speed/opacity and CSS pause/media rules remain live and are not baked.
+  let effectMotionTemplates = null;
+  function bakeEffectMotions(effect, scope) {
+    const particleName = {
+      snow: el => el.dataset.snowShape === 'crystal' ? 'cawf-crystal-fall' : 'cawf-soft-fall',
+      sakura: () => 'cawf-petal-fall',
+      leaves: () => 'cawf-petal-fall',
+      greenLeaves: () => 'cawf-petal-fall',
+      feathers: () => 'cawf-feather-drift',
+      fireflies: el => 'cawf-firefly-codepen-flight, cawf-firefly-blink-' + (el.dataset.blinkPattern || 'single')
+    };
+    const groups = particleName[effect]
+      ? [['.cawf-particle', particleName[effect]]]
+      : {
+        aurora: [['.cawf-aurora-ray', () => 'cawf-aurora-ray-fade, cawf-aurora-ray-wiggle']],
+        candlelight: [['.cawf-candle-motes > i', () => 'cawf-candle-mote']],
+        spellcast: [['.cawf-spell-motes > i', () => 'cawf-spell-mote']],
+        shore: [
+          ['.cawf-shore-yoonseul b', () => 'cawf-shore-yoonseul-flare'],
+          ['.cawf-shore-flecks i', () => 'cawf-shore-fleck']
+        ]
+      }[effect];
+    if (!groups || !scope || !state.root) return;
+    if (!effectMotionTemplates) {
+      const sheet = document.getElementById(IDS.style)?.sheet;
+      if (!sheet) return;
+      effectMotionTemplates = new Map();
+      for (const rule of sheet.cssRules) {
+        if (rule.type === 7 && rule.cssText.includes('var(')) effectMotionTemplates.set(rule.name, rule.cssText);
+      }
+    }
+    const rules = [];
+    const updates = [];
+    for (const [selector, getNames] of groups) {
+      for (const el of scope.querySelectorAll(selector)) {
+        const names = getNames(el).split(',').map(value => value.trim());
+        let changed = false;
+        const resolved = names.map(name => {
+          const template = effectMotionTemplates.get(name);
+          if (!template) return name;
+          // Resolve only values explicitly set on this particle. Never freeze inherited settings.
+          const baked = template.replace(/var\((--[\w-]+)(?:,\s*([^)]*))?\)/g,
+            (token, key) => el.style.getPropertyValue(key).trim() || token);
+          if (baked.includes('var(')) return name;
+          const motionName = 'cawf-opt-motion-' + rules.length;
+          rules.push(baked.replace(name, motionName));
+          changed = true;
+          return motionName;
+        });
+        if (changed) updates.push([el, resolved.join(', ')]);
+      }
+    }
+    if (!rules.length) return;
+    let style = state.root.querySelector(':scope > style.cawf-effect-motion-style');
+    if (!style) {
+      style = document.createElement('style');
+      style.className = 'cawf-effect-motion-style';
+      state.root.appendChild(style);
+    }
+    style.dataset.effect = effect;
+    style.textContent = rules.join('\n');
+    for (const [el, names] of updates) el.style.animationName = names;
+  }
+
   function rebuildAmbientLayer(effect, reason = 'manual') {
     ensureRoot();
     const ambient = state.ambient;
@@ -9831,6 +9914,7 @@ function ensureNightSkyCanvas(force = false) {
       const fragment = document.createDocumentFragment();
       for (let i = 0; i < count; i += 1) fragment.appendChild(makeAuroraRay(i, random));
       ambient.replaceChildren(fragment);
+      bakeEffectMotions(effect, ambient);
       state.ambientSignature = signature;
       log('ambient rebuilt', reason, signature);
       return;
@@ -9850,6 +9934,7 @@ function ensureNightSkyCanvas(force = false) {
       for (let i = 0; i < count; i += 1) fragment.appendChild(makeCandlelightMote(random));
       motes.appendChild(fragment);
       ambient.replaceChildren(motes);
+      bakeEffectMotions(effect, ambient);
       state.ambientSignature = signature;
       log('candlelight ambient rebuilt', reason, signature);
       return;
@@ -9860,6 +9945,7 @@ function ensureNightSkyCanvas(force = false) {
       const signature = `shore-static-filter-lite-v20:${state.settings.effectOpacity}:${state.settings.effectSpeed}:${state.activeTimeEffect}:${state.particleSeed}`;
       if (signature === state.ambientSignature && ambient.querySelector('.cawf-shore-scene')) return;
       ambient.innerHTML = getShoreLayerHtml();
+      bakeEffectMotions(effect, ambient);
       state.ambientSignature = signature;
       log('wave surf rebuilt', reason, signature);
       return;
@@ -9886,6 +9972,7 @@ function ensureNightSkyCanvas(force = false) {
         for (let i = 0; i < count; i += 1) fragment.appendChild(makeSpellcastMote(random, i));
         motes.appendChild(fragment);
       }
+      bakeEffectMotions(effect, ambient);
       state.ambientSignature = signature;
       log('spellcast rune circle rebuilt', reason, signature);
       return;
@@ -9934,6 +10021,8 @@ function ensureNightSkyCanvas(force = false) {
     if (!particles) return;
 
     const effect = getPaintedScreenEffect();
+    const motionStyle = state.root?.querySelector(':scope > style.cawf-effect-motion-style');
+    if (motionStyle && motionStyle.dataset.effect !== effect) motionStyle.remove();
     if (!effect || effect === 'none') {
       particles.replaceChildren();
       state.particleSignature = '';
@@ -9976,6 +10065,7 @@ function ensureNightSkyCanvas(force = false) {
     const fragment = document.createDocumentFragment();
     for (let i = 0; i < count; i += 1) fragment.appendChild(makeParticle(effect, random, i, count));
     particles.replaceChildren(fragment);
+    bakeEffectMotions(effect, particles);
     state.particleSignature = signature;
     updateRootVisibility();
     log('particles rebuilt', reason, signature);
