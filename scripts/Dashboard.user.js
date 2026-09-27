@@ -2,6 +2,8 @@
 // @name         🖥️ Crack Dashboard (크랙 대시보드)
 // @namespace    crack dashboard
 // @version      3.4.6
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/Dashboard.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/Dashboard.user.js
 // @description  숨김 적용 후 순정 모델창 높이를 남은 항목에 맞춰 자동 조절. 모델 목록 편집의 숨김 설정을 우측 상단 순정 모델 선택창에도 적용. 모델 숨김 필터 및 편집/일반 모드 전환 갱신 수정. 공식 모델 Popover(dialog/button/aria-current) DOM 변경 대응 및 모델명·선택 상태 동기화 수정. 턴/누적 사용·잔여·차감 크래커 표시 + 입력창 미니 사이드바. messages API user 고유 ID 기준 턴수. 모델 버튼은 기본 큐브 아이콘 유지. 미니 모델창은 API 기반으로 가볍게 동기화하고 폐기/대체 모델은 필터링. 진행 상세 표기를 프롤로그·현재답변 기준으로 정리하고 생성/리롤 표시는 제거. 에리 로어 Universal 신규 진입 버튼과 초월 번역기·AI 요약·AI 답변·게임 HUD·Scene Painter·Wish RP Manager 확프 연결 지원. AI 요약·메모리 확프의 신규 사이드바 진입점까지 감지·호출하도록 호환성을 확장. 우측 점 메뉴는 입력창 스크롤바와 겹치지 않게 간격 보정. 배경 확프 버튼은 각 확프의 설정 메뉴창 바로가기로 동작. dataLayer 400ms 상시 폴링 제거, DOM 감시 필터링, 최근 방 통계 캐시 재사용으로 가벼운 동작.
 // @match        *://crack.wrtn.ai/*
 // @grant        GM_registerMenuCommand

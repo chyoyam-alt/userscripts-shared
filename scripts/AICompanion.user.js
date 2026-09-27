@@ -2,6 +2,8 @@
 // @name         🧭 Crack AI Companion (크랙 AI 도우미)
 // @namespace    https://crack.wrtn.ai/
 // @version      1.3.0
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/AICompanion.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/AICompanion.user.js
 // @description  Crack RP 로그를 ChatGPT로 보내고 찐빠 검사·질문·장기기억·유저노트·로어·커스텀 작업을 작업별 대화와 증분 전달로 관리합니다.
 // @match        https://crack.wrtn.ai/*
 // @match        https://chatgpt.com/*

@@ -4,8 +4,8 @@
 // @version      0.1.4
 // @description  상세 페이지 사용자 랭킹 제거
 // @author       GPT
-// @downloadURL  https://gist.github.com/chyoyam-alt/0131998e50ef7e998b78d61aa0121ab7/raw/RankingCleaner.user.js
-// @updateURL    https://gist.github.com/chyoyam-alt/0131998e50ef7e998b78d61aa0121ab7/raw/RankingCleaner.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/RankingCleaner.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/RankingCleaner.user.js
 // @match        https://crack.wrtn.ai/*
 // @run-at       document-start
 // @grant        none

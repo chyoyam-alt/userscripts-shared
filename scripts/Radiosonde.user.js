@@ -2,6 +2,8 @@
 // @name         📡 Crack Radiosonde (라디오존데)
 // @namespace    igx-radiosonde-live
 // @version      4.3.4
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/Radiosonde.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/Radiosonde.user.js
 // @description  크랙(wrtn) 입력창에 Fable 5와 최신 IGX 라디오존데 모델 점수를 표시합니다.
 // @match        https://crack.wrtn.ai/*
 // @grant        GM_addStyle

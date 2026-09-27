@@ -4,8 +4,8 @@
 // @version      1.2.8
 // @description  크랙 채팅 메시지에 정확 글자수(API content 기준)와 생성 시각을 기본 툴바 스타일로 표시합니다.
 // @author       Assistant
-// @downloadURL  https://gist.github.com/chyoyam-alt/b13ba3e1039a8cf4765566b10f8cfb8a/raw/CrackBadge.user.js
-// @updateURL    https://gist.github.com/chyoyam-alt/b13ba3e1039a8cf4765566b10f8cfb8a/raw/CrackBadge.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/CrackBadge.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/CrackBadge.user.js
 // @match        https://crack.wrtn.ai/stories/*/episodes/*
 // @grant        GM_addStyle
 // @grant        GM_getValue

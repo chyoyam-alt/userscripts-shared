@@ -2,6 +2,8 @@
 // @name         🔢 Crack Input Counter (입력 글자수)
 // @namespace    crack-input-character-counter
 // @version      1.0.7
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/InputCounter.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/InputCounter.user.js
 // @description  크랙 채팅 입력창의 현재 글자수를 실시간 표시합니다. 2,000자에 가까워질수록 노랑→주황→빨강으로 변하고, 초과 순간 흔들림/진동으로 알립니다.
 // @author       Assistant
 // @match        https://crack.wrtn.ai/*

@@ -3,8 +3,8 @@
 // @namespace    crack-chat-model-stats
 // @version      2.0.1
 // @description  크랙 AI 채팅 사용 모델을 방별로 누적하고, 처음 보는 crackerModel을 자동 등록해 표시합니다.
-// @downloadURL  https://gist.github.com/chyoyam-alt/efa19fd1c79283d5d3dd5d3f3aa13152/raw/ModelStats.user.js
-// @updateURL    https://gist.github.com/chyoyam-alt/efa19fd1c79283d5d3dd5d3f3aa13152/raw/ModelStats.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/ModelStats.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/ModelStats.user.js
 // @match        https://crack.wrtn.ai/*
 // @run-at       document-start
 // @grant        unsafeWindow

@@ -2,6 +2,8 @@
 // @name         🪛 크랙 모바일 화면 잘림 방지
 // @namespace    http://tampermonkey.net/
 // @version      1.7
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/CrackMobileTextWrapFix.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/CrackMobileTextWrapFix.user.js
 // @description  레이아웃 유지하며 순정 마크다운 코드블록 줄바꿈 누락 수정
 // @author       사용자
 // @match        *://crack.wrtn.ai/*

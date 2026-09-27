@@ -2,6 +2,8 @@
 // @name         🧰 Crack Vault Restorer (크랙 보관함 복구기)
 // @namespace    crack-vault-restorer
 // @version      0.5.1
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/ImageLibraryNativeLazyLoadFix.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/ImageLibraryNativeLazyLoadFix.user.js
 // @description  Crack 이미지 보관함의 로딩, 스크롤, 해금 이미지 상단 정렬 문제를 순정 UI 안에서 복구합니다. DOM 카드 삽입 없음.
 // @match        https://crack.wrtn.ai/*
 // @run-at       document-start

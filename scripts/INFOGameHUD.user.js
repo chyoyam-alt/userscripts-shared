@@ -4,8 +4,8 @@
 // @version      3.5.9
 // @description  크랙 채팅 최신 답변을 게임식 로그·관계도·HUD 코멘트로 정리하고, PET/마스코트·토큰 사용량·암호화 클라우드 인계·펫 다이어리를 지원합니다.
 // @author       뤼부이
-// @updateURL    https://gist.github.com/chyoyam-alt/e7370c75740314a4a34e4c1d2d4ed9d2/raw/INFOGameHUD.user.js
-// @downloadURL  https://gist.github.com/chyoyam-alt/e7370c75740314a4a34e4c1d2d4ed9d2/raw/INFOGameHUD.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/INFOGameHUD.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/INFOGameHUD.user.js
 // @match        https://crack.wrtn.ai/*
 // @run-at       document-idle
 // @grant        GM_xmlhttpRequest

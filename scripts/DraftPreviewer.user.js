@@ -4,8 +4,8 @@
 // @version      0.1.10
 // @description  크랙 채팅 입력창의 마크다운을 전송 전에 유저 말풍선 형태로 미리보기합니다. 채팅방 안에서만 버튼이 표시됩니다.
 // @author       ChatGPT
-// @downloadURL  https://gist.github.com/chyoyam-alt/e62b51ec1c94e2e0c50388f7dd592b36/raw/DraftPreviewer.user.js
-// @updateURL    https://gist.github.com/chyoyam-alt/e62b51ec1c94e2e0c50388f7dd592b36/raw/DraftPreviewer.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/DraftPreviewer.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/DraftPreviewer.user.js
 // @match        https://crack.wrtn.ai/*
 // @grant        none
 // @run-at       document-idle
