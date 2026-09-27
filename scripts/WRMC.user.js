@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽 Wish RP Manager Core
 // @namespace    local.rp.context.manager
-// @version      1.3.0
+// @version      1.3.1
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @description  Crack RP용 컨텍스트 주입·인지·자동 장기기억·자료집·전체 재구축을 하나로 관리합니다.
@@ -47,7 +47,7 @@
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '1.3.0';
+  const SCRIPT_VERSION = '1.3.1';
   const RUNTIME_KEY = '__WISH_RP_MANAGER_V1__';
   const RELOAD_GUARD_KEY = `WISH_RP_clean_reload_${SCRIPT_VERSION}`;
   const previousRuntime = window[RUNTIME_KEY];
@@ -2525,19 +2525,14 @@ PC와 CHAR 및 CHAR끼리 방향을 따로 검토했는가; 상대의 개인적 
       try{return String(text.match(new RegExp(pattern,'u'))?.[0]||'');}catch(_){return '';}
     }
     function checkedEvidence(input,source,pc=false,label='관계'){
-      const fail=(reason,quote='',index=0)=>{
-        const error=new Error(`${WLOG.clean(label).replace(/\s+/g,' ').slice(0,260)}${index?` · 근거 ${index}`:''} 확인 실패: ${reason}`);
-        error.code='WISH_RELATION_EVIDENCE';
-        const preview=WLOG.clean(quote).replace(/\s+/g,' ').trim().slice(0,160);
-        if(preview)Object.defineProperty(error,'relationshipEvidencePreview',{value:preview});
-        throw error;
-      };
       const requested=typeof input==='string'?[{role:pc?'user':'',quote:input}]:input;
-      if(!Array.isArray(requested)||!requested.length||requested.length>32)fail('관계 근거는 1~32개의 원문 인용이어야 합니다.');
+      if(!Array.isArray(requested))return [];
       const rows=(Array.isArray(source)?source:[]).filter(m=>m&&['user','assistant'].includes(m.role)&&typeof m.text==='string'),result=[];
-      for(let index=0;index<requested.length;index++){
+      for(let index=0;index<Math.min(requested.length,32);index++){
         const e=requested[index],quote=typeof e?.quote==='string'?e.quote.trim():'';
-        if(quote.length<2||quote.length>45000||!['','user','assistant'].includes(e?.role))fail('관계 근거의 역할·원문 형식 오류',quote,index+1);
+        // Evidence is optional provenance metadata. An AI quote that cannot be
+        // verified must not block an otherwise valid relationship update.
+        if(quote.length<2||quote.length>45000||!['','user','assistant'].includes(e?.role))continue;
         const eligible=rows.filter(m=>!e.role||m.role===e.role);
         let match=eligible.find(m=>m.text.includes(quote)),exactQuote=quote;
         if(!match){
@@ -2546,20 +2541,13 @@ PC와 CHAR 및 CHAR끼리 방향을 따로 검토했는가; 상대의 개인적 
             const exact=recoverEvidenceQuote(message.text,quote);
             if(exact){recovered.push({message,quote:exact});if(recovered.length>1)break;}
           }
-          if(recovered.length>1)fail('표기 복구 후보가 여러 RP 메시지에 있어 출처를 특정할 수 없습니다. 한 메시지를 구분하는 인용이 필요합니다.',quote,index+1);
+          if(recovered.length>1)continue;
           if(recovered.length===1){match=recovered[0].message;exactQuote=recovered[0].quote;}
         }
-        if(!match){
-          const otherRole=e.role&&rows.find(m=>m.role!==e.role&&(m.text.includes(quote)||recoverEvidenceQuote(m.text,quote)));
-          const reason=otherRole?`${e.role.toUpperCase()} 본문에는 없고 ${otherRole.role.toUpperCase()} 본문에서만 확인됩니다. 메시지 역할을 바꾸어 대신 적용하지 않았습니다.`:
-            !rows.length?'이번 관계 갱신에 허용된 RP 메시지가 없습니다.':
-            '허용된 RP 범위의 한 메시지에서 인용을 확인하지 못했습니다. 요약·문장 합성·범위 밖 인용을 확인해 주세요.';
-          fail(reason,quote,index+1);
-        }
+        if(!match)continue;
         const v={role:match.role,quote:exactQuote,messageId:match.messageId,turnKey:match.turnKey||''};
         if(!result.some(x=>x.role===v.role&&x.quote===v.quote&&x.messageId===v.messageId))result.push(v);
       }
-      if(pc&&!result.some(e=>e.role==='user'))fail('PC 감정·태도는 USER 직접 근거가 필요합니다.',requested[0]?.quote||'');
       return result;
     }
     function bind(row,from,to){return {...row,speaker:from.name,target:to.name,speakerActorId:from.id,targetActorId:to.id,speakerPC:!!from.isPlayer,targetPC:!!to.isPlayer,speakerAliases:[...(from.aliases||[])],targetAliases:[...(to.aliases||[])]};}
@@ -3688,7 +3676,6 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
     const entry={due,timer:setTimeout(()=>{timers.delete(key);if(state.currentRoom?.chatId===key)void run(state.currentRoom).catch(e=>notify(e.message,'error',7000));},delay)};timers.set(key,entry);
   }
   function retryDelay(error,count){
-    if(error?.code==='WISH_RELATION_EVIDENCE')return 0;
     const text=String(error?.message||error||'');
     return count<2&&/(?:\b(?:429|502|503|504|529)\b|네트워크 오류|network error|시간 초과|timeout)/i.test(text)?[30000,120000][count]:0;
   }
@@ -3772,7 +3759,7 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
           if(delay){room.unified.status='일시 장애 · '+Math.ceil(delay/1000)+'초 후 재시도';schedule(room,delay);}
           try{await saveRoom(room);}catch{}
         }
-        notify('통합 정리 보류: '+String(e.message||e)+(e.relationshipEvidencePreview?' · 실패한 인용: '+e.relationshipEvidencePreview:''),'error',8000,{logged:true});return false;
+        notify('통합 정리 보류: '+String(e.message||e),'error',8000,{logged:true});return false;
       }finally{quietCheck=false;active.delete(room.chatId);aiUpdateRunning=false;}
     });running.set(room.chatId,job);
     try{return await job;}finally{running.delete(room.chatId);renderModalIfIdle();}
