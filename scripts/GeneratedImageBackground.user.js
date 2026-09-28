@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🖼️ CSP - Generated Image Background Blur (배경 이미지&테마)
 // @namespace    crack-scene-painter-background-borderless
-// @version      4.0.4
+// @version      4.0.5
 // @description  다크/라이트와 소설형/채팅형을 자동 구분해 조합별 배경·테마 설정을 적용하고, 라이트 전용 테마·입력창·라디오존데 색과 HANGAR·Cozy 다크를 함께 최적화합니다.
 // @match        https://crack.wrtn.ai/*
 // @require      https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js
@@ -50,7 +50,8 @@
   }
 
   const SCRIPT_NAME = 'CSP Borderless Background Blur';
-  const VERSION = '4.0.4';
+  const VERSION = '4.0.5';
+  const SGB_MUTATION_BATCH_MS = 32;
 
   /**
    * 값 조절은 여기만 보면 됨.
@@ -17543,9 +17544,12 @@ html.${CLS_ACTIVE}[data-sgb-ui-style="arcana"][data-sgb-theme="light"][data-sgb-
 
   function installObservers() {
     if (state.observer) state.observer.disconnect();
+    clearTimeout(state.observerMutationTimer);
+    state.observerMutationTimer = 0;
+    state.observerMutationBuffer = [];
 
     const observerRoot = document.body || document.documentElement;
-    state.observer = new MutationObserver(mutations => {
+    const processMutations = mutations => {
       state.__sgbLastMutationAt = Date.now();
       const groups = new Set();
       let shouldRefresh = false;
@@ -17613,6 +17617,21 @@ html.${CLS_ACTIVE}[data-sgb-ui-style="arcana"][data-sgb-theme="light"][data-sgb-
       }
       if (shouldDecorateStaticUi) scheduleStaticUiDecorate('mutation', 90);
       if (shouldRefresh) scheduleRefreshBurst('scene-dom-mutation');
+    };
+
+    state.observer = new MutationObserver(mutations => {
+      const relevant = mutations.filter(mutation => mutation.type !== 'attributes'
+        || (mutation.target instanceof Element && mutation.target.matches?.('.csp-generated-scene-image img')));
+      if (!relevant.length) return;
+      state.observerMutationBuffer.push(...relevant);
+      if (state.observerMutationTimer) return;
+      // 생성 이미지의 src 변경도 보존하면서 연속 DOM 변경의 중복 처리를 줄인다.
+      state.observerMutationTimer = window.setTimeout(() => {
+        state.observerMutationTimer = 0;
+        const batch = state.observerMutationBuffer;
+        state.observerMutationBuffer = [];
+        processMutations(batch);
+      }, SGB_MUTATION_BATCH_MS);
     });
 
     state.observer.observe(observerRoot, {
