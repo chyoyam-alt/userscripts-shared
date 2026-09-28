@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽 Wish RP Manager Core
 // @namespace    local.rp.context.manager
-// @version      1.3.3
+// @version      1.3.6
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @description  Crack RP용 컨텍스트 주입·인지·자동 장기기억·자료집·전체 재구축을 하나로 관리합니다.
@@ -47,7 +47,7 @@
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '1.3.3';
+  const SCRIPT_VERSION = '1.3.6';
   const RUNTIME_KEY = '__WISH_RP_MANAGER_V1__';
   const RELOAD_GUARD_KEY = `WISH_RP_clean_reload_${SCRIPT_VERSION}`;
   const previousRuntime = window[RUNTIME_KEY];
@@ -1921,18 +1921,18 @@ const WLOG=(()=>{
       return {id,role,hash};
     });
   }
-  function sourceStillPresent(manifest, messages, options={}) {
-    const live=sourceManifestOf([...messages].reverse(),options),indices=new Map(live.map((x,i)=>[x.id,{...x,index:i}]));
+  function sourceStillPresent(manifest,messages) {
+    const indices=new Map([...messages].reverse().map((m,i)=>[String(messageIdOf(m)),{role:messageRoleOf(m),index:i}]));
     let previous=-1;
-    for(const x of manifest||[]){const current=indices.get(x.id);if(!current||current.hash!==x.hash||current.role!==x.role||current.index<=previous)return false;previous=current.index;}
+    for(const row of manifest||[]){const live=indices.get(String(row.id));if(!live||live.role!==row.role||live.index<=previous)return false;previous=live.index;}
     return true;
   }
   // Diagnostic twin of sourceStillPresent(): the first missing, changed or reordered row.
   function sourceMismatch(manifest, messages) {
-    const live=sourceManifestOf([...messages].reverse()),indices=new Map(live.map((x,i)=>[x.id,{...x,index:i}]));
+    const live=[...messages].reverse().map(m=>({id:String(messageIdOf(m)),role:messageRoleOf(m)})),indices=new Map(live.map((x,i)=>[x.id,{...x,index:i}]));
     let previous=-1;
     for(const [row,x] of (manifest||[]).entries()){
-      const current=indices.get(x.id),kind=!current?'누락 ID':current.hash!==x.hash?'본문 해시':current.role!==x.role?'역할':current.index<=previous?'순서':'';
+      const current=indices.get(x.id),kind=!current?'누락 ID':current.role!==x.role?'역할':current.index<=previous?'순서':'';
       if(kind)return {kind,row,total:manifest.length,role:String(x.role||''),id:String(x.id||'')};
       previous=current.index;
     }
@@ -1940,10 +1940,9 @@ const WLOG=(()=>{
   }
   async function assertAiSourcesUnchanged(room,metas) {
     const list=(Array.isArray(metas)?metas:[metas]).filter(Boolean);
-    if(!list.length||list.some(meta=>!meta?.sourceManifest))throw new Error('원문 검증 정보가 없는 이전 AI 결과입니다. 다시 갱신해 주세요.');
+    if(!list.length||list.some(meta=>!meta?.sourceManifest))throw new Error('AI 결과의 방·메시지 기준 정보가 없습니다. 다시 갱신해 주세요.');
     const all=await fetchAllRoomMessages(apiChatIdOf(room));
-    const live=[...stableFrame([...all].reverse()).stable].reverse();
-    if(list.some(meta=>JSON.stringify(meta.sourceManifest)!==JSON.stringify(sourceManifestOf(live.slice(0,meta.sourceManifest.length),{preserveStatusFences:meta.preserveStatusFences===true}))))throw new Error('AI 작업의 기준 대화가 수정·삭제되거나 순서가 바뀌어 이전 결과를 적용하지 않았습니다.');
+    if(list.some(meta=>!sourceStillPresent(meta.sourceManifest,[...all].reverse())))throw new Error('AI 작업의 기준 메시지가 현재 방에 없거나 대화 순서가 바뀌었습니다.');
     await assertRoomRevision(room);
   }
   async function assertAiSourceUnchanged(room,meta) {
@@ -2157,7 +2156,7 @@ const ExternalReplay=(()=>{
   async function validateMemoryBranch(room,frame) {
     if(ExternalReplay.pending(apiChatIdOf(room)))return false;const replayEpoch=ExternalReplay.revision(apiChatIdOf(room));
     // Deleting the newest turn can move an unchanged processed turn back into the
-    // unconfirmed tail. Compare with the whole current path; edits and removals still fail.
+    // unconfirmed tail. Compare IDs with the whole path; ordinary prose edits are allowed.
     const current=frame.messages,entries=Object.entries(room.aiSourceManifests||{}),ids=new Set(current.map(m=>String(messageIdOf(m))));
     const valid=(manifests,cursors)=>Object.values(manifests||{}).every(m=>sourceStillPresent(m,current))&&Object.values(cursors||{}).every(c=>!c?.messageId||ids.has(String(c.messageId)));
     const manual=new Map(),initiallyValid=valid(room.aiSourceManifests,room.aiUpdateCursors),reason=initiallyValid?'':memoryBranchDiagnostic(room,current,ids,frame);
@@ -2281,18 +2280,17 @@ const ExternalReplay=(()=>{
       const survivingOld=oldKeys.filter(k=>nextKeys.has(k)),survivingNext=nextOrder.filter(k=>oldKeySet.has(k));
       if(JSON.stringify(survivingOld)!==JSON.stringify(survivingNext))return {ok:false,text,message:'기존 현재상태 섹션의 상대 순서가 바뀌었습니다. 새 섹션은 추가할 수 있지만 기존 섹션 순서는 유지해야 합니다.'};
       if(missing.length){
-        const source=String(options.sourceText||'');
         const rows=parsed.retirements;
         const byTitle=new Map();
         for(const row of rows){
           const title=String(row?.title||'').trim(),evidence=String(row?.evidence||'').trim(),key=currentStateTitleKey(title);
-          if(!title||evidence.length<2||byTitle.has(key))return {ok:false,text,message:'현재상태 retirement 항목의 제목·원문 근거가 비어 있거나 중복됐습니다.'};
+          if(!title||byTitle.has(key))return {ok:false,text,message:'현재상태 retirement 항목의 제목이 비었거나 중복됐습니다.'};
           byTitle.set(key,{title,evidence});
         }
         for(const old of missing){
           const row=byTitle.get(currentStateTitleKey(old.title));
           if(!row)return {ok:false,text,message:`기존 현재상태 섹션 「${old.title}」이 근거 없이 사라졌습니다. 종료 근거가 없으면 기존 섹션을 유지해야 합니다.`};
-          if(!source||!source.includes(row.evidence))return {ok:false,text,message:`현재상태 섹션 「${old.title}」의 retirement 근거가 이번 신규 RP 원문에 없습니다.`};
+
         }
         const missingKeys=new Set(missing.map(s=>currentStateTitleKey(s.title)));
         if([...byTitle.keys()].some(k=>!missingKeys.has(k)))return {ok:false,text,message:'실제로 사라지지 않은 섹션이 retirement 목록에 포함됐습니다.'};
@@ -2540,41 +2538,14 @@ PC와 CHAR 및 CHAR끼리 방향을 따로 검토했는가; 상대의 개인적 
         out.push({role:'user',text:m[1],messageId:''},{role:'assistant',text:m[2],messageId:''});
       }return out;
     }
-    function recoverEvidenceQuote(text,quote){
-      const recovered=autoLoreRecoverExactQuote(text,quote);
-      if(!recovered||text.includes(recovered))return recovered;
-      const pattern=recovered.replace(/[.*+?^${}()|[\]\\]/g,'\\$&').replace(/\n/g,'(?:\\r\\n|\\r|\\n)');
-      try{return String(text.match(new RegExp(pattern,'u'))?.[0]||'');}catch(_){return '';}
-    }
-    function checkedEvidence(input,source,pc=false,label='관계'){
-      const requested=typeof input==='string'?[{role:pc?'user':'',quote:input}]:input;
-      if(!Array.isArray(requested))return [];
-      const rows=(Array.isArray(source)?source:[]).filter(m=>m&&['user','assistant'].includes(m.role)&&typeof m.text==='string'),result=[];
-      for(let index=0;index<Math.min(requested.length,32);index++){
-        const e=requested[index],quote=typeof e?.quote==='string'?e.quote.trim():'';
-        // Evidence is optional provenance metadata. An AI quote that cannot be
-        // verified must not block an otherwise valid relationship update.
-        if(quote.length<2||quote.length>45000||!['','user','assistant'].includes(e?.role))continue;
-        const eligible=rows.filter(m=>!e.role||m.role===e.role);
-        let match=eligible.find(m=>m.text.includes(quote)),exactQuote=quote;
-        if(!match){
-          const recovered=[];
-          for(const message of eligible){
-            const exact=recoverEvidenceQuote(message.text,quote);
-            if(exact){recovered.push({message,quote:exact});if(recovered.length>1)break;}
-          }
-          if(recovered.length>1)continue;
-          if(recovered.length===1){match=recovered[0].message;exactQuote=recovered[0].quote;}
-        }
-        if(!match)continue;
-        const v={role:match.role,quote:exactQuote,messageId:match.messageId,turnKey:match.turnKey||''};
-        if(!result.some(x=>x.role===v.role&&x.quote===v.quote&&x.messageId===v.messageId))result.push(v);
-      }
-      return result;
+    
+    function checkedEvidence(input,source,pc=false,label='관계') {
+      const rows=typeof input==='string'?[{role:pc?'user':'',quote:input}]:input;
+      return (Array.isArray(rows)?rows:[]).filter(x=>x&&typeof x.quote==='string'&&x.quote.trim()).slice(0,32).map(x=>({role:['user','assistant'].includes(x.role)?x.role:'',quote:x.quote.trim().slice(0,45000),verified:false}));
     }
     function bind(row,from,to){return {...row,speaker:from.name,target:to.name,speakerActorId:from.id,targetActorId:to.id,speakerPC:!!from.isPlayer,targetPC:!!to.isPlayer,speakerAliases:[...(from.aliases||[])],targetAliases:[...(to.aliases||[])]};}
     function apply(existing,changes,resolve,rp,options={}){
-      const rows=normalize(structuredClone(existing||[])),seen=new Set(),source=messages(rp,options.sourceRows);
+      const rows=normalize(structuredClone(existing||[])),seen=new Set();
       if(!Array.isArray(changes))throw Error('관계 변경분 배열이 없습니다.');
       for(const x of changes){
         const from=resolve(x.speaker_ref),to=resolve(x.target_ref);if(!from||!to)throw Error('관계 인물을 찾지 못했습니다.');
@@ -2589,7 +2560,7 @@ PC와 CHAR 및 CHAR끼리 방향을 따로 검토했는가; 상대의 개인적 
         if(action==='replace'&&!x.unresolved.trim()||action!=='replace'&&x.unresolved.trim())throw Error('관계 쟁점 처리 방식과 내용이 맞지 않습니다.');
         if(action==='clear'&&(!old?.unresolved||!milestone))throw Error('쟁점 해결에는 기존 쟁점과 해결 전환·원문 근거가 필요합니다.');
         if(old&&x.current.trim()===old.current&&!milestone&&action==='keep'&&typeof x.evidence==='string'&&x.evidence.trim().length<=45000&&JSON.stringify(bind(old,from,to))===JSON.stringify(old))continue;
-        const proof=checkedEvidence(x.evidence,source,!!from.isPlayer,`관계 ${from.name} → ${to.name}`);
+        const proof=checkedEvidence(x.evidence,null,!!from.isPlayer,`관계 ${from.name} → ${to.name}`);
         const parts=history.split(/\n| → /).map(s=>s.trim());
         const sameOccurrence=(old?.evidenceHistory||[]).some(e=>e.cutoff===String(options.cutoff||'')&&e.milestone===milestone&&JSON.stringify(e.evidence)===JSON.stringify(proof));
         const semanticTransition=!!old&&(old.current!==x.current.trim()||(action==='replace'&&old.unresolved!==x.unresolved.trim())||action==='clear');
@@ -2610,14 +2581,14 @@ PC와 CHAR 및 CHAR끼리 방향을 따로 검토했는가; 상대의 개인적 
     // Rebuild results are snapshots; no live append/empty-means-keep rules are reused.
     // Missing directions survive by default. A rebuild is not an implicit delete command.
     function rebuild(existing,changes,resolve,sourceRows){
-      const rows=normalize(structuredClone(existing||[])),seen=new Set(),source=messages('',sourceRows);
+      const rows=normalize(structuredClone(existing||[])),seen=new Set();
       if(!Array.isArray(changes))throw Error('전체 관계 결과가 누락됐습니다.');
       for(const x of changes){
         const from=resolve(x.speaker),to=resolve(x.target);if(!from||!to)throw Error('전체 관계 인물 참조 오류');
         const pair=key(from.name,to.name);if(from.id===to.id||seen.has(pair))throw Error('전체 관계 방향 중복');seen.add(pair);
         const old=rows.find(r=>key(r.speaker,r.target)===pair||(r.speakerActorId===from.id&&r.targetActorId===to.id));
         if(old?.manual)throw Error('전체 재구축도 수동 보호 관계를 덮어쓰지 않습니다.');
-        const proof=checkedEvidence(x.evidence,source,!!from.isPlayer,`관계 ${from.name} → ${to.name}`);
+        const proof=checkedEvidence(x.evidence,null,!!from.isPlayer,`관계 ${from.name} → ${to.name}`);
         const value=bind({...old,current:x.current,trajectory:x.trajectory,unresolved:x.unresolved,manual:false,enabled:old?.enabled!==false,lastEvidence:proof,evidenceHistory:[{at:Date.now(),mode:'full',evidence:proof}],updatedAt:Date.now()},from,to);
         if(old)Object.assign(old,value);else rows.push(value);
       }return {rows:normalize(rows),covered:[...seen]};
@@ -2720,9 +2691,8 @@ PC와 CHAR 및 CHAR끼리 방향을 따로 검토했는가; 상대의 개인적 
       const facts=observe.facts_upsert.filter(row=>{
         if(seen.has(row.ref))throw Error('인지 REF 중복');seen.add(row.ref);
         const old=known.get(row.ref);if(!old&&!/^NEW_FACT_/.test(row.ref))throw Error('인지 REF 오류');
-        const fromCorrection=scope.lines.some(line=>row.evidence&&autoLoreRecoverExactQuote(line,row.evidence));
         const relatedNew=!old&&scope.refs.some(ref=>{const title=normal(known.get(ref)?.title),fresh=normal(row.title);return title.length>=2&&fresh.length>=2&&(fresh.includes(title)||title.includes(fresh));});
-        if(scope.all||blocked.has(row.ref)||fromCorrection||relatedNew){blocked.add(row.ref);notices.push('인지 「'+excerpt(row.title)+'」 변경 보류: OOC 정정과 기존 인물별 앎을 인지 편집에서 함께 확인해 주세요.');return false;}
+        if(scope.all||blocked.has(row.ref)||relatedNew){blocked.add(row.ref);notices.push('인지 「'+excerpt(row.title)+'」 변경 보류: OOC 정정과 기존 인물별 앎을 인지 편집에서 함께 확인해 주세요.');return false;}
         return true;
       });
       const concealments=observe.concealment_changes.filter(row=>{
@@ -2793,7 +2763,7 @@ PC와 CHAR 및 CHAR끼리 방향을 따로 검토했는가; 상대의 개인적 
         if(!old||!sent.has(target.ref))throw Error('정정 대상 전송 범위 불일치');
         const bodyChanged=update&&normal(update.summary)!==normal(old.summary);
         const headingChanged=update&&/(?:제목|날짜|시점|연도)/u.test(target.text)&&(normal(update.title)!==normal(old.title)||normal(update.date?.display)!==normal(old.date?.display));
-        const removalConfirmed=removed&&autoLoreRecoverExactQuote(target.text,removed.evidence);
+        const removalConfirmed=!!removed;
         if(!bodyChanged&&!headingChanged&&!removalConfirmed){blocked.add(target.ref);notices.push('날짜로그 「'+excerpt(old.title)+'」 정정 미반영 · 기존 사건 유지: 이번 사용자 정정을 응답에서 확인하지 못했습니다. 해당 사건을 직접 확인해 주세요.');}
       }
       return {events:{...data,updates:data.updates.filter(x=>!blocked.has(x.ref)),invalidated:data.invalidated.filter(x=>!blocked.has(x.ref))},notices};
@@ -2846,28 +2816,8 @@ PC와 CHAR 및 CHAR끼리 방향을 따로 검토했는가; 상대의 개인적 
       return {speaker:m[1].trim(),target:m[2].trim(),quote:quoted.slice(1,-1),context};
     }
     function checkQuotes(req,upserts,rows){
-      let sources=null;const accepted=[],notices=[],rejected=[],seen=new Set();
-      for(const row of upserts){
-        if(seen.has(row.ref))throw Error('자료 REF 중복');seen.add(row.ref);
-        const old=req.db.references.find(x=>x.id===row.ref);
-        if(!old&&!/^NEW_REF_/i.test(String(row.ref||'').trim()))throw Error('자료 REF 오류');
-        if(old?.type==='key_quote'&&row.type!=='key_quote')throw Error('핵심 대사를 다른 자료 종류로 바꿔 원문 검사를 우회할 수 없습니다.');
-        if(row.type!=='key_quote'||old?.type==='key_quote'&&old.content===row.content&&old.title===row.title){accepted.push(row);continue;}
-        const q=parseQuote(row.content);let reason='';
-        if(!q||!q.speaker||/^(?:USER|ASSISTANT|PC|NPC|미상|불명)$/iu.test(q.speaker))reason='첫 줄 화자 → 상대: “원문”, 다음 줄 맥락 형식이 필요합니다.';
-        else{
-          sources||=messages(rows);
-          const matches=sources.map(src=>({src,quote:autoLoreRecoverExactQuote(src,q.quote)})).filter(x=>x.quote);
-          if(!matches.length)reason='이번 RP 한 메시지에서 연속 원문을 확인하지 못했습니다.';
-          else if(old){const prior=parseQuote(old.content);
-            // Legacy text has no reliably comparable speaker fields. Literal provenance is still required.
-            if(prior&&(normal(prior.speaker)!==normal(q.speaker)||normal(prior.target)!==normal(q.target)||prior.context!==q.context)&&!matches.some(x=>x.src.includes(q.speaker)&&(q.target==='미확인'||x.src.includes(q.target))))reason='기존 화자·상대·맥락 변경 근거를 확인하지 못했습니다.';
-          }
-        }
-        if(reason){notices.push('핵심 대사 「'+excerpt(row.title)+'」 '+(old?'변경 보류 · 기존 카드 유지':'추가 제외')+': '+reason);rejected.push({ref:row.ref,title:row.title});}
-        else accepted.push(row);
-      }
-      return {upserts:accepted,notices,rejected};
+      const seen=new Set();for(const row of upserts){if(seen.has(row.ref))throw Error('자료 REF 중복');seen.add(row.ref);if(!req.db.references.some(x=>x.id===row.ref)&&!/^NEW_REF_/i.test(String(row.ref||'').trim()))throw Error('자료 REF 오류');}
+      return {upserts,notices:[],rejected:[]};
     }
     function reportNotices(notices,label){
       const unique=[...new Set(notices||[])];if(!unique.length)return;
@@ -3261,14 +3211,12 @@ fact는 '누가 알고/모르는지가 이후 대사·행동·비밀 유지·오
   function wishExpandStateDelta(db,delta,rp,token){
     if(delta.base_token!==token||!token)throw Error('변경분의 요청 기준 토큰이 다릅니다. 원본을 유지했습니다.');
     const existing=new Map(db.stateSections.map(s=>[s.id,s])),seen=new Set(),updates=new Map(),retired=new Set();
-    const proof=q=>{if(typeof q!=='string'||q.trim().length<2||!rp.includes(q.trim()))throw Error('변경분 근거가 신규 RP 원문에 없습니다.');};
-    for(const row of delta.retired){if(!existing.has(row.ref)||seen.has(row.ref))throw Error('종료 REF가 없거나 중복됐습니다.');seen.add(row.ref);proof(row.evidence);retired.add(row.ref);}
+    for(const row of delta.retired){if(!existing.has(row.ref)||seen.has(row.ref))throw Error('종료 REF가 없거나 중복됐습니다.');seen.add(row.ref);retired.add(row.ref);}
     for(const row of delta.updates){
       if(!existing.has(row.ref)||seen.has(row.ref))throw Error('수정 REF가 없거나 중복·종료 충돌입니다.');seen.add(row.ref);
       if(!row.edits.length||row.edits.length>40)throw Error('변경분 편집 개수가 잘못되었습니다.');
       const old=existing.get(row.ref),body=old.body,spans=[];let append='',hasAppend=false;
       for(const edit of row.edits){
-        proof(edit.evidence);
         if(edit.before===edit.after)throw Error('내용이 같은 불필요한 변경분입니다.');
         if(edit.before===''){
           if(hasAppend||!edit.after.trim()||body.includes(edit.after.trim()))throw Error('빈 추가·중복 추가는 허용되지 않습니다.');
@@ -3290,7 +3238,7 @@ fact는 '누가 알고/모르는지가 이후 대사·행동·비밀 유지·오
     const identities=new Set(sections.map(s=>s.title.trim()+'\n'+s.body.trim()));
     for(const row of delta.additions){
       if(!/^NEW_STATE_[A-Za-z0-9_-]+$/.test(row.ref)||seen.has(row.ref)||existing.has(row.ref))throw Error('새 상태 REF가 잘못됐거나 중복입니다.');
-      seen.add(row.ref);proof(row.evidence);
+      seen.add(row.ref);
       if(!row.title.trim()||!row.body.trim())throw Error('새 상태 제목·본문이 비었습니다.');
       const identity=row.title.trim()+'\n'+row.body.trim();if(identities.has(identity))throw Error('새 상태가 기존 상태와 중복입니다.');identities.add(identity);
       sections.push({ref:row.ref,title:row.title,body:row.body});
@@ -3305,8 +3253,8 @@ fact는 '누가 알고/모르는지가 이후 대사·행동·비밀 유지·오
 function wishFixedReference(db){const rows=[];for(const c of db.characters)if(String(c.content||'').trim())rows.push(`[캐릭터 설정 · ${c.title}]\n${c.content}`);for(const x of db.extras)if(String(x.content||'').trim())rows.push(`[사용자 OOC·기타 · ${x.title}]\n${x.content}`);return rows.join('\n\n');}
 function wishTurnText(turns){return (turns||[]).map((t,i)=>`[완료 RP ${i+1}][USER]\n${t.userText}\n\n[ASSISTANT]\n${t.assistantText}`).join('\n\n');}
 function wishEventIdentity(date,title){return `${String(date?.display||'날짜 미상').normalize('NFKC').replace(/\s+/g,' ').trim().toLowerCase()}|${String(title||'').normalize('NFKC').replace(/\s+/g,' ').trim().toLowerCase()}`;}
-function wishUserRpContains(rp,evidence){const needle=String(evidence||'').trim();if(!needle)return false;const src=normalizeLineBreaks(String(rp||''));const re=/\[완료 RP \d+\]\[USER\]\n([\s\S]*?)(?=\n\n\[ASSISTANT\]\n)/g;let m;while((m=re.exec(src)))if(String(m[1]||'').includes(needle))return true;return false;}
-function wishApplyEventDelta(db,data,rp=''){if(!data||!Array.isArray(data.updates)||!Array.isArray(data.additions)||!Array.isArray(data.invalidated))throw Error('날짜별 사건 결과 구조가 올바르지 않습니다.');const by=new Map(db.events.map(e=>[e.id,e]));const invalid=new Set();for(const row of data.invalidated){const ref=String(row.ref||'').trim(),evidence=String(row.evidence||'').trim();if(!by.has(ref))throw Error('날짜별 사건 invalidated REF가 올바르지 않습니다: '+ref);if(!wishUserRpContains(rp,evidence))throw Error(`사건 「${by.get(ref).title}」 폐기 근거가 신규 RP의 USER 직접 정정 원문에 없습니다.`);invalid.add(ref);}if(invalid.size)db.events=db.events.filter(e=>!invalid.has(e.id));const current=new Map(db.events.map(e=>[e.id,e]));for(const raw of data.updates){const e=current.get(String(raw.ref||'').trim());if(!e)throw Error('날짜별 사건이 없는 기존 REF를 수정하려 했습니다: '+raw.ref);const title=String(raw.title||'').trim(),summary=String(raw.summary||'').trim();if(!title||!summary)throw Error('사건 제목/요약이 비었습니다.');Object.assign(e,{date:{kind:String(raw.date?.kind||'unknown'),display:String(raw.date?.display||'날짜 미상')},title,summary,keywords:wishUnique(raw.keywords,40)});}let order=db.events.reduce((n,e)=>Math.max(n,Number(e.order)||0),0);const identities=new Set(db.events.map(e=>wishEventIdentity(e.date,e.title)));for(const raw of data.additions){if(!/^NEW_EVENT_/i.test(String(raw.ref||'').trim()))throw Error('새 사건 REF는 NEW_EVENT_* 형식이어야 합니다.');const title=String(raw.title||'').trim(),summary=String(raw.summary||'').trim(),date={kind:String(raw.date?.kind||'unknown'),display:String(raw.date?.display||'날짜 미상')};if(!title||!summary)throw Error('새 사건 제목/요약이 비었습니다.');const identity=wishEventIdentity(date,title);if(identities.has(identity))throw Error(`이미 있는 날짜·사건 제목을 새 사건으로 다시 만들었습니다: ${date.display} · ${title}`);identities.add(identity);db.events.push({id:wishId('event'),order:++order,date,title,summary,keywords:wishUnique(raw.keywords,40)});}db.events.sort((a,b)=>a.order-b.order);return data;}
+
+function wishApplyEventDelta(db,data,rp=''){if(!data||!Array.isArray(data.updates)||!Array.isArray(data.additions)||!Array.isArray(data.invalidated))throw Error('날짜별 사건 결과 구조가 올바르지 않습니다.');const by=new Map(db.events.map(e=>[e.id,e]));const invalid=new Set();for(const row of data.invalidated){const ref=String(row.ref||'').trim(),evidence=String(row.evidence||'').trim();if(!by.has(ref))throw Error('날짜별 사건 invalidated REF가 올바르지 않습니다: '+ref);invalid.add(ref);}if(invalid.size)db.events=db.events.filter(e=>!invalid.has(e.id));const current=new Map(db.events.map(e=>[e.id,e]));for(const raw of data.updates){const e=current.get(String(raw.ref||'').trim());if(!e)throw Error('날짜별 사건이 없는 기존 REF를 수정하려 했습니다: '+raw.ref);const title=String(raw.title||'').trim(),summary=String(raw.summary||'').trim();if(!title||!summary)throw Error('사건 제목/요약이 비었습니다.');Object.assign(e,{date:{kind:String(raw.date?.kind||'unknown'),display:String(raw.date?.display||'날짜 미상')},title,summary,keywords:wishUnique(raw.keywords,40)});}let order=db.events.reduce((n,e)=>Math.max(n,Number(e.order)||0),0);const identities=new Set(db.events.map(e=>wishEventIdentity(e.date,e.title)));for(const raw of data.additions){if(!/^NEW_EVENT_/i.test(String(raw.ref||'').trim()))throw Error('새 사건 REF는 NEW_EVENT_* 형식이어야 합니다.');const title=String(raw.title||'').trim(),summary=String(raw.summary||'').trim(),date={kind:String(raw.date?.kind||'unknown'),display:String(raw.date?.display||'날짜 미상')};if(!title||!summary)throw Error('새 사건 제목/요약이 비었습니다.');const identity=wishEventIdentity(date,title);if(identities.has(identity))throw Error(`이미 있는 날짜·사건 제목을 새 사건으로 다시 만들었습니다: ${date.display} · ${title}`);identities.add(identity);db.events.push({id:wishId('event'),order:++order,date,title,summary,keywords:wishUnique(raw.keywords,40)});}db.events.sort((a,b)=>a.order-b.order);return data;}
 function wishApplyStateSnapshot(db,data,rp){
     if(!data||!Array.isArray(data.sections)||!Array.isArray(data.retired))throw Error('현재상태 결과 구조가 올바르지 않습니다.');
     const existing=new Map(db.stateSections.map(s=>[s.id,s])),retire=new Map();
@@ -3314,7 +3262,7 @@ function wishApplyStateSnapshot(db,data,rp){
       const ref=String(row.ref||'').trim(),evidence=String(row.evidence||'').trim();
       if(!existing.has(ref))throw Error('현재상태 retired REF가 올바르지 않습니다: '+ref);
       if(retire.has(ref))throw Error('현재상태 retired에 같은 REF가 중복됐습니다: '+ref);
-      if(!evidence||!rp.includes(evidence))throw Error(`현재상태 ${existing.get(ref).title} 종료 근거가 신규 RP 원문에 없습니다.`);
+
       retire.set(ref,evidence);
     }
     const next=[],seen=new Set();
@@ -3404,7 +3352,7 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
     try{
       const miss=sourceMismatch(manifest,checked);if(!miss)return error;
       const index=frame.messages.findIndex(m=>String(messageIdOf(m))===miss.id),tail=frame.messages.length-frame.stable.length;
-      error.diagnostic={stage:[`원문검사 ${target}`,`첫 불일치 ${miss.kind}`,`기록 ${miss.row+1}/${miss.total}번째 ${miss.role||'역할 없음'}(끝에서 ${miss.total-miss.row}번째)`,
+      error.diagnostic={stage:[`메시지 기준 확인 ${target}`,`첫 불일치 ${miss.kind}`,`기록 ${miss.row+1}/${miss.total}번째 ${miss.role||'역할 없음'}(끝에서 ${miss.total-miss.row}번째)`,
         index<0?'현재 경로에 없음':index<tail?'미확정 최신 턴':'확정 구간',`확정 ${frame.stable.length}/${frame.messages.length}개${frame.trailingUser?' · 답변 대기 USER':''}`,
         read?`조회 ${read.path}${read.host?' '+read.host:''}${read.ageMs>0?' · 캐시 '+Math.round(read.ageMs/1000)+'초':''}`:'조회 경로 미기록'].join(' · ')};
     }catch{}
@@ -3728,6 +3676,11 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
     if(unstartedRooms.has(room)){if(!force)return false;await saveRoom(room);if(state.currentRoom!==room)return false;}
     if(!state.db){schedule(room,1500,force);return false;}
     if(running.has(room.chatId))return running.get(room.chatId);
+    if(room.unified&&room.proseCheckMigration!==1){
+      room.proseCheckMigration=1;
+      if(isUnifiedSourceBlock(room.unified.lastError)||/요청 중 기준 대화가 수정·삭제|근거가 신규 RP|인용을 확인하지 못|실제 문장을 원문에서/.test(String(room.unified.lastError||''))){room.unified.lastError='';room.unified.failedKind='';room.unified.retry=null;}
+      await saveRoom(room);if(state.currentRoom!==room)return false;
+    }
     const historyDeferred=isWishHistoryStale(room.unified?.lastError);
     const retry=room.unified?.retry,retrying=!force&&room.unified?.lastError&&Number(retry?.at)>0;
     if(!force&&room.unified?.lastError&&!retrying&&!historyDeferred)return false;
@@ -3751,14 +3704,14 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
         const list=turns(frame),u=room.unified;
         updateCounts(room,frame);
         if(!force&&!retrying&&u.lastError&&!historyDeferred)return false;
-        if(room.relationshipBaseline?.manifest?.length&&!sourceStillPresent(room.relationshipBaseline.manifest,frame.messages))throw sourceError('관계 재구축에 사용한 원문이 수정·삭제되었습니다. 관계만 재구축에서 최신 분기를 확인해 주세요.','관계 재구축',room.relationshipBaseline.manifest,frame,frame.messages,history.wishRead);
+        if(room.relationshipBaseline?.manifest?.length&&!sourceStillPresent(room.relationshipBaseline.manifest,frame.messages))throw sourceError('관계 재구축의 기준 메시지가 현재 방에 없거나 순서가 바뀌었습니다.','관계 재구축',room.relationshipBaseline.manifest,frame,frame.messages,history.wishRead);
         const p=plan(list,{...u,settings:loadAiSettings().unifiedAutomation||u.settings},force==='retry'||retrying?(u.failedKind||''):force,turns({stable:frame.messages.slice(0,frame.messages.length-frame.stable.length)}));
         counts.set(room,{memory:p.mem.length,observe:p.obs.length});
         if(!force&&!retrying&&u.lastError&&!historyDeferred)return false;
         // Processed source must still exist unchanged on the current path. The latest
         // unconfirmed turn is included because deleting a newer turn can expose it.
         const sourceRecheck=historyDeferred||(!!force&&isUnifiedSourceBlock(u.lastError));
-        if(sourceRecheck||p.memory||p.observe)for(const [target,manifest] of [['기억 memory',u.memoryManifest],['인물 observe',u.observeManifest]])if(manifest?.length&&!sourceStillPresent(manifest,frame.messages))throw sourceError('기존 정리에 사용한 원문이 바뀌었습니다. 분기와 시작점을 확인해 주세요.',target,manifest,frame,frame.messages,history.wishRead);
+        if(sourceRecheck||p.memory||p.observe)for(const [target,manifest] of [['기억 memory',u.memoryManifest],['인물 observe',u.observeManifest]])if(manifest?.length&&!sourceStillPresent(manifest,frame.messages))throw sourceError('기존 정리의 기준 메시지가 삭제되거나 분기 순서가 바뀌었습니다. 시작점을 확인해 주세요.',target,manifest,frame,frame.messages,history.wishRead);
         // Clear only a read cancellation or a manually retried pre-AI branch check,
         // after cursors and source guards pass again. Other failures stay visible.
         if(sourceRecheck&&(isWishHistoryStale(u.lastError)||isUnifiedSourceBlock(u.lastError))){
@@ -3782,11 +3735,11 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
         if(req.stateDelta)await WishEconomy.backup(room);
         const result=await callAiProvider(settings,requestSystem,req.prompt,{taskKind:'extract',responseMimeType:'application/json',operationLabel:unifiedStage});
         unifiedStage='통합 정리 응답 해석 중';renderModalIfIdle();const data=WLOG.parseJson(result.text,'기억·인물 통합 정리',result.diagnostic);
-        unifiedStage='통합 결과 근거·참조 검증 중';renderModalIfIdle();const staged=stage(room,cog,packs,p,req,data);staged.room.unified.retry=null;
+        unifiedStage='통합 결과 형식·참조 확인 중';renderModalIfIdle();const staged=stage(room,cog,packs,p,req,data);staged.room.unified.retry=null;
         const latestHistory=await fetchAllRoomMessages(apiChatIdOf(room)),latest=stableFrame([...latestHistory].reverse());
         if(ExternalReplay.changed(apiChatIdOf(room),replayEpoch))return false;
         const manifest=sourceManifestOf([...frame.stable].reverse());
-        if(!sourceStillPresent(manifest,latest.stable))throw sourceError('요청 중 기준 대화가 수정·삭제되었습니다. 결과를 적용하지 않았습니다.','요청 중 재확인',manifest,latest,latest.stable,{path:'전체',host:String(latestHistory.wishReadHost||''),ageMs:0});
+        if(!sourceStillPresent(manifest,latest.stable))throw sourceError('요청 중 기준 메시지가 삭제되거나 순서가 바뀌었습니다. 결과를 적용하지 않았습니다.','요청 중 재확인',manifest,latest,latest.stable,{path:'전체',host:String(latestHistory.wishReadHost||''),ageMs:0});
         const liveCog=await bridge().snapshotRaw(apiChatIdOf(room));
         if(state.currentRoom!==room)throw Error('정리 중 다른 방으로 이동하여 결과 적용을 보류했습니다. 원래 방에서 다시 확인해 주세요.');
         if(epoch!==localRestoreEpoch||settingsAtStart!==JSON.stringify(loadAiSettings())||rawSignature(room,liveCog,packs)!==signature)throw Error('요청 중 설정·기억·인지가 바뀌어 결과를 적용하지 않았습니다.');
@@ -4254,7 +4207,7 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
     }
   }
   async function run(r){return await WLOG.run("전체 재구축 구간 분석 중",async task=>{return guard(r,async check=>{const j=get(r)||await load(r);if(!j?.segments?.length)throw Error('먼저 대화 읽기를 실행해 주세요.');const cfg=loadAiSettings();if(!isAiProviderReady(cfg))throw Error('보조 AI 연결 설정이 필요합니다.');
-    try{const s=await source(r);check();if(s.hash!==j.sourceHash)throw Error('읽어 둔 대화가 바뀌었습니다. 대화를 다시 읽어 주세요.');const currentBasis=basis(r,await bridge().snapshotRaw(apiChatIdOf(r)),packs(r));if(currentBasis!==j.basis)throw Error('기억·인물·자료·설정이 바뀌었습니다. 대화를 다시 읽어 주세요. ('+changedBasis(j.basis,currentBasis)+')');
+    try{const s=await source(r);check();if(s.anchorMessageId!==j.anchor)throw Error('읽어 둔 대화가 바뀌었습니다. 대화를 다시 읽어 주세요.');const currentBasis=basis(r,await bridge().snapshotRaw(apiChatIdOf(r)),packs(r));if(currentBasis!==j.basis)throw Error('기억·인물·자료·설정이 바뀌었습니다. 대화를 다시 읽어 주세요. ('+changedBasis(j.basis,currentBasis)+')');
       for(let pos=0;pos<j.segments.length;pos++){const seg=j.segments[pos];if(seg.status==='complete')continue;check();seg.status='running';seg.error='';j.status='running';j.message=`${seg.index}/${j.segments.length}구간 판독 중`;await save(r,j);
         try{const rows=s.rows.slice(seg.start,seg.end),p={memory:true,observe:true,mem:rows,obs:rows},req=U3.request(j.draft.room,j.draft.cog,j.draft.packs,p,{rebuild:true,continuityReference:{memory:U3.continuityReference(s.rows,rows),observe:U3.continuityReference(s.rows,rows)}});
           const guide=req.guide+`\n[API 구간 재구축 최종 계약]\n전체 ${j.segments.length}구간 중 ${seg.index}번째다. 앞 구간의 누적 결과를 보존하며 현재 구간 끝을 임시 최신 시점으로 정리한다. 과거 사건을 침묵만으로 삭제하지 않는다. 외부 파일 첨부 지시 대신 다음 스키마의 JSON만 응답한다. 호칭·말투·칭호와 은폐도 누락하지 않는다.\n[필드·근거 확인]\nmemory.state.sections는 ref/title/body만 쓴다. summary는 memory.events의 사건 본문 필드이며 현재상태에 넣지 않는다. observe의 upsert는 이번 구간에서 실제로 달라진 항목만 출력하고 변경 없는 기존 인물·인지는 재출력하지 않는다. 기존 값을 보존한다는 뜻은 매번 같은 항목을 upsert로 다시 보내라는 뜻이 아니다. evidence는 rp.shared의 한 USER 또는 ASSISTANT 본문에서 연속 구절을 그대로 복사한다. 인용의 바깥 따옴표·발화자 표지를 임의로 덧붙이지 않는다. 기존 누적 기억·앞 문맥·시간 단서에서 인용하거나 여러 문장을 발췌해 합치지 않는다. facts_upsert의 인지 변경은 인물별 실제 습득·망각 경로를 현재 구간에서 확인하고 대표 근거를 선택한다.\n`+JSON.stringify(req.schema);
@@ -4271,7 +4224,7 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
         }}
       j.status='complete';j.message='전체 판독 완료 · 결과를 확인하고 적용해 주세요.'+(j.draft.notices?.length?' · 일부 보류 '+j.draft.notices.length+'건':'');await save(r,j);return true;
     }catch(e){j.status=control?.cancelled?'paused':'failed';j.message=String(e.message||e);await save(r,j);throw e;}});});}
-  async function commit(r,j,check){if(r.pending)throw Error('주입을 해제한 뒤 재구축 결과를 적용해 주세요.');const s=await source(r);check();if(s.hash!==j.sourceHash)throw Error('원문이 변경되어 적용하지 않았습니다. 대화를 다시 읽어 주세요.');const c=await bridge().snapshotRaw(apiChatIdOf(r)),ps=packs(r);if(basis(r,c,ps)!==j.basis)throw Error('원래 기억·인물·자료가 변경되어 덮어쓰지 않았습니다.');
+  async function commit(r,j,check){if(r.pending)throw Error('주입을 해제한 뒤 재구축 결과를 적용해 주세요.');const s=await source(r);check();if(s.anchorMessageId!==j.anchor)throw Error('재구축 기준 메시지가 바뀌었습니다. 대화를 다시 읽어 주세요.');const c=await bridge().snapshotRaw(apiChatIdOf(r)),ps=packs(r);if(basis(r,c,ps)!==j.basis)throw Error('원래 기억·인물·자료가 변경되어 덮어쓰지 않았습니다.');
     const next=clone(j.draft),manifest=sourceManifestOf(s.messages.map(m=>m.raw));restoreRejectedQuotes(ps,next);U3.rebaseAfterImport(next.room,j.anchor,manifest);if(next.notices?.length)next.room.unified.status+=' · 확인 '+next.notices.length+'건 (실패·주의 기록)';next.room.memoryBranchBlocked=false;next.room.aiSourceManifests={currentState:manifest,logSummary:manifest};
     next.room.aiUpdateCursors={currentState:{messageId:j.anchor,updatedAt:nowIso()},logSummary:{messageId:j.anchor,updatedAt:nowIso()}};
     Object.assign(next.room.autoMemory,{lastProcessedMessageId:j.anchor,lastCommittedMessageId:j.anchor,committedTurns:0,lastError:'',dirtyScore:0});
@@ -4280,7 +4233,7 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
     await saveMemoryCheckpoint(r,'rebuild-231-before-apply');check();if(r.pending)throw Error('적용 직전 주입이 시작되어 적용하지 않았습니다.');if(basis(r,await bridge().snapshotRaw(apiChatIdOf(r)),packs(r))!==j.basis)throw Error('저장 직전 기억·인물·자료가 변경되어 적용하지 않았습니다.');check();await U3.atomicCommit(r,c,ps,next);if(next.notices?.length)WishMemorySafety.reportNotices(next.notices,'전체 재구축 저장 완료 · 일부 항목 확인 필요');try{await bridge().refresh();state.v2Cognition=await bridge().getView?.(apiChatIdOf(r));}catch{}return true;
   }
   async function apply(r){const j=get(r)||await load(r);if(j?.status!=='complete')throw Error('판독을 먼저 완료해 주세요.');
-    return guard(r,async check=>{const c=await bridge().snapshotRaw(apiChatIdOf(r));check();const draft=retainRelationshipScope(r,c,clone(j.draft));return openRelationshipReview(r,{...j,draft},{apiJob:j});});}
+    return guard(r,async check=>{const c=await bridge().snapshotRaw(apiChatIdOf(r));check();const draft=retainRelationshipScope(r,c,clone(j.draft));return openRelationshipReview(r,{...j,draft},{apiJob:j,cog:c,packs:packs(r)});});}
   async function clear(r){if(busy())throw Error('먼저 작업을 중단해 주세요.');if(!confirm('임시 구간 목록과 미적용 결과를 비울까요? 현재 기억은 유지됩니다.'))return;await deleteRuntimeRecord(id(r));cache.delete(r.chatId);paint();}
   const str={type:'string'},arr=items=>({type:'array',items}),obj=properties=>({type:'object',additionalProperties:false,required:Object.keys(properties),properties}),strings=arr(str);
   const personSchema={type:'object',additionalProperties:false,required:['name','aliases','evidence'],properties:{name:str,aliases:strings,isPlayer:{type:'boolean'},evidence:str}};
@@ -4325,7 +4278,7 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
     const expected=only?'wish-relationship-rebuild':'wish-rp-rebuild-2.3';
     if(data?.format!==expected)throw Error(only?'관계 전용 JSON을 선택해 주세요.':'전체 재구축 전용 JSON을 선택해 주세요.');
     U3.validateShape(data,externalSchema(data));
-    if(data.source.sha256!==s.hash||data.source.last_message_id!==s.anchorMessageId)throw Error('재구축 원문 기준이 현재 대화와 다릅니다. 새 TXT를 받아 주세요.');
+    if(data.source.last_message_id!==s.anchorMessageId)throw Error('재구축 원문 기준이 현재 대화와 다릅니다. 새 TXT를 받아 주세요.');
     if(only&&data.version!==1||!only&&![1,2].includes(data.version))throw Error('재구축 버전 오류');
   }
   function relationResolver(cg){const resolve=personResolver((cg.actors||[]).filter(a=>!a.archived));return name=>cg.actors.find(a=>a.id===resolve(name));}
@@ -4362,7 +4315,6 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
     const neededNames=new Set(data.relationships.flatMap(x=>[personNameKey(x.speaker),personNameKey(x.target)]));
     for(const p of data.people){
       const canonical=personNameKey(p.name);if(!canonical||used.has(canonical))throw Error('관계 전용 인물 이름이 비었거나 중복됐습니다.');used.add(canonical);
-      WishRelationships.checkedEvidence(p.evidence,WishRelationships.messages('',s.messages||s.rows),false);
       const found=resolveExisting(p.name,true);
       if(!found&&!neededNames.has(canonical))throw Error('관계와 무관한 새 인물은 관계 전용 경로로 추가하지 않습니다: '+p.name);
       if(found){const old=cg.actors.find(a=>a.id===found);if(!!p.isPlayer!==!!old.isPlayer)throw Error('기존 인물의 PC/CHAR 구분은 관계 재구축으로 바꾸지 않습니다: '+p.name);continue;}
@@ -4376,27 +4328,95 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
   }
   function relationshipBackup(r,c,ps){return {id:'wish-relationship-before:'+String(r.chatId),kind:'wish-relationship-before',chatId:r.chatId,at:Date.now(),backup:{_wishRpManagerBackup:true,backupSchema:3,version:SCRIPT_VERSION,exportedAt:nowIso(),rooms:[clone(r)],cognitionRooms:[clone(c)],characterLibraries:clone(ps),runtime:[],autoHistory:[]}};}
   async function exportRelationshipBackup(r){const record=await getRuntimeRecord('wish-relationship-before:'+String(r.chatId));if(!record?.backup)throw Error('이 방에서 관계 재구축을 적용하면 적용 전 백업이 만들어집니다.');downloadText(JSON.stringify(coreBackupData(record.backup),null,2),'Wish-관계재구축-적용전백업.json','application/json');}
+  // Review text is an isolated draft. Only these explicit content fields may be edited.
+  function reviewEditFields(room,proposal,only=false,baseline={}){
+    const out=[],oldCog=baseline.cog||state.v2Cognition||{},oldPacks=baseline.packs||packs(room);
+    const unique=(rows,predicate)=>{const found=(rows||[]).filter(predicate);return found.length===1?found[0]:null;};
+    const add=(category,title,label,path,value,before='',options={})=>out.push({key:'e'+out.length,category,title,label,path,value:String(value??''),before:String(before??''),max:options.max||45000,...options});
+    (proposal.room.relationships||[]).forEach((r,i)=>{
+      const old=(room.relationships||[]).find(x=>x.id===r.id||WishRelationships.key(x.speaker,x.target)===WishRelationships.key(r.speaker,r.target));
+      for(const [field,label,max] of [['current','현재 관계·감정',700],['trajectory','쌓인 감정·핵심 전환',6000],['unresolved','남은 쟁점',400]])add('관계·감정선',r.speaker+' → '+r.target,label,['room','relationships',i,field],r[field],old?.[field],{max,readonly:!!r.manual,empty:field!=='current'});
+    });
+    if(only)return out;
+    (proposal.room.slots||[]).forEach((slot,i)=>{
+      if(['currentState','logSummary'].includes(slot.id))add(slot.id==='currentState'?'현재상태':'날짜로그',slot.title||slot.id,'최종 본문',['room','slots',i,'content'],slot.content,room.slots?.find(x=>x.id===slot.id)?.content,{max:slot.id==='currentState'?45000:2000000,empty:true});
+    });
+    (proposal.cog?.facts||[]).filter(f=>!f.archived).forEach(f=>{
+      const i=proposal.cog.facts.indexOf(f),old=oldCog.facts?.find(x=>x.id===f.id)||unique(oldCog.facts,x=>x.label===f.label);
+      add('인지',f.label||'정보','정보 내용',['cog','facts',i,'content'],f.content,old?.content,{readonly:!f.automatic,max:6000});
+      for(const a of (proposal.cog.actors||[]).filter(a=>!a.archived)){
+        const value=proposal.cog.state?.knowledge?.[a.id]?.[f.id];if(value===undefined)continue;
+        const priorActor=oldCog.actors?.find(x=>x.id===a.id)||unique(oldCog.actors,x=>x.name===a.name);
+        add('인지',f.label||'정보',a.name+'의 인지',['cog','state','knowledge',a.id,f.id],value,oldCog.state?.knowledge?.[priorActor?.id]?.[old?.id],{readonly:!f.automatic,choices:[['aware','알고 있음'],['unaware','모름'],['unverified','미확정']]});
+      }
+    });
+    (proposal.cog?.state?.concealments||[]).forEach((r,i)=>{
+      const names=id=>proposal.cog.actors.find(x=>x.id===id)?.name||'인물',title=names(r.holderId)+' → '+names(r.targetId);
+      const fact=proposal.cog.facts?.find(f=>f.id===r.factId);
+      const previous=oldCog.state?.concealments?.find(x=>x.holderId===r.holderId&&x.targetId===r.targetId&&x.factId===r.factId);
+      add('은폐',title,'은폐 범위',['cog','state','concealments',i,'scope'],r.scope,previous?.scope,{empty:true,max:2000,readonly:!fact?.automatic});
+    });
+    (proposal.room.speechRelations||[]).forEach((r,i)=>{
+      const old=room.speechRelations?.find(x=>x.id===r.id)||unique(room.speechRelations,x=>WishRelationships.key(x.speaker,x.target)===WishRelationships.key(r.speaker,r.target)),title=r.speaker+' → '+r.target,readonly=r.source!=='unified-ai';
+      add('호칭·말투',title,'호칭',['room','speechRelations',i,'address'],r.address,old?.address,{max:120,empty:true,readonly});
+      add('호칭·말투',title,'말투',['room','speechRelations',i,'register'],r.register,old?.register,{readonly,choices:[['formal','존댓말'],['casual','반말'],['mixed','혼용'],['other','기타']]});
+      add('호칭·말투',title,'말하기 특징',['room','speechRelations',i,'note'],r.note,old?.note,{max:500,empty:true,readonly});
+    });
+    (proposal.packs||[]).forEach((pack,p)=>{
+      if(!pack.autoManaged||pack.ownerChatId!==room.chatId)return;
+      (pack.entries||[]).forEach((e,i)=>{
+        const priorEntries=oldPacks.find(x=>x.scopeId===pack.scopeId)?.entries;
+        const old=priorEntries?.find(x=>x.id===e.id)||unique(priorEntries,x=>e.autoLoreKey&&x.autoLoreKey===e.autoLoreKey)||unique(priorEntries,x=>x.name===e.name&&x.type===e.type),readonly=!e.autoManaged||!!e.userProtected||!!e.speechRule;
+        for(const [level,label,max] of [['full','전체 표현',45000],['compact','관련 호출 표현',45000],['micro','한 줄 표현',45000]]){
+          const value=e.inject?.[level]??e.summary?.[level];if(typeof value!=='string')continue;
+          add('자료집',e.name||'자료',label,['packs',p,'entries',i,'inject',level],value,old?.inject?.[level]??old?.summary?.[level],{max,readonly,mirror:['packs',p,'entries',i,'summary',level],entry:['packs',p,'entries',i],empty:true});
+        }
+      });
+    });
+    return out;
+  }
+  function editedReviewJob(d){
+    const job={...d.j,draft:clone(d.j.draft)},get=path=>path.reduce((obj,key)=>obj?.[key],job.draft);
+    const put=(path,value)=>{let obj=job.draft;for(const key of path.slice(0,-1)){if(!obj||typeof obj!=='object'||['__proto__','prototype','constructor'].includes(String(key)))throw Error('편집 대상이 올바르지 않습니다.');obj=obj[key];}if(!obj||typeof obj!=='object')throw Error('편집 대상이 없습니다.');obj[path.at(-1)]=value;};
+    for(const field of d.editFields||[]){
+      if(field.readonly||!Object.hasOwn(d.draft.edit,field.key))continue;
+      const value=d.draft.edit[field.key];
+      if(typeof value!=='string'||value.length>field.max||(!field.empty&&!value.trim())||field.choices&&!field.choices.some(([key])=>key===value))throw Error(field.title+' · '+field.label+'의 형식·길이를 확인해 주세요.');
+      if(value===field.value)continue;
+      put(field.path,value);if(field.mirror)put(field.mirror,value);
+      if(field.entry){const entry=get(field.entry);entry.embedding=null;entry.updatedAt=Date.now();}
+      if(field.path[1]==='relationships'){const row=job.draft.room.relationships[field.path[2]];row.updatedAt=Date.now();row.lastEvidence=[];row.evidenceHistory=[];}
+    }
+    WishRelationships.normalize(job.draft.room.relationships);
+    for(const row of job.draft.cog?.state?.concealments||[])if(row.active&&job.draft.cog.state.knowledge?.[row.holderId]?.[row.factId]!=='aware')throw Error('은폐 중인 정보는 은폐 주체가 알고 있어야 합니다. 인지값을 확인해 주세요.');
+    // Recompute applied-content markers from the edited result, not the original AI proposal.
+    if(!d.only){job.draft.room.aiAppliedContent={...job.draft.room.aiAppliedContent};for(const id of ['currentState','logSummary'])job.draft.room.aiAppliedContent[id]=aiHashTiny(job.draft.room.slots.find(s=>s.id===id)?.content||'');}
+    return job;
+  }
+
   function openRelationshipReview(r,j,options={}){
+    j={...j,draft:clone(j.draft)};
     const rows=WishRelationships.diff(r.relationships,j.draft.room.relationships,j.draft.relationshipCoverage);
     if(j.draft.notices?.length)notify('재구축 결과에 보류 항목 '+j.draft.notices.length+'건이 있습니다. '+j.draft.notices[0]+' · 아직 저장하지 않았습니다.','warn',9000);
-    return WUI.openSheet('relationshipReview',{room:r,epoch:localRestoreEpoch,basis:j.basis,j,rows,only:!!options.only,legacy:!!options.legacy,apiJob:options.apiJob||null,busy:false,error:'',draft:{reviewed:false,open:{},limit:30}});
+    return WUI.openSheet('relationshipReview',{room:r,epoch:localRestoreEpoch,basis:j.basis,j,rows,only:!!options.only,legacy:!!options.legacy,apiJob:options.apiJob||null,busy:false,error:'',editFields:reviewEditFields(r,j.draft,!!options.only,options),draft:{reviewed:false,open:{e0:true},limit:30,edit:{},category:options.only?'관계·감정선':'전체'}});
   }
   async function applyRelationshipReview(id){
     const d=WUI.ui.dlg(id);if(!d||d.busy)return;
-    if(!d.draft.reviewed)throw Error('현재값·전환·남은 쟁점을 원문과 비교한 뒤 확인해 주세요.');
+    if(!d.draft.reviewed)throw Error('최종 적용할 내용을 확인해 주세요.');
     if(d.room!==state.currentRoom||d.epoch!==localRestoreEpoch)throw Error('방 또는 복원 기준이 바뀌었습니다. 다시 가져와 주세요.');
     d.busy=true;d.error='';paint();
     try{await guard(d.room,async check=>{
       await withRoomExclusiveKeys([apiChatIdOf(d.room),'ai:'+apiChatIdOf(d.room)],async()=>{
         check();if(d.room.pending||generationPending(apiChatIdOf(d.room)))throw Error('주입을 해제하고 생성 완료 뒤 적용해 주세요.');
-        if(d.only)await commitRelationshipsOnly(d.room,d.j,check);else await commit(d.room,d.j,check);
+        const edited=editedReviewJob(d);
+        if(d.only)await commitRelationshipsOnly(d.room,edited,check);else await commit(d.room,edited,check);
       });
       if(d.apiJob){d.apiJob.status='applied';d.apiJob.message='전체 결과 적용 완료';d.apiJob.draft=null;await save(d.room,d.apiJob);}
     });d.busy=false;WUI.closeSheet(d);if(!d.only&&d.j.draft.notices?.length)return;notify(d.only?'관계·감정선과 필요한 인물 연결만 적용했습니다. 다른 기억·인지·호칭·시작점은 유지합니다.':'전체 재구축 적용 완료 · 미출력 기존 관계와 수동 보호 관계 유지','success',7000);
     }catch(e){d.error=String(e.message||e);}finally{d.busy=false;paint();}
   }
   async function commitRelationshipsOnly(r,j,check){
-    const s=await source(r);check();if(s.hash!==j.sourceHash)throw Error('내보낸 뒤 RP 원문이 바뀌었습니다. 적용하지 않았습니다.');
+    const s=await source(r);check();if(s.anchorMessageId!==j.anchor)throw Error('내보낸 뒤 기준 메시지가 바뀌었습니다. 적용하지 않았습니다.');
     const c=await bridge().snapshotRaw(apiChatIdOf(r)),ps=packs(r);check();if(basis(r,c,ps)!==j.basis)throw Error('검토 중 저장 자료가 바뀌었습니다. 다시 가져와 주세요.');
     const next={...clone(r),relationships:clone(j.draft.room.relationships),relationshipBaseline:{anchorId:j.anchor,manifest:sourceManifestOf(s.messages.map(m=>m.raw)),sourceHash:j.sourceHash},relationshipRevision:(Number(r.relationshipRevision)||0)+1,_rev:Number(r._rev||0)+1,updatedAt:nowIso()};
     const cg=clone(c),oldIds=new Set(cg.actors.map(a=>a.id)),added=j.draft.cog.actors.filter(a=>!oldIds.has(a.id));
@@ -4462,14 +4482,14 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
     if(r.pending)throw Error('주입을 해제한 뒤 가져와 주세요.');const s=await source(r);check();validateExternal(data,s,only);
     const c=await bridge().snapshotRaw(apiChatIdOf(r)),ps=packs(r);check();
     const draft=only?onlyRelationshipStage(r,c,s,data):externalStage(r,c,ps,s,data);
-    return openRelationshipReview(r,{draft,sourceHash:s.hash,anchor:s.anchorMessageId,basis:basis(r,c,ps)},{only,legacy:!only&&data.version===1});
+    return openRelationshipReview(r,{draft,sourceHash:s.hash,anchor:s.anchorMessageId,basis:basis(r,c,ps)},{only,legacy:!only&&data.version===1,cog:c,packs:ps});
   }));}
   function importFile(r,only=false){
     if(!r||r.pending||busy()||generationPending(apiChatIdOf(r))){WUI.openSheet('relationshipPreflight',{message:'주입을 해제하고 생성·자동 정리·복원이 끝난 뒤 JSON 가져오기를 다시 눌러 주세요.'});return false;}
     const epoch=localRestoreEpoch,input=document.createElement('input');input.type='file';input.accept='.json,application/json';
     input.onchange=async()=>{try{if(!input.files[0])return;if(state.currentRoom!==r||epoch!==localRestoreEpoch)throw Error('파일 선택 중 방·복원 상태가 바뀌었습니다.');const data=await readImportedJsonFile(input.files[0],{label:only?'관계 전용 재구축 JSON':'외부 전체 재구축 JSON',maxBytes:25*1024*1024});await importData(r,data,only);}catch(e){notify(e.message,'error',8000);}finally{input.value='';}};input.click();return true;
   }
-  return {get,load,read,run,apply,clear,exportText,importData,importFile,externalGuideDefault,relationshipOnlyGuideDefault,externalGuide,externalStage,relationshipOnlyGuide,onlyRelationshipStage,alignRelationActors,retainRelationshipScope,applyRelationshipReview,exportRelationshipBackup,externalSchema,segments,units,text,seed,joinStage,commit,schema:SCHEMA,relationshipSchema:RELATION_SCHEMA,busy:()=>!!task,stop:()=>{if(control)control.cancelled=true;AiAbort.abort('작업을 중단했어요. 다시 누르면 성공한 구간 다음부터 이어서 분석해요.');},guide:WISH_EXTERNAL_REBUILD_GUIDE};
+  return {get,load,read,run,apply,clear,exportText,importData,importFile,externalGuideDefault,relationshipOnlyGuideDefault,externalGuide,externalStage,relationshipOnlyGuide,onlyRelationshipStage,alignRelationActors,retainRelationshipScope,reviewEditFields,editedReviewJob,applyRelationshipReview,exportRelationshipBackup,externalSchema,segments,units,text,seed,joinStage,commit,schema:SCHEMA,relationshipSchema:RELATION_SCHEMA,busy:()=>!!task,stop:()=>{if(control)control.cancelled=true;AiAbort.abort('작업을 중단했어요. 다시 누르면 성공한 구간 다음부터 이어서 분석해요.');},guide:WISH_EXTERNAL_REBUILD_GUIDE};
 })();
 
   let automaticMemoryJob = null;
@@ -6751,7 +6771,18 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
       if(job.guideRevision!==GUIDE_REVISION)throw Error('이전 지침으로 내보낸 작업입니다. 업데이트된 지침 + TXT를 새로 받아 처리해 주세요. 저장 원문과 기존 적용 압축본은 변경하지 않았습니다.');
       const rows=withExisting(validateReply(job,data),room),snap=await snapshot(room,job.options);assertTarget(room,epoch,true);
       if(snap.sha!==job.sha||text(snap.room._epoch)!==text(job.roomEpoch))throw Error('TXT를 내보낸 뒤 원문·구조가 바뀌었습니다. 옛 압축 결과를 적용하지 않았습니다. 최신 자료를 다시 내보내 주세요.');
-      return WUI.openSheet('secondaryReview',{room,epoch,job,rows,expressionStamp:stamp(room),sourceSha:snap.sha,audit:reviewAudit(rows),busy:false,error:'',draft:{query:'',filter:'changes',category:'all',pick:{},open:{},limit:30,reviewed:false}});
+      return WUI.openSheet('secondaryReview',{room,epoch,job,rows,expressionStamp:stamp(room),sourceSha:snap.sha,audit:reviewAudit(rows),busy:false,error:'',draft:{query:'',filter:'changes',category:'all',pick:{},open:{},edit:{},limit:30,reviewed:false}});
+    }
+    function editReview(id){
+      const d=WUI.ui.dlg(id);if(!d||d.busy)return false;
+      try{
+        const edits=new Map();for(const group of reviewGroups(d.rows))for(const variant of group.variants){const key=variant.rows[0].id;if(Object.hasOwn(d.draft.edit||{},key))for(const row of variant.rows)edits.set(row.id,d.draft.edit[key]);}
+        const data={format:FORMAT,version:VERSION,export_id:d.job.exportId,source_sha256:d.job.sha,status:'complete',results:d.rows.map(r=>edits.has(r.id)?{id:r.id,action:'compress',text:edits.get(r.id)}:r.action==='compress'?{id:r.id,action:'compress',text:r.next}:{id:r.id,action:'keep'})};
+        const rows=withExisting(validateReply(d.job,data),d.room);
+        d.rows=rows;d.audit=reviewAudit(rows);d.draft.edit={};d.draft.reviewed=false;d.error='';
+        for(const r of rows)if(d.draft.pick[r.id]&&!r.selectable)delete d.draft.pick[r.id];
+        WUI.paint();return true;
+      }catch(e){d.error=text(e.message||e);WUI.paint();return false;}
     }
     function withExisting(rows,room){
       const prior=room?.expressionRebuild,old=new Map(prior?.version===VERSION&&prior.roomId===text(room.chatId)?(prior.containers||[]).map(c=>[c.key,c]):[]);
@@ -6896,7 +6927,7 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
     }
     async function apply(id){
       const d=WUI.ui.dlg(id);if(!d||d.busy)return;assertTarget(d.room,d.epoch,true);
-      const selected=d.rows.filter(r=>r.selectable&&d.draft.pick?.[r.id]===true);if(!selected.length)throw Error('적용할 압축 표현을 선택해 주세요.');if(d.draft.reviewed!==true)throw Error('원문과 의미를 비교했다는 확인이 필요합니다. 구조 검사만으로 의미 보존을 보장하지 않습니다.');
+      const selected=d.rows.filter(r=>r.selectable&&d.draft.pick?.[r.id]===true);if(!selected.length)throw Error('적용할 압축 표현을 선택해 주세요.');if(Object.keys(d.draft.edit||{}).length)throw Error('수정 내용 반영을 누르고 최종 표현을 확인해 주세요.');if(d.draft.reviewed!==true)throw Error('최종 표현을 확인해 주세요.');
       d.busy=true;d.error='';WUI.paint();
       try{await withRoomExclusiveKeys([apiChatIdOf(d.room),'ai:'+apiChatIdOf(d.room)],async()=>{
         assertTarget(d.room,d.epoch,true);if(stamp(d.room)!==d.expressionStamp)throw Error('검토 중 압축 사용 설정이 바뀌었습니다. JSON을 다시 가져와 주세요.');const snap=await snapshot(d.room,d.job.options);
@@ -6909,7 +6940,7 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
     function summary(room){const r=room?.expressionRebuild;if(!r||r.version!==VERSION||r.roomId!==text(room.chatId))return {count:0,enabled:false};const rows=(r.containers||[]).flatMap(c=>c.values||[]);return {count:rows.length,enabled:r.enabled!==false,saved:rows.reduce((n,v)=>n+Math.max(0,text(v.source).length-text(v.text).length),0)};}
     function openManage(){const room=state.currentRoom,r=room?.expressionRebuild;if(!r||!summary(room).count)throw Error('등록된 압축 표현이 없습니다.');return WUI.openSheet('secondaryManage',{room,epoch:localRestoreEpoch,token:stamp(room),busy:false,error:'',rows:r.containers.flatMap((c,ci)=>c.values.map((v,vi)=>({...v,id:'m'+ci+'_'+vi,container:c.key}))),draft:{open:{}}});}
     async function change(id,mode){const d=WUI.ui.dlg(id);if(!d||d.busy)return;assertTarget(d.room,d.epoch,true);d.busy=true;d.error='';WUI.paint();try{await withRoomExclusiveKeys([apiChatIdOf(d.room),'ai:'+apiChatIdOf(d.room)],async()=>{if(stamp(d.room)!==d.token)throw Error('압축 설정이 바뀌었습니다. 관리창을 다시 열어 주세요.');const snap=await snapshot(d.room),next=structuredClone(d.room.expressionRebuild);if(mode==='clear')next.containers=[];else if(mode==='toggle')next.enabled=next.enabled===false;else{const row=d.rows.find(r=>r.id===mode);if(!row)throw Error('압축 항목이 없습니다.');for(const c of next.containers)if(c.key===row.container)c.values=c.values.filter(v=>v.field!==row.field);next.containers=next.containers.filter(c=>c.values.length);}next.token=crypto.randomUUID();next.updatedAt=nowIso();await commitRecord(d.room,snap,next,d.epoch);});d.busy=false;WUI.closeSheet(d);notify(mode==='clear'?'등록 압축본을 해제했습니다. 저장 원문 유지.':'압축 사용 설정을 변경했습니다.','success');}catch(e){d.error=text(e.message||e);}finally{d.busy=false;WUI.paint();}}
-    return {CONTEXT_NOTATION,hasContextNotation,contextNotationGuide,reviewGroups,visibleGroups,reviewPickState,selectReviewRows,toggleReviewGroup,FIELD_LABELS,FORMAT,VERSION,GUIDE_REVISION,LABELS,RESULT_SCHEMA,INTRO,GUIDE,END,extraProtectedLiterals,speechExampleLiterals,numberDiagnostics,numberEvidence,reviewAudit,proseCount,schemaCheck,inventory,documents,digest,validateReply,projector,cognitionProjector,apiStamp,stamp,summary,openExport,exportFromDialog,importFile,prepareImport,visibleRows,apply,openManage,change,buildRecord,snapshot,commitRecord,stateSpans};
+    return {CONTEXT_NOTATION,hasContextNotation,contextNotationGuide,reviewGroups,visibleGroups,reviewPickState,selectReviewRows,toggleReviewGroup,FIELD_LABELS,FORMAT,VERSION,GUIDE_REVISION,LABELS,RESULT_SCHEMA,INTRO,GUIDE,END,extraProtectedLiterals,speechExampleLiterals,numberDiagnostics,numberEvidence,reviewAudit,proseCount,schemaCheck,inventory,documents,digest,validateReply,projector,cognitionProjector,apiStamp,stamp,summary,openExport,exportFromDialog,importFile,editReview,prepareImport,visibleRows,apply,openManage,change,buildRecord,snapshot,commitRecord,stateSpans};
   })();
 
   function selectedSlots(room) {
@@ -7503,7 +7534,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     return message==='대화 조회 중 방 또는 재전송 기준이 바뀌었습니다.'||message==='대화 조회 중 기준이 바뀌어 다시 확인해야 합니다.';
   }
   function isUnifiedSourceBlock(error) {
-    return ['자동 정리 기준 대화가 현재 분기에 없습니다. 시작점 또는 백업을 확인해 주세요.','기존 정리에 사용한 원문이 바뀌었습니다. 분기와 시작점을 확인해 주세요.','관계 재구축에 사용한 원문이 수정·삭제되었습니다. 관계만 재구축에서 최신 분기를 확인해 주세요.'].includes(String(error?.message||error||''));
+    return ['기존 정리에 사용한 원문이 바뀌었습니다. 분기와 시작점을 확인해 주세요.','관계 재구축에 사용한 원문이 수정·삭제되었습니다. 관계만 재구축에서 최신 분기를 확인해 주세요.','자동 정리 기준 대화가 현재 분기에 없습니다. 시작점 또는 백업을 확인해 주세요.','기존 정리의 기준 메시지가 삭제되거나 분기 순서가 바뀌었습니다. 시작점을 확인해 주세요.','관계 재구축의 기준 메시지가 현재 방에 없거나 순서가 바뀌었습니다.'].includes(String(error?.message||error||''));
   }
   const WishHistory=(()=>{
     const records=new Map(),flights=new Map(),revisions=new Map();let sequence=0;
@@ -8544,46 +8575,10 @@ function formatLocalRecordTime(value){
   function autoLoreCanonicalText(value) {
     return String(value||'').normalize('NFKC').replace(/[\u200B-\u200D\uFEFF]/g,'').replace(/\s+/g,' ').trim();
   }
-  function autoLoreLooseText(value) {
-    return autoLoreCanonicalText(value).toLowerCase().replace(/[`*_~#>“”‘’"'「」『』〈〉《》()\[\]{}]/g,'').replace(/\s+/g,'');
-  }
-  function autoLoreSourceContains(source, excerpt) {
-    const hay=autoLoreCanonicalText(source),needle=autoLoreCanonicalText(excerpt);
-    if(needle.length<2)return false;
-    if(hay.includes(needle))return true;
-    const looseNeedle=autoLoreLooseText(needle);
-    return looseNeedle.length>=4&&autoLoreLooseText(hay).includes(looseNeedle);
-  }
-  function autoLoreSourceContainsExact(source, excerpt) {
-    return !!autoLoreRecoverExactQuote(source,excerpt);
-  }
-  function autoLoreRecoverExactQuote(source,excerpt) {
-    const hay=String(source||'').replace(/\r\n?/g,'\n'),needle=String(excerpt||'').replace(/\r\n?/g,'\n').trim();
-    if(needle.length<2)return '';
-    const direct=hay.indexOf(needle);if(direct>=0)return hay.slice(direct,direct+needle.length);
-    // Markdown 장식만 둘러싼 동일 대사는 원문 문자열로 되돌립니다.
-    for(const marker of ['**','__','~~','`','*','_'])if(needle.startsWith(marker)&&needle.endsWith(marker)&&needle.length>marker.length*2){const inner=needle.slice(marker.length,-marker.length).trim(),at=hay.indexOf(inner);if(inner.length>=2&&at>=0)return hay.slice(at,at+inner.length);}
-    // 줄바꿈·인용부호·대시·말줄임표 같은 표시 문자만 달라진 경우에만
-    // 실제 원문의 대응 문자열을 복구합니다. 단어/어순이 다른 의역은 거절합니다.
-    const escaped=value=>String(value).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-    let pattern='',space=false;
-    for(let i=0;i<needle.length;i++){
-      const char=needle[i];
-      if(/\s/u.test(char)){if(!space){pattern+='\\s+';space=true;}continue;}
-      space=false;
-      if(/["“”„‟❝❞〝〞＂]/u.test(char))pattern+='["“”„‟❝❞〝〞＂]';
-      else if(/['‘’‚‛❛❜]/u.test(char))pattern+="['‘’‚‛❛❜]";
-      else if(/[-‐‑‒–—―]/u.test(char))pattern+='[-‐‑‒–—―]';
-      else if(char==='…')pattern+='(?:…|\\.\\.\\.)';
-      else if(char==='.'&&needle.slice(i,i+3)==='...'){pattern+='(?:…|\\.\\.\\.)';i+=2;}
-      else if(char==='·')pattern+='[·•⋅]';
-      else pattern+=escaped(char);
-      pattern+='[\\u200B-\\u200D\\uFEFF]*';
-    }
-    if(!pattern)return '';
-    let match;try{match=hay.match(new RegExp(pattern,'u'));}catch(_){return '';}
-    return String(match?.[0]||'').trim();
-  }
+  
+  
+  
+  
   const AUTO_LORE_TYPE_ALIASES = new Map([
     ['world','world'],['worldstate','world'],['setting','world'],['lore','world'],['universe','world'],['세계관','world'],['세계','world'],['설정','world'],['규칙','world'],
     ['item','item'],['itemstate','item'],['object','item'],['inventory','item'],['possession','item'],['equipment','item'],['아이템','item'],['물건','item'],['소지품','item'],['장비','item'],
@@ -8625,7 +8620,7 @@ function formatLocalRecordTime(value){
     const nestedInject=row.inject&&typeof row.inject==='object'?row.inject:{};
     const nestedEvidence=row.evidence&&typeof row.evidence==='object'?row.evidence:{};
     // 비대사 카드에 모델이 무해한 exact_quote 필드를 덧붙여도 전체 배치를 버리지 않습니다.
-    // 실제 대사 원문 검증은 key_quote에만 적용합니다.
+    // 인용문을 RP 본문과 대조하지 않습니다. 화자·내용 형식만 확인합니다.
     let exactQuote=String(type==='key_quote'?autoLoreRowValue(row,'exact_quote','exactQuote','quote'):'').trim().slice(0,1200);
     const speaker=String(autoLoreRowValue(row,'speaker','from','quoteSpeaker')).trim().slice(0,120);
     const target=String(autoLoreRowValue(row,'target','to','quoteTarget')).trim().slice(0,120);
@@ -8643,33 +8638,15 @@ function formatLocalRecordTime(value){
     // 라이브 증분 결과는 모델에게 실제로 제공한 USER + 채택 ASSISTANT만
     // 검사합니다. 전체 외부 재구축은 messages 배열 전체가 검사 대상입니다.
     const messages=selectedTurns.flatMap(turn=>(turn?.user||turn?.assistant)?[turn.user,turn.assistant].filter(Boolean):(turn.messages||[])).filter(message=>String(message?.id||''));
-    const validationText=message=>message&&['world','key_quote'].includes(type)?stripRpStatusFences(message.text):String(message?.text||'');
-    const evidenceValidFor=message=>!!message&&autoLoreCanonicalText(evidence).length>=4&&autoLoreSourceContains(validationText(message),evidence);
-    const quoteAt=message=>message&&type==='key_quote'?autoLoreRecoverExactQuote(validationText(message),exactQuote):'';
-    const validFor=message=>type==='key_quote'?!!quoteAt(message):evidenceValidFor(message);
-    let source=sourceMessageIds.map(id=>messages.find(message=>String(message.id||'')===id)).find(validFor)||null;
-    if(source)sourceMessageId=String(source.id||'');
-    // 모델이 MESSAGE_ID를 번역·축약했더라도, 실제 근거가 신규 RP 한 메시지에
-    // 존재할 때만 그 메시지로 안전하게 복구합니다. 근거 없는 추정은 허용하지 않습니다.
-    if(!validFor(source)){
-      let matches=messages.filter(validFor);
-      if(type==='key_quote'&&matches.length>1){const evidenced=matches.filter(evidenceValidFor);if(evidenced.length===1)matches=evidenced;}
-      source=matches.length===1?matches[0]:null;
-      if(source)sourceMessageId=String(source.id||'');
-    }
+    // Attribution uses an explicitly supplied message ID only; no prose search or guessed source.
+    const source=sourceMessageIds.map(id=>messages.find(message=>String(message.id||'')===id)).find(Boolean)||null;
+    sourceMessageId=source?String(source.id):'';
     const sourceKey=autoLoreRowValue(row,'key','autoLoreKey','managedKey')||(/^lore-entry:/i.test(String(row.id||''))?'':row.id);
     const keyHint=String(sourceKey||'').replace(/^[^:]+:/,'').replace(/[-_]+/g,' ').trim();
     const fallbackName=type==='key_quote'?(speaker?`${speaker}의 핵심 대사`:'핵심 대사'):keyHint;
     const name=String(autoLoreRowValue(row,'name','title','label')||fallbackName).trim().slice(0,160);
-    if(!name||!source)throw new Error(`${label} ${index+1}의 이름 또는 근거 MESSAGE_ID가 올바르지 않습니다. 실제 evidence${type==='key_quote'?' 또는 exact_quote':''}가 들어 있는 신규 RP 메시지를 한 개로 확인하지 못했습니다.`);
-    if(type==='key_quote'){
-      exactQuote=quoteAt(source).slice(0,1200);
-      // 대사가 실제로 있는 메시지를 찾았다면 잘못 선택된 별도 맥락 evidence 대신
-      // 그 실제 대사를 직접 근거로 사용합니다.
-      if(!evidenceValidFor(source))evidence=exactQuote;
-    }
-    if(autoLoreCanonicalText(evidence).length<4||!autoLoreSourceContains(validationText(source),evidence))throw new Error(`${label} ‘${name}’의 근거 원문을 신규 RP에서 확인하지 못했습니다.`);
-    if(type==='key_quote'&&(!exactQuote||!autoLoreSourceContainsExact(validationText(source),exactQuote)))throw new Error(`핵심 대사 ‘${name}’의 실제 문장을 원문에서 정확히 확인하지 못했습니다.`);
+    if(!name)throw new Error(label+' '+(index+1)+'의 이름이 비어 있습니다.');
+    if(type==='key_quote'&&!exactQuote)throw new Error('핵심 대사의 문장이 비어 있습니다.');
     const full=String(row.full||nestedSummary.full||nestedInject.full||row.content||row.body||'').trim().slice(0,6000);
     const compact=String(row.compact||nestedSummary.compact||nestedInject.compact||full).trim().slice(0,1800);
     const micro=String(row.micro||nestedSummary.micro||nestedInject.micro||compact||full).trim().slice(0,500);
@@ -8697,7 +8674,7 @@ function formatLocalRecordTime(value){
     }
     const triggers=[...new Set([...row.triggers,row.speaker,row.target,row.location,row.date,...String(row.context||'').split(/[\s,/·]+/).filter(x=>x.length>=2)].map(x=>String(x||'').trim()).filter(Boolean))].slice(0,80);
     return normalizeLoreEntry({...old,id:old?.id||makeLoreEntryId(),name:row.name,type:row.type,triggers,entities:row.entities,summary:{full,compact,micro},inject:{full,compact,micro},anchor:row.type==='key_quote'?false:row.anchor,enabled:old?old.enabled!==false:true,priority:Number(old?.priority||0),notes:old?.notes||'',speechRule:null,
-      autoManaged:true,userProtected:false,autoLoreKey:row.key,sourceMessageIds:[...new Set([...(old?.sourceMessageIds||[]),row.sourceMessageId])].slice(-20),sourceHash:aiHashTiny(`${row.sourceMessageId}|${row.evidence}`),lastSeenMessageId:lastMessageId,evidence:row.evidence,exactQuote:row.exactQuote,quoteSpeaker:row.speaker,quoteTarget:row.target,sceneContext:row.context,sceneLocation:row.location,sceneDate:row.date,embedding:null,updatedAt:Date.now()});
+      autoManaged:true,userProtected:false,autoLoreKey:row.key,sourceMessageIds:[...new Set([...(old?.sourceMessageIds||[]),row.sourceMessageId].filter(Boolean))].slice(-20),sourceHash:aiHashTiny(`${row.sourceMessageId}|${row.evidence}`),lastSeenMessageId:lastMessageId,evidence:row.evidence,exactQuote:row.exactQuote,quoteSpeaker:row.speaker,quoteTarget:row.target,sceneContext:row.context,sceneLocation:row.location,sceneDate:row.date,embedding:null,updatedAt:Date.now()});
   }
 
 
@@ -9006,7 +8983,7 @@ function formatLocalRecordTime(value){
       const reused=accepted.filter(entry=>oldByKey.has(entry.autoLoreKey)).length,added=accepted.length-reused,deleted=Math.max(0,editableEntries.length-reused),activePromoted=[...(room.activeLorePackIds||[])].map(String).filter(id=>promotedPackIds.has(id)),packLabel=(payload.sourcePackNames||[]).join(', ')||'가져온 자료집';
       if(!confirm(`‘${packLabel}’의 ${rows.length}개 카드를 이 방의 진행형 자동 카드로 전환할까요?\n\n자동 카드 새로 만들기 ${added}개 · 교체 ${reused}개 · 제거 ${deleted}개\n보호 카드 ${protectedEntries.length}개 유지${skippedProtected?` · 다른 사용자 자료와 겹친 ${skippedProtected}개 제외`:''}\n\n전환된 카드는 이후 자동 갱신이 같은 key로 수정할 수 있습니다.${activePromoted.length?`\n이미 일반 자료집으로 넣은 원본 ${activePromoted.length}팩은 삭제하지 않고 이 방에서만 사용 해제합니다.`:''}${source.includesLatest?'\n현재 최신 AI 응답은 다음 응답 완결 뒤 자동으로 한 번 더 확인합니다.':''}`))return null;
       const verifySource=await prepareLorePromotionSource(room,payload.basisMessageId),verifyRpText=lorePromotionSourceFingerprintText(verifySource),verifyRpDigest=await sha256Hex(new TextEncoder().encode(verifyRpText));
-      if(state.currentRoom?.chatId!==room.chatId||generationPending(rid)||verifySource.anchorMessageId!==source.anchorMessageId||verifyRpDigest!==rpDigest)throw new Error('확인하는 동안 방 또는 확정 RP 로그가 바뀌어 적용하지 않았습니다. 파일을 다시 가져와 주세요.');
+      if(state.currentRoom?.chatId!==room.chatId||generationPending(rid)||verifySource.anchorMessageId!==source.anchorMessageId)throw new Error('확인하는 동안 방 또는 확정 RP 로그가 바뀌어 적용하지 않았습니다. 파일을 다시 가져와 주세요.');
       await assertRoomRevision(room);working.entries=[...protectedEntries,...accepted];working.revision=Math.max(0,Number(working.revision||0))+1;working.updatedAt=nowIso();
       const automation={...structuredClone(initialAutomation),initialized:true,lastProcessedMessageId:source.cursorMessageId,lastRunAt:Date.now(),lastError:'',failureCount:0,paused:false,lastStatus:`자료집 자동 전환 · 새 ${added} · 교체 ${reused} · 제거 ${deleted} · 보호 ${protectedEntries.length}${source.includesLatest?' · 최신 턴 재확인 대기':''}`};
       await putLorePackAndRoomAtomic(working,freshFingerprint,room,automation,{activeLorePackRemoveIds:[...promotedPackIds],activeLorePackAddIds:[expectedPackId],expectedLibraryFingerprints:referencePackFingerprints,expectedRoomRevision,expectedRoomEpoch,dirtyReason:'진행형 자료 일반팩 전환'});
@@ -9035,11 +9012,11 @@ function formatLocalRecordTime(value){
       if(!pack.autoManaged||(ownerChat&&ownerChat!==String(room.chatId||''))||(ownerApi&&ownerApi!==rid))throw new Error('현재 자료팩이 수동 자료이거나 다른 방 소유라 외부 결과를 적용하지 않았습니다.');
       if(data.source.last_message_id!==source.anchorMessageId)throw new Error('외부 분석 뒤 확정 RP 로그가 바뀌었습니다. 새 TXT로 다시 분석해 주세요.');
       const rpText=buildLoreExternalRpText(source),rpDigest=await sha256Hex(new TextEncoder().encode(rpText));
-      if(rpDigest!==data.source.rp_source_sha256)throw new Error('외부 분석 뒤 확정 RP 원문이 수정·삭제됐습니다. 새 TXT로 다시 분석해 주세요.');
+
       const rows=data.entries.map((entry,index)=>normalizeAutoLoreRow(entry,index,source.evidenceTurns,{label:'외부 자료'}));
       assertUniqueAutoLoreRows(rows,'외부 자료');
       const freshPackDigest=await sha256Hex(new TextEncoder().encode(autoLoreContentFingerprint(freshRaw)));if(freshPackDigest!==data.source.auto_pack_sha256)throw new Error('외부 분석 뒤 진행형 자료 카드가 바뀌었습니다. 보호 카드까지 안전하게 유지하려면 새 TXT로 다시 분석해 주세요.');
-      if(data.source.tail_token!==loreExternalTailToken(rpDigest,freshPackDigest))throw new Error('외부 AI가 TXT 맨 끝의 완료 토큰을 확인하지 못했습니다. 로그가 잘리지 않게 전체 TXT를 다시 분석해 주세요.');
+      if(data.source.tail_token!==loreExternalTailToken(data.source.rp_source_sha256,freshPackDigest))throw new Error('외부 AI가 TXT 맨 끝의 완료 토큰을 확인하지 못했습니다. 로그가 잘리지 않게 전체 TXT를 다시 분석해 주세요.');
       const freshFingerprint=lorePackStorageFingerprint(freshRaw),working=normalizeLorePack(freshRaw,pack.name),protectedEntries=(working.entries||[]).filter(entry=>!entry.autoManaged||entry.userProtected),editableEntries=(working.entries||[]).filter(entry=>entry.autoManaged&&!entry.userProtected);
       await loadLorePackCache(true);
       const liveActivePacks=activeLorePacks(room),referencePackFingerprints=await captureLorePackStorageFingerprints(liveActivePacks,working.scopeId);
@@ -9065,7 +9042,7 @@ function formatLocalRecordTime(value){
       const reused=accepted.filter(entry=>oldByKey.has(entry.autoLoreKey)).length,added=accepted.length-reused,deleted=Math.max(0,editableEntries.length-reused);
       if(!confirm(`외부 AI의 진행형 자료 전체 재구축 결과를 적용할까요?\n\n자동 카드 새로 만들기 ${added}개 · 교체 ${reused}개 · 제거 ${deleted}개\n보호 카드 ${protectedEntries.length}개 유지${skippedProtected?` · 보호 충돌 ${skippedProtected}개 건너뜀`:''}\n\n일반 자료집과 손으로 고친 카드는 바꾸지 않습니다.`))return null;
       const verifySource=await prepareLoreExternalSource(room),verifyRpText=buildLoreExternalRpText(verifySource),verifyRpDigest=await sha256Hex(new TextEncoder().encode(verifyRpText));
-      if(state.currentRoom?.chatId!==room.chatId||generationPending(rid)||verifySource.anchorMessageId!==data.source.last_message_id||verifyRpDigest!==data.source.rp_source_sha256)throw new Error('확인하는 동안 방 또는 확정 RP 로그가 바뀌어 적용하지 않았습니다. 새 TXT로 다시 분석해 주세요.');
+      if(state.currentRoom?.chatId!==room.chatId||generationPending(rid)||verifySource.anchorMessageId!==data.source.last_message_id)throw new Error('확인하는 동안 방 또는 확정 RP 로그가 바뀌어 적용하지 않았습니다. 새 TXT로 다시 분석해 주세요.');
       await assertRoomRevision(room);
       working.entries=[...protectedEntries,...accepted];working.revision=Math.max(0,Number(working.revision||0))+1;working.updatedAt=nowIso();
       const automation={...structuredClone(initialAutomation),initialized:true,lastProcessedMessageId:source.anchorMessageId,lastRunAt:Date.now(),lastError:'',failureCount:0,paused:false,lastStatus:`외부 전체 재구축 · 새 ${added} · 교체 ${reused} · 제거 ${deleted} · 보호 ${protectedEntries.length}`};
@@ -12532,17 +12509,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     const history=await getHistory(rid,review.sourceHashes?{requiredIds:required}:{all:true});
     if(!history.some(m=>m.id===(review.sourceMessageId||review.messageId)))
       throw new Error('후보가 나온 응답이 현재 대화에 없어요. ‘후보 원문·근거 다시 확인’으로 갱신해 주세요.');
-    if(review.sourceHashes){
-      for(const ref of review.sourceHashes){
-        const source=history.find(m=>m.id===ref.message_key);
-        if(!source || digest(cleanForAnalysis(source.text))!==ref.hash)
-          throw new Error('후보의 원문이 수정됐어요. ‘후보 원문·근거 다시 확인’으로 새 근거를 확인해 주세요.');
-      }
-    }else{
-      const pair=pairFor(history,review.messageId);
-      if(digest(JSON.stringify([pair.user,pair.assistant].map(analysisMessage)))!==review.pairHash)
-        throw new Error('후보의 원문이 수정됐어요. ‘후보 원문·근거 다시 확인’으로 갱신해 주세요.');
-    }
+    if((review.sourceHashes||[]).some(ref=>!history.some(m=>m.id===ref.message_key)))throw new Error('후보의 기준 메시지가 현재 방에 없습니다.');
     return {value,review,basis:reviewBasis(value,review),rid};
   }
 
@@ -13474,7 +13441,7 @@ function createWishUI(AD) {
     const rows=V.relationships.rows;
     const status=r=>r.enabled===false||!V.relationships.on?'주입 OFF':V.inj.items?.some(i=>i.kind==='relationship'&&i.sourceKey==='relationship:'+r.id&&!i.off)?(V.inj.verified?'주입 확인':'후보 · 확인 대기'):(V.inj.armed?'이번 주입 제외':'저장됨');
     return `<div class="m3-toolbar"><span class="m3-muted m3-grow">관계·감정선 ${rows.length}방향 ${help('PC↔CHAR와 CHAR↔CHAR의 상대별 의미와 깊이를 방향별로 보관합니다. 평소에는 인지·호칭 갱신에서 확인된 지속 변화만 반영합니다. 사건 상세는 날짜로그가 담당합니다. 고정은 항상 후보로 포함한다는 뜻이며 최종 4만자 한도는 유지됩니다. 관계만 과거에서 채우려면 아래 전용 TXT/JSON을 사용하세요.')}</span><div class="m3-actions">${btn('추가','relNew',{cls:'mini',icon:'plus'})}${chip('관계 주입','relationships.on',V.relationships.on)}</div></div>
-    <section class="m3-panel" data-key="relationship-rebuild"><b>외부 AI로 관계만 재구축</b><p class="m3-muted">전체 확정 RP를 읽어 관계의 현재 의미·핵심 전환·남은 쟁점만 추출합니다. 다른 기억을 다시 만들지 않습니다. TXT가 여러 개면 모두 같은 새 AI 대화에 넣으세요.</p><div class="m3-card-actions">${btn('지침 + TXT 받기','relExport',{cls:'mini',icon:'down',dis:V.rebuildRunning})}${btn('JSON 가져오기','relImport',{cls:'mini',icon:'up',dis:V.rebuildRunning})}${btn('지침','promptGuides',{arg:'externalRelationships',cls:'mini',icon:'doc'})}${btn('적용 전 백업 받기','relBackup',{cls:'quiet mini',icon:'down'})}</div></section>
+    <section class="m3-panel" data-key="relationship-rebuild"><b>외부 AI로 관계만 재구축</b><p class="m3-muted">전체 확정 RP를 읽어 관계의 현재 의미·핵심 전환·남은 쟁점만 추출합니다. 다른 기억을 다시 만들지 않습니다. TXT가 여러 개면 모두 같은 새 AI 대화에 넣으세요.</p><div class="m3-row m3-card-actions">${btn('지침 + TXT 받기','relExport',{cls:'mini',icon:'down',dis:V.rebuildRunning})}${btn('JSON 가져오기','relImport',{cls:'mini',icon:'up',dis:V.rebuildRunning})}${btn('지침','promptGuides',{arg:'externalRelationships',cls:'mini',icon:'doc'})}${btn('적용 전 백업 받기','relBackup',{cls:'quiet mini',icon:'down'})}</div></section>
     ${rows.map(r=>`<section class="m3-panel" data-key="rel-${esc(r.id)}"><div class="m3-row"><b class="m3-grow">${esc(r.speaker)} → ${esc(r.target)}</b>${tag(status(r))}${r.manual?tag('수동 보호'):tag('자동 갱신')}${r.pinned?tag('고정 후보'):''}</div><p style="white-space:pre-wrap"><b>현재 의미·태도</b><br>${esc(r.current)}</p>${r.unresolved?`<p style="white-space:pre-wrap"><b>남은 쟁점</b><br>${esc(r.unresolved)}</p>`:'<p class="m3-muted">기록된 남은 쟁점 없음</p>'}${r.trajectory?fold('rel-history-'+r.id,'핵심 전환 · '+fmt(r.trajectory.length)+'자',`<p style="white-space:pre-wrap">${esc(r.trajectory)}</p>`):''}${r.trajectory.length>=5000?'<p class="m3-warning">변화 이력이 저장 상한에 가까워졌습니다. 관계만 재구축에서 원문과 비교해 정리할 수 있습니다. 자동으로 오래된 이력을 자르지는 않습니다.</p>':''}${r.lastEvidence?.length?fold('rel-evidence-'+r.id,'최근 대표 근거',r.lastEvidence.map(e=>`<p class="m3-muted" style="white-space:pre-wrap">${esc(e.role==='user'?'USER':'CHAR/서술')}: ${esc(e.quote)}</p>`).join('')):''}<div class="m3-card-actions">${btn('편집','relEdit',{arg:r.id,cls:'mini',icon:'edit'})}</div></section>`).join('')||empty('아직 관계 기록이 없습니다. 위 전용 재구축으로 과거 관계를 채우거나, 이후 인지·호칭 갱신에서 새 변화를 쌓을 수 있습니다.')}`;
   }
   function mSpeech() {
@@ -13550,6 +13517,7 @@ function createWishUI(AD) {
   
   function vTools(){const j=V.rebuild,run=V.rebuildRunning,rows=j?.segments||[],done=rows.filter(s=>s.status==='complete').length,status={pending:'대기',running:'판독 중',complete:'완료',failed:'실패'};
  return pageHead('자료 관리')+
+ `<section class="m3-panel" data-key="memdiff-settings"><div class="m3-panel-head"><b>정리 전후 비교</b>${btn('정리 기록','memDiff',{cls:'mini',icon:'history'})}</div><p class="m3-muted">현재상태·날짜로그 · 방마다 최근 10회 · 추가 API 호출 없음</p></section>`+
  '<section class="m3-panel '+(j?'m3-focus':'')+'" data-key="rebuild"><div class="m3-row m3-sp"><div class="m3-t"><b class="m3-title-help">과거 대화 전체 재구축 '+help(helpSections([['읽는 범위','확정 RP를 AI 답변 끝 기준 약 20만 자씩 나눕니다. 한 턴이 더 길면 통째로 유지합니다.'],['분석과 적용','대화 읽기는 원문을 준비합니다. 이어서 분석은 외부 AI API를 사용합니다. 성공한 구간을 저장하고 실패한 구간부터 이어갑니다.'],['기존 기억','전체 결과 적용을 누르기 전까지 유지합니다.']]))+'</b><div class="m3-muted">확정 RP를 읽고 현재상태·날짜별 사건·인물·인지·자료·호칭을 다시 구성합니다.</div></div>'+(run?btn('작업 중단','rebuildStop',{cls:'danger mini'}):j&&!['complete','applied'].includes(j.status)?btn('이어서 분석','rebuildRun',{cls:'primary mini'}):btn('대화 읽기','rebuildRead',{cls:'primary mini'}))+'</div><p class="m3-muted">지침을 제외한 원문 약 200,000자 · AI 답변 끝에서 분할 · 한 턴이 더 길면 해당 턴은 통째로 유지</p>'+
  (j?'<div class="m3-hbar m3-topgap"><i style="width:'+ (rows.length?done/rows.length*100:0)+'%"></i></div><p class="m3-muted">'+esc(j.message||'')+' · 판독 완료 '+done+'/'+rows.length+'</p>'+rows.map(s=>'<div class="m3-seg" data-key="segment-'+s.index+'"><span class="m3-n '+(s.status==='complete'?'m3-done':s.status==='running'?'m3-run':'')+'">'+s.index+'</span><span class="m3-t">'+s.messages+'메시지 · '+fmt(s.chars)+'자'+(s.error?'<br><small class="m3-error">'+esc(s.error)+'</small>':'')+'</span><span class="m3-s">'+esc(status[s.status]||s.status)+'</span></div>').join('')+'<div class="m3-row m3-card-actions">'+(j.status==='complete'&&j.ready?btn('전체 결과 적용','rebuildApply',{cls:'primary mini',dis:run}):'')+btn('대화 다시 읽기','rebuildRead',{cls:'quiet mini',dis:run})+btn('구간 목록 비우기','rebuildClear',{cls:'danger mini',dis:run})+'</div>':'')+'</section>'+
  '<section class="m3-panel" data-key="external"><b>외부 AI로 전체 재구축</b><div class="m3-muted">현재상태·날짜별 기억·인지·호칭·말투·관계감정선을 함께 재구축합니다. 번호 순서대로 모든 TXT를 읽힌 뒤 최종 JSON 하나를 가져오세요. 관계만 채우려면 인물 → 관계·감정선의 전용 버튼을 사용하세요.</div><div class="m3-row m3-card-actions">'+btn('지침 + TXT 받기','rebuildExport',{cls:'mini',dis:run})+btn('JSON 가져오기','rebuildImport',{cls:'mini',dis:run})+btn('지침','promptGuides',{arg:'externalAll',cls:'mini',icon:'doc'})+'</div><hr class="m3-secondary-divider"><div data-key="secondary-rebuild"><b>외부 AI로 2차 재구축</b><div class="m3-muted">현재 방 자료를 카드별 고밀도 기록체로 압축합니다. 사건·원문·팩 구분을 보존합니다.</div><div class="m3-row m3-card-actions">'+btn('지침 + TXT 받기','secondaryExport',{cls:'mini',dis:run})+btn('JSON 가져오기','secondaryImport',{cls:'mini',dis:run})+btn('지침','promptGuides',{arg:'externalSecondary',cls:'mini',icon:'doc'})+'</div>'+(SecondaryRebuild.summary(state.currentRoom).count?'<div class="m3-toolbar m3-topgap"><span class="m3-muted">등록 압축본 '+SecondaryRebuild.summary(state.currentRoom).count+'본문 · '+(SecondaryRebuild.summary(state.currentRoom).enabled?'사용 켜짐':'사용 꺼짐')+'</span>'+btn('적용본 관리','secondaryManage',{cls:'quiet mini'})+'</div>':'')+'</div></section>'+
@@ -13570,7 +13538,7 @@ function createWishUI(AD) {
       `<section class="m3-panel" data-key="economy-settings"><div class="m3-panel-head"><b class="m3-title-help">API 사용량 절약 ${help('실험 기능 · 현재 방에만 적용합니다. 둘 다 OFF이면 2.5.8 방식입니다. OFF는 이미 갱신된 기억을 되돌리지는 않습니다. 처음 켜기 전 기억·인지·자료 백업을 보관하며, 복원용 파일은 기존 백업/복원 화면에서 가져올 수 있습니다. RP 원문은 이 백업으로 되돌리지 않습니다.')}</b><span class="m3-actions m3-economy-actions">${btn('절약 적용 전 백업 받기','economyBackup',{cls:'mini'})}${btn('절약 설정 저장','economySave',{cls:'mini'})}</span></div>${helpToggle('현재상태 변경분 갱신','apiEconomy.delta',V.apiEconomy?.delta,'변경된 원문 구간만 수정하고 나머지 문구는 보존합니다. 수정·추가·종료에 신규 RP 근거와 요청 토큰을 검증합니다. 애매한 편집은 원본을 유지하고 오류를 표시합니다. 날짜별 사건·자료·인지는 기존 증분 방식을 유지합니다.')}${helpToggle('색인으로 후보 선별','apiEconomy.index',V.apiEconomy?.index,'전체 후보가 40,000자를 초과할 때만 기존 선별 설정에 따라 사용합니다. 첫 선별에서 원문과 점수를 읽고 짧은 발췌 색인을 함께 준비하므로 첫 호출은 더 커질 수 있습니다. 다음 호출부터 같은 원문의 색인을 사용하며 실제 주입은 원문입니다. 자료 변경·색인 부적합·캐시 소실 때는 원문으로 돌아갑니다. 핵심 단서 누락 가능성은 실전 비교가 필요합니다.')}<p class="m3-muted">${esc(V.apiEconomy?.status||'')}</p></section>`+
       `<section class="m3-panel" data-key="recall-settings"><div class="m3-panel-head"><b class="m3-title-help">선택된 기억 AI 재검토 ${help(recallHelp)}</b>${btn('재검토 설정 저장','recallSave',{cls:'mini'})}</div><div class="m3-setting-row m3-recall-mode"><label for="wish-recall-mode">재검토 방식</label>${selc('recall.mode',mode,[['local','에리·키워드 결과만 사용'],['priority','AI로 후보 순서 재검토'],['both','AI로 관련성·순서 재검토'],['semantic','AI로 관련성만 재검토']],'m3-select',' id="wish-recall-mode" aria-label="선택된 기억 AI 재검토"')}</div><p class="m3-muted">최근·관련 기억 검색은 유지 · 원문·서식 포함 전체 후보가 40,000자를 초과할 때만 AI 선별 · 관련 후보를 40,000자 안전선까지 포함 · 전송 시 40,000자 초과 후보만 AI 선별 · 임베딩·자동 정리는 별도</p>${helpToggle('AI로 관련성 재확인','recall.semantic',q.semantic,'사용하도록 설정한 전체 후보가 원문·서식 포함 40,000자를 초과하면 보조 AI가 문맥 관련성을 확인합니다. 제외 항목은 유지하며, 키워드가 일치하지 않는 후보도 평가합니다. 기존 검색 벡터는 재사용하고 전송 직전 새 임베딩 요청은 하지 않습니다.')}${helpToggle('AI로 우선순위 정하기','recall.selector',q.selector,'현재 질문·미해결 약속·위험과 직접 연결된 후보부터 40,000자 안전선 안에 배치합니다. 실패하면 에리·키워드 순위를 그대로 사용합니다.')}</section>`+
       `<section class="m3-panel" data-key="api-guides"><div class="m3-panel-head"><b>API 추출 지침</b>${btn('지침','promptGuides',{arg:'apiCommon',cls:'mini',icon:'doc'})}</div><p class="m3-muted">기억·인물·후보 선별 등 지침을 선택해 편집합니다. 모든 방 공통 · 기본값 복원 가능</p></section>`+
-      `<section class="m3-panel" data-key="usage-settings"><div class="m3-panel-head"><b>AI 사용량 가계부</b>${btn('가계부','usageLedger',{cls:'mini',icon:'wallet'})}</div><p class="m3-muted">날짜별 호출 횟수와 예상 비용(USD) · 추가 API 호출 없음</p></section>`+`<section class="m3-panel" data-key="memdiff-settings"><div class="m3-panel-head"><b>정리 전후 비교</b>${btn('정리 기록','memDiff',{cls:'mini',icon:'history'})}</div><p class="m3-muted">현재상태·날짜로그 · 방마다 최근 10회 · 추가 API 호출 없음</p></section>`+advanced;
+      `<section class="m3-panel" data-key="usage-settings"><div class="m3-panel-head"><b>AI 사용량 가계부</b>${btn('가계부','usageLedger',{cls:'mini',icon:'wallet'})}</div><p class="m3-muted">날짜별 호출 횟수와 예상 비용(USD) · 추가 API 호출 없음</p></section>`+advanced;
   }
   const NAV = [['check', '확인', 'inbox'], ['memory', '기억', 'memory'], ['lore', '자료집', 'book'], ['cognition', '인물', 'people'], ['tools', '자료 관리', 'tools'], ['settings', '설정', 'set']];
   const navList = () => NAV.filter(([k]) => (k !== 'lore' || has('lore')));
@@ -14263,17 +14231,25 @@ diff:`<div class="m3-shell">
 
     relationshipPreflight(d){return sheet(d,{title:'재구축 가져오기 전 확인',body:`<div class="m3-status m3-warning">${ic('alert')}<span>${esc(d.message)}</span></div><p class="m3-muted">파일 선택과 적용 때 모두 검사합니다. 주입이나 기존 자료를 자동으로 바꾸지 않습니다.</p>`,foot:`${SP}${closeBtn(d,'확인')}`});},
     relationshipReview(d){
-      const groups=['추가','변경','유지','수동 보호 유지','미출력 · 기존 유지'];
-      const stats=groups.map(label=>[label,d.rows.filter(r=>r.status===label).length]).filter(([,n])=>n);
-      const rows=d.rows.slice(0,Number(d.draft.limit)||30);
-      const cards=rows.map(r=>{
-        const open=!!d.draft.open[r.id],proof=d.j.draft.room.relationships.find(x=>x.id===r.id)?.lastEvidence||[];
-        return `<article class="m3-copy-item" data-key="relation-review-${esc(r.id)}"><div class="m3-copy-item-head m3-secondary-manage"><button type="button" class="m3-copy-title" data-act="relReviewExpand" data-arg="${d.id}|${r.id}" aria-expanded="${open}"><b>${esc(r.title)}</b><small>${esc(r.status)}</small></button>${btn(open?'접기':'기존·제안 비교','relReviewExpand',{arg:d.id+'|'+r.id,cls:'quiet mini',dis:d.busy})}</div>${open?`<div class="m3-copy-item-body"><div class="m3-secondary-compare"><section><b>기존 관계</b><pre>${esc(r.before||'(없음)')}</pre></section><section><b>적용 제안</b><pre>${esc(r.after)}</pre></section></div>${proof.length?`<details class="m3-copy-review-group"><summary>확인한 대표 원문 인용 ${proof.length}개</summary>${proof.map(e=>`<p class="m3-muted">${esc(e.role==='user'?'USER':'CHAR/서술')} · ${esc(e.quote)}</p>`).join('')}</details>`:''}</div>`:''}</article>`;
+      const fields=d.editFields||[],categories=['전체',...new Set(fields.map(f=>f.category))],visible=fields.filter(f=>d.draft.category==='전체'||f.category===d.draft.category),groups=[];
+      for(const field of visible){let g=groups.find(g=>g.category===field.category&&g.title===field.title);if(!g){g={key:field.key,category:field.category,title:field.title,fields:[]};groups.push(g);}g.fields.push(field);}
+      const limit=Number(d.draft.limit)||30,changed=fields.filter(f=>Object.hasOwn(d.draft.edit,f.key)&&d.draft.edit[f.key]!==f.value).length;
+      const cards=groups.slice(0,limit).map((g,index)=>{
+        const open=!!d.draft.open[g.key],editing=!!d.draft.editing?.[g.key];
+        const contents=g.fields.map(f=>{
+          const value=Object.hasOwn(d.draft.edit,f.key)?d.draft.edit[f.key]:f.value,edited=value!==f.value;
+          const before=f.choices?(f.choices.find(([k])=>k===f.before)?.[1]||'(없음)'):f.before||'(없음)';
+          const shown=f.choices?(f.choices.find(([key])=>key===value)?.[1]||value):value;
+          const input=f.readonly||!editing?`<pre class="m3-review-result">${esc(shown||'(없음)')}</pre>`:f.choices?selc(D(d,'edit.'+f.key),value,f.choices,'',` aria-label="${esc(g.title+' · '+f.label)}"${d.busy?' disabled':''}`):ta(D(d,'edit.'+f.key),value,'비어 있음',f.label==='쌓인 감정·핵심 전환'?100:f.label==='남은 쟁점'?64:80,` class="m3-review-text" aria-label="${esc(g.title+' · '+f.label)}" maxlength="${f.max}"${d.busy?' disabled':''}`);
+          return `<div class="m3-review-field${edited?' is-edited':''}" data-key="edit-${f.key}"><div class="m3-review-field-title"><label>${esc(f.label)}</label><span>${f.readonly?tag('수동 보호'):edited?'<span class="m3-review-edited-dot">수정됨</span>':''}${!f.readonly&&edited&&editing?btn('되돌리기','relReviewReset',{arg:d.id+'|'+f.key,cls:'quiet mini',icon:'refresh',dis:d.busy}):''}</span></div><div class="m3-review-values"><section class="m3-review-before"><small>기존 내용</small><pre>${esc(before)}</pre></section><section class="m3-review-after"><small>변경 후${editing&&!f.readonly?' · 편집 중':''}</small>${input}</section></div></div>`;
+        }).join('');
+        return `<article class="m3-copy-item m3-review-card" data-key="review-${g.key}"><div class="m3-copy-item-head"><button type="button" class="m3-copy-title" data-act="relReviewExpand" data-arg="${d.id}|${g.key}" aria-expanded="${open}"${d.busy?' disabled':''}><small>${esc(g.category)}</small><b>${esc(g.title)}</b></button><div class="m3-review-head-actions">${g.fields.some(f=>!f.readonly)?btn(editing?'편집 마침':'편집','relReviewEdit',{arg:d.id+'|'+g.key,cls:'mini',icon:editing?'check':'edit',dis:d.busy}):''}${btn(open?'접기':'펼치기','relReviewExpand',{arg:d.id+'|'+g.key,cls:'quiet mini',dis:d.busy})}</div></div>${open?`<div class="m3-copy-item-body"><div class="m3-review-colheads"><span>기존 내용</span><span>변경 후${editing?' <small>편집 중</small>':''}</span></div>${contents}</div>`:''}</article>`;
       }).join('');
-      return sheet(d,{title:d.only?'관계·감정선만 재구축 — 적용 확인':'전체 재구축 — 관계 변경 확인',wide:true,desc:'구조·인용 검사와 실제 의미 검토는 다릅니다.',
-        body:`<div class="m3-status ${d.only?'m3-ok':'m3-warning'} m3-bottomgap">${ic(d.only?'check':'alert')}<span><b>${d.only?'관계와 필요한 신규 인물 연결만 반영합니다.':'현재상태·날짜별 사건·자동 인지·자료·호칭도 전체 재구축 결과로 교체합니다.'}</b><br>${d.only?'현재상태·날짜로그·자료집·호칭·인지값·Crack 요약·자동 정리 시작점은 바꾸지 않습니다.':'관계만 채우려는 작업은 취소하고 인물 → 관계·감정선의 관계 전용 내보내기를 사용하세요.'}</span></div><div class="m3-panel"><div class="m3-row m3-actions">${stats.map(([label,n])=>tag(label+' '+n)).join('')}</div><p class="m3-muted">결과에 빠진 기존 관계는 삭제하지 않고 유지합니다. 수동 보호는 자동 교체하지 않습니다. 기존 데이터가 잘못됐다고 확인한 경우 해당 관계 편집에서 직접 정정·삭제하세요.</p>${d.legacy?'<p class="m3-muted">구형 전체 JSON입니다. 새로운 관계 지침으로 처리된 결과가 아니며 미출력 관계는 보존합니다.</p>':''}</div>${cards||empty('새 관계 결과가 없습니다. 기존 관계는 그대로 유지됩니다.')}${d.rows.length>rows.length?btn('더 보기','relReviewMore',{arg:d.id,cls:'mini',dis:d.busy}):''}<label class="m3-secondary-consent"><input type="checkbox" data-bind="${D(d,'reviewed')}"${d.draft.reviewed?' checked':''}${d.busy?' disabled':''}><span>작업 범위와 기존·제안 관계, 인용 근거를 확인했습니다. 감정의 방향·깊이·조건·과거/현재·남은 쟁점이 원문과 맞는지 비교했습니다.</span></label><p class="m3-muted">원문이나 저장 자료가 바뀌면 적용을 중단합니다. 적용 전 방·인지·사용 자료는 백업으로 함께 보존합니다. 이 검사만으로 자연어 의미의 완전한 보존을 보장하지는 않습니다.</p>${d.error?`<p class="m3-error" role="alert">${esc(d.error)}</p>`:''}`,
-        foot:`${btn('지금 전체 백업','fileBackup',{cls:'quiet mini',dis:d.busy})}${SP}${closeBtn(d,'취소')}${btn(d.busy?'검사·저장 중…':d.only?'관계만 적용':'전체 재구축 적용','relReviewApply',{arg:d.id,cls:'primary',dis:d.busy||!d.draft.reviewed})}`});
+      return sheet(d,{title:d.only?'관계·감정선 가져오기':'재구축 결과 가져오기',wide:true,desc:'기존·변경 후를 비교하세요. 수정이 필요하면 편집을 누르세요.',
+        body:`<div class="m3-review-toolbar"><label>${selc(D(d,'category'),d.draft.category,categories.map(x=>[x,x==='전체'?'전체 항목':x]),'',` aria-label="검토할 항목"${d.busy?' disabled':''}`)}</label><span class="m3-muted">${groups.length}개 항목${changed?` <span class="m3-review-count">${changed}개 수정</span>`:''}</span></div>${cards||empty('이 분류에 적용할 내용이 없습니다.')}${groups.length>limit?btn('더 보기','relReviewMore',{arg:d.id,cls:'mini',dis:d.busy}):''}<label class="m3-secondary-consent"><input type="checkbox" data-bind="${D(d,'reviewed')}"${d.draft.reviewed?' checked':''}${d.busy?' disabled':''}><span>수정한 내용을 포함해 최종 내용을 확인했습니다.</span></label><p class="m3-muted">${d.only?'관계·감정선과 필요한 인물 연결만 적용':'현재상태·날짜로그·인지·자료·호칭·관계 적용'} · 수동 보호 유지 · 적용 전 백업</p>${d.error?`<p class="m3-error" role="alert">${esc(d.error)}</p>`:''}`,
+        foot:`${btn('지금 전체 백업','fileBackup',{cls:'quiet mini',dis:d.busy})}${SP}${closeBtn(d,'취소')}${btn(d.busy?'저장 중…':d.only?'수정 내용으로 관계 적용':'수정 내용으로 전체 적용','relReviewApply',{arg:d.id,cls:'primary',icon:'check',dis:d.busy||!d.draft.reviewed})}`});
     },
+
 
     secondaryPreflight(d){
       return sheet(d,{title:'JSON 가져오기 전 확인',desc:'조건을 확인한 뒤 파일을 선택합니다.',
@@ -14300,7 +14276,7 @@ diff:`<div class="m3-shell">
       };
       const compare=v=>{
         const r=v.rows[0],multiple=v.rows.length>1;
-        return `<div class="m3-secondary-compare"><section><b>저장 원문 · 그대로 유지</b><pre>${esc(v.source)}</pre></section><section><b>${r.restore?'원문 사용으로 되돌리기':'외부 AI의 표현 제안'}</b><pre>${esc(v.next)}</pre></section></div>${r.issues?.length?`<div class="m3-copy-item-body m3-error"><b>검사 차단${multiple?' · 동일 표현 전체':''}</b><br>${r.issues.map(esc).join('<br>')}</div>`:''}${r.warnings?.length?`<div class="m3-secondary-caution"><b>직접 대조할 사항</b><br>${r.warnings.map(esc).join('<br>')}</div>`:''}`;
+        return `<div class="m3-secondary-compare"><section><b>저장 원문 · 그대로 유지</b><pre>${esc(v.source)}</pre></section><section><b>${r.restore?'원문 사용으로 되돌리기':'외부 AI의 표현 제안'}</b>${r.mode==='editable'?btn(d.draft.editing?.[r.id]?'편집 마침':'편집','secondaryToggleEdit',{arg:d.id+'|'+r.id,icon:d.draft.editing?.[r.id]?'check':'edit',cls:'mini',dis:d.busy}):''}${r.mode==='editable'&&d.draft.editing?.[r.id]?ta(D(d,'edit.'+r.id),Object.hasOwn(d.draft.edit||{},r.id)?d.draft.edit[r.id]:v.next,'최종 표현을 직접 수정',130,` class="m3-review-text" aria-label="${esc(r.title+' · 최종 표현')}"${d.busy?' disabled':''}`):`<pre>${esc(Object.hasOwn(d.draft.edit||{},r.id)?d.draft.edit[r.id]:v.next)}</pre>`}</section></div>${r.issues?.length?`<div class="m3-copy-item-body m3-error"><b>검사 차단${multiple?' · 동일 표현 전체':''}</b><br>${r.issues.map(esc).join('<br>')}</div>`:''}${r.warnings?.length?`<div class="m3-secondary-caution"><b>직접 대조할 사항</b><br>${r.warnings.map(esc).join('<br>')}</div>`:''}`;
       };
       const body=visible.slice(0,limit).map(g=>{
         const open=!!d.draft.open[g.id],status=SecondaryRebuild.reviewPickState(g.rows,d.draft.pick),isSame=g.variants.length===1,r=g.rows[0];
@@ -14312,7 +14288,7 @@ diff:`<div class="m3-shell">
       }).join('');
       return sheet(d,{title:'2차 재구축 결과 비교',desc:esc(d.job.label)+' · 사건·팩·원문은 교체하지 않습니다',wide:true,
         body:`<div class="m3-status m3-warning m3-bottomgap">${ic('alert')}<span><b>구조 검사와 의미 검토는 다릅니다.</b><br>ID·누락·보호 표현·수량 표기를 검사했습니다. 숫자가 같아도 주체·대상이 뒤바뀔 수 있습니다. 선택하지 않은 본문의 기존 압축 설정은 유지합니다. 원문 유지 제안을 선택하면 해당 압축본만 해제합니다.<br>적용할 때도 주입이 해제되어 있어야 하며, 생성·자동 정리·복원이 진행 중이면 적용하지 않습니다.</span></div>${overview}<div class="m3-copy-filter">${inp(D(d,'query'),d.draft.query||'','제목·원문·압축 표현 검색')}${selc(D(d,'category'),d.draft.category||'all',[['all','모든 분류'],...audit.map(c=>[c.category,c.label])],'m3-select')}${selc(D(d,'filter'),d.draft.filter,[['changes','변경 제안'],['all','전체 본문'],['kept','원문 유지 제안'],['issues','차단·주의 사항']],'m3-select')}</div><div class="m3-toolbar m3-secondary-toolbar"><span class="m3-muted m3-grow">필터 ${visible.length}개 항목 · 표시 ${Math.min(limit,visible.length)}개<br>선택 ${pickedCards}개 항목 / ${picked.length}개 표현 · ${fmt(saved)}자 절약</span>${btn('전체 선택','secondaryPick',{arg:d.id+'|all',cls:'mini',dis:d.busy})}${btn('선택 해제','secondaryPick',{arg:d.id+'|none',cls:'quiet mini',dis:d.busy})}</div><p class="m3-muted m3-secondary-selection-note">전체 선택은 검색·분류·더보기와 관계없이 이번 결과의 적용 가능한 모든 표현을 선택합니다. 차단·보호 항목은 제외됩니다. 필터는 카드 찾기에만 사용하며 카드 안의 다른 표현도 함께 확인할 수 있습니다.</p>${body||empty('표시할 제안이 없습니다. 원문 유지도 정상 결과입니다.')}${visible.length>limit?btn('더 보기','secondaryMore',{arg:d.id,cls:'mini'}):''}<p class="m3-muted m3-topgap">위 절약량은 선택한 저장 표현의 합계이며 매턴 실제 주입 절약량과 다를 수 있습니다. 원문이 바뀐 압축본은 주입에 사용하지 않습니다.</p><label class="m3-secondary-consent"><input type="checkbox" data-bind="${D(d,'reviewed')}"${d.draft.reviewed?' checked':''}${d.busy?' disabled':''}><span>선택한 본문의 주체·조건·수치·예시와 주의 사항을 원문과 비교했으며, 같은 뜻의 주입용 압축본으로 사용합니다.</span></label>${d.error?`<p class="m3-error" role="alert">${esc(d.error)}</p>`:''}`,
-        foot:`${SP}${closeBtn(d,'닫기')}${btn(d.busy?'검증·저장 중…':'선택한 표현 적용','secondaryApply',{arg:d.id,cls:'primary',icon:'check',dis:d.busy||!picked.length||!d.draft.reviewed})}`});
+        foot:`${btn('수정 내용 반영','secondaryEdit',{arg:d.id,icon:'edit',dis:d.busy||!Object.keys(d.draft.edit||{}).length})}${SP}${closeBtn(d,'닫기')}${btn(d.busy?'검증·저장 중…':'선택한 표현 적용','secondaryApply',{arg:d.id,cls:'primary',icon:'check',dis:d.busy||!picked.length||!d.draft.reviewed})}`});
     },
     secondaryManage(d){
       const summary=SecondaryRebuild.summary(d.room);
@@ -14615,7 +14591,7 @@ diff:`<div class="m3-shell">
   function setDeep(o, path, v) { const p = path.split('.').map(s => decodeURIComponent(s)); for (let i = 0; i < p.length - 1; i++) { if (o[p[i]] == null || typeof o[p[i]] !== 'object') o[p[i]] = {}; o = o[p[i]]; } o[p[p.length - 1]] = v; }
   const bindTimers = {};
   function setKey(key, v, lazy) {
-    if (key.startsWith('@')) { const dot = key.indexOf('.'), d = findDlg(key.slice(1, dot)); if (d&&!d.busy) {const field=key.slice(dot+1);if(d.type==='promptGuide'&&field==='selected')WishPromptGuides.select(d,v);else setDeep(d.draft,field,v);if(d.type==='roomCopy')d.preview=null;if(d.type==='secondaryReview'){if(field.startsWith('pick.'))d.draft.reviewed=false;if(['filter','category','query'].includes(field))d.draft.limit=30;}} paint(false); return; }
+    if (key.startsWith('@')) { const dot = key.indexOf('.'), d = findDlg(key.slice(1, dot)); if (d&&!d.busy) {const field=key.slice(dot+1);if(d.type==='promptGuide'&&field==='selected')WishPromptGuides.select(d,v);else setDeep(d.draft,field,v);if(d.type==='relationshipReview'){if(field.startsWith('edit.'))d.draft.reviewed=false;if(field==='category')d.draft.limit=30;}if(d.type==='roomCopy')d.preview=null;if(d.type==='secondaryReview'){if(field.startsWith('pick.')||field.startsWith('edit.'))d.draft.reviewed=false;if(['filter','category','query'].includes(field))d.draft.limit=30;}} paint(false); return; }
     if (key === 'ui.search') { S.search = v; paint(false); return; }
     const i = key.indexOf(':'), base = i < 0 ? key : key.slice(0, i), sub = i < 0 ? undefined : key.slice(i + 1), fn = AD.bind && AD.bind[base];
     if (typeof fn !== 'function') { console.warn('[WUI] 연결 안 된 값', base); toast(`아직 연결 안 된 설정: ${base}`, 'warn'); return; }
@@ -14949,6 +14925,28 @@ function WUIStyles(){if(!document.getElementById('wish-logbar-style')){const lb=
 .m3-secondary-audit + .m3-copy-filter{flex-wrap:wrap}
 .m3-secondary-caution{padding:10px 14px;line-height:1.7;color:inherit;background:rgba(196,160,90,.09);overflow-wrap:anywhere}
 .m3-secondary-divider{border:0;border-top:1px solid var(--m3-line);margin:20px 0}
+.m3-review-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px;flex-wrap:wrap}
+.m3-review-toolbar label{display:flex;align-items:center;gap:10px}.m3-review-toolbar select{min-width:150px}
+.m3-review-count{color:var(--m3-accent);margin-left:8px}
+.m3-review-card .m3-copy-item-head{display:flex;align-items:center;gap:12px;padding:12px 14px}
+.m3-review-card .m3-copy-title{display:flex;flex:1;min-width:0;flex-direction:column;align-items:flex-start;text-align:left;white-space:normal;overflow-wrap:anywhere}
+.m3-review-card .m3-copy-title b{font-size:13px;line-height:1.6}
+.m3-review-card .m3-copy-title small{font-size:10px;color:var(--m3-muted);margin-bottom:2px}
+.m3-review-head-actions{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.m3-review-card .m3-copy-item-body{padding:4px 14px 14px;background:var(--m3-card)}
+.m3-review-colheads{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;padding:10px 0 8px;color:var(--m3-fg2);font-size:11px;border-bottom:1px solid var(--m3-line2);margin-bottom:4px}.m3-review-colheads small{font-size:10px;color:var(--m3-muted);margin-left:6px}
+.m3-review-field+.m3-review-field{margin-top:12px}
+.m3-review-field-title{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:28px;margin-bottom:4px;font-size:11px;color:var(--m3-fg2)}
+.m3-review-field-title>span{display:flex;align-items:center;gap:8px}.m3-review-field-title .m3-btn{padding:3px 6px;font-size:10px;min-height:22px}
+.m3-review-edited-dot{color:var(--m3-accent);font-size:10px}.m3-review-edited-dot::before{content:'';display:inline-block;width:4px;height:4px;border-radius:50%;background:currentColor;margin-right:4px;vertical-align:middle}
+.m3-review-values{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.m3-review-values>section{min-width:0}.m3-review-values small{display:none;font-size:10px;color:var(--m3-muted);margin-bottom:6px}
+.m3-review-before pre,.m3-review-result{margin:0;padding:10px 12px;border:1px solid var(--m3-line2);border-radius:8px;color:var(--m3-fg2);font:inherit;line-height:1.7;max-height:180px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}.m3-review-result{color:var(--m3-fg);background:var(--m3-bg)}
+.m3-review-text,.m3-review-toolbar select,.m3-review-after select{box-sizing:border-box;border:1px solid var(--m3-line);border-radius:8px;background:var(--m3-bg);color:var(--m3-fg);padding:10px 12px;font:inherit;font-weight:400;outline:none}
+.m3-review-text:focus,.m3-review-after select:focus{border-color:var(--m3-accent);box-shadow:0 0 0 2px var(--m3-accent-soft)}
+.m3-review-text{display:block;width:100%;resize:vertical;max-height:420px;line-height:1.7!important;font-size:12px!important}.m3-review-field.is-edited .m3-review-text{border-color:var(--m3-accent-line)}
+@media(max-width:600px){.m3-review-values{grid-template-columns:minmax(0,1fr);gap:8px}.m3-review-colheads{display:none}.m3-review-values small{display:block}.m3-review-card .m3-copy-item-head{gap:8px;padding:10px 12px}.m3-review-card .m3-copy-item-body{padding:0 12px 12px}.m3-review-text{font-size:16px!important}.m3-review-toolbar select{min-width:0}.m3-review-before pre{max-height:130px}.m3-review-field+.m3-review-field{margin-top:18px;padding-top:12px;border-top:1px solid var(--m3-line2)}}
+
 .m3-secondary-compare{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;padding:14px;border-top:1px solid var(--m3-line2)}
 .m3-secondary-compare section{min-width:0}.m3-secondary-compare b{font-size:12px;color:var(--m3-muted)}
 .m3-secondary-compare pre{white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;font:inherit;font-size:12px;line-height:1.8;max-height:360px;overflow:auto;margin:9px 0 0}
@@ -15218,7 +15216,7 @@ Object.assign(WUI_ADAPTER.act,{
  raw:s=>WUIEditor('slot',s==='state'?'currentState':'logSummary'),guide:s=>WUIEditor('guide',({state:'currentState',log:'logSummary'})[s]||s),stEdit:id=>WUIEditor('state',id),lgEdit:id=>WUIEditor('log',id),relNew:()=>WishRelationships.open(),relEdit:id=>WishRelationships.open(id),
  relExport:()=>R31.exportText(state.currentRoom,true),relImport:()=>R31.importFile(state.currentRoom,true),relBackup:()=>R31.exportRelationshipBackup(state.currentRoom),relReviewApply:id=>R31.applyRelationshipReview(id),
  relReviewExpand:arg=>{const [id,key]=arg.split('|'),d=WUI.ui.dlg(id);if(d&&!d.busy){d.draft.open[key]=!d.draft.open[key];WUI.paint();}},
- relReviewMore:id=>{const d=WUI.ui.dlg(id);if(d&&!d.busy){d.draft.limit+=30;WUI.paint();}},spNew:()=>WUIEditor('speech'),spEdit:id=>WUIEditor('speech',id),charEdit:id=>WUIEditor('slot',id),xEdit:id=>WUIEditor('slot',id),
+ relReviewEdit:arg=>{const [id,key]=arg.split('|'),d=WUI.ui.dlg(id);if(d&&!d.busy){d.draft.editing||={};d.draft.editing[key]=!d.draft.editing[key];d.draft.open[key]=true;WUI.paint(false);}},relReviewReset:arg=>{const [id,key]=arg.split('|'),d=WUI.ui.dlg(id);if(d&&!d.busy){delete d.draft.edit[key];d.draft.reviewed=false;WUI.paint();}},relReviewMore:id=>{const d=WUI.ui.dlg(id);if(d&&!d.busy){d.draft.limit+=30;WUI.paint();}},spNew:()=>WUIEditor('speech'),spEdit:id=>WUIEditor('speech',id),charEdit:id=>WUIEditor('slot',id),xEdit:id=>WUIEditor('slot',id),
  charNew:async()=>{await WUIInvoke('add','character');WUIEditor('slot',state.v2Editor.slotId);},xNew:async()=>{await WUIInvoke('add','extra');WUIEditor('slot',state.v2Editor.slotId);},
  
  packNew:()=>WUIEditor('pack'),packEdit:id=>WUIEditor('pack',id),enNew:pack=>WUIEditor('entry','',{pack}),enEdit:arg=>{const [pack,id]=arg.split('|');return WUIEditor('entry',id,{pack});},loreConvert:()=>openLoreConversionDialog(state.currentRoom),lcRun:id=>WUILoreConvert(WUI.ui.dlg(id)),
@@ -15274,7 +15272,7 @@ Object.assign(WUI_ADAPTER.act,{
  memoryBase:()=>U3.baseline(state.currentRoom),unifiedRetry:()=>U3.run(state.currentRoom,'retry'),
 });
 Object.assign(WUI_ADAPTER.act,{
- secondaryExport:()=>SecondaryRebuild.openExport(),secondaryExportRun:id=>SecondaryRebuild.exportFromDialog(id),secondaryImport:()=>SecondaryRebuild.importFile(),secondaryApply:id=>SecondaryRebuild.apply(id),secondaryManage:()=>SecondaryRebuild.openManage(),secondaryChange:arg=>{const [id,mode]=arg.split('|');return SecondaryRebuild.change(id,mode);},
+ secondaryExport:()=>SecondaryRebuild.openExport(),secondaryExportRun:id=>SecondaryRebuild.exportFromDialog(id),secondaryImport:()=>SecondaryRebuild.importFile(),secondaryApply:id=>SecondaryRebuild.apply(id),secondaryEdit:id=>SecondaryRebuild.editReview(id),secondaryToggleEdit:arg=>{const [id,key]=arg.split('|'),d=WUI.ui.dlg(id);if(d&&!d.busy){d.draft.editing||={};d.draft.editing[key]=!d.draft.editing[key];WUI.paint(false);}},secondaryManage:()=>SecondaryRebuild.openManage(),secondaryChange:arg=>{const [id,mode]=arg.split('|');return SecondaryRebuild.change(id,mode);},
  unifiedAll:()=>U3.run(state.currentRoom,'all'),rebuildRead:()=>R31.read(state.currentRoom),rebuildRun:()=>R31.run(state.currentRoom),rebuildApply:()=>R31.apply(state.currentRoom),rebuildStop:()=>R31.stop(),rebuildClear:()=>R31.clear(state.currentRoom),rebuildExport:()=>R31.exportText(state.currentRoom),rebuildImport:()=>R31.importFile(state.currentRoom),
  bulkStart:()=>R31.read(state.currentRoom),bulkResume:()=>R31.run(state.currentRoom),bulkShow:()=>WUI.open('tools'),bulkDiscard:()=>R31.clear(state.currentRoom),extTxt:()=>R31.exportText(state.currentRoom),
 });
