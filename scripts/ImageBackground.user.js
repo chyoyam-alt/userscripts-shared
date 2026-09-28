@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🖼️ Crack Custom Room Image Background (배경 이미지&테마)
 // @namespace    crack-custom-room-background
-// @version      4.0.5
+// @version      4.0.6
 // @description  오른쪽 메뉴의 "배경 이미지 보기"에서 방별 이미지를 직접 추가하고, 최신 테마(온실·해구·Inkfold·HANGAR 포함)를 적용할 수 있습니다.
 // @match        https://crack.wrtn.ai/*
 // @run-at       document-idle
@@ -49,7 +49,7 @@
   }
 
   const SCRIPT_NAME = 'Custom Room Image Background';
-  const VERSION = '4.0.5';
+  const VERSION = '4.0.6';
   const SGB_MUTATION_BATCH_MS = 32;
 
   /**
@@ -3609,26 +3609,7 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
 
 
   function findKeyboardShortcutRow() {
-    // 삽입 위치는 오직 '키보드 단축키' 바로 아래로 고정한다.
-    // 다른 메뉴 항목은 앵커나 폴백으로 사용하지 않는다.
-    const labelRe = /키보드\s*단축키/;
-    const controls = Array.from(document.querySelectorAll('button, [role="button"], a, [tabindex]'));
-    const target = controls.find(el => {
-      if (!(el instanceof HTMLElement)) return false;
-      if (isOwnSettingsUiElement(el)) return false;
-      return labelRe.test(getNativeSettingsRowText(el));
-    });
-
-    let row = getNativeSettingsRowCandidate(target);
-    if (row instanceof HTMLElement && row.parentElement && isKeyboardShortcutRow(row)) return row;
-
-    // label span만 잡히는 렌더러 폴백도 '키보드 단축키'만 허용한다.
-    const labels = Array.from(document.querySelectorAll('span.whitespace-nowrap, span[class*="typo-text-sm"], span'));
-    const label = labels.find(el => el instanceof HTMLElement && !isOwnSettingsUiElement(el) && labelRe.test(getNativeSettingsRowText(el)));
-    row = getNativeSettingsRowCandidate(label);
-    if (row instanceof HTMLElement && row.parentElement && isKeyboardShortcutRow(row)) return row;
-
-    return null;
+    return findRescueSettingsAnchor()?.row || null;
   }
 
   function createSettingsRow() {
@@ -3679,60 +3660,13 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
   }
 
   function decorateSettingsRow() {
-    // 메뉴 버튼은 https://crack.wrtn.ai/stories/*/episodes/* 에서만 노출한다.
-    if (removeSettingsRowIfOutsideRoom()) return;
-
-    // 빠른 경로: 이미 제자리에 붙어 있으면 사이드바 전체 재탐색을 생략한다.
-    const fastRow = document.getElementById(SGB_UI_IDS.row);
-    if (fastRow instanceof HTMLElement && fastRow.isConnected) {
-      const prev = fastRow.previousElementSibling;
-      if (isKeyboardShortcutRow(prev)) {
-        syncSettingsUi();
-        return;
-      }
-    }
-
-    const anchor = findKeyboardShortcutRow();
-    if (!(anchor instanceof HTMLElement) || !anchor.parentElement) {
-      syncSettingsUi();
-      return;
-    }
-
-    const existingRow = document.getElementById(SGB_UI_IDS.row);
-    if (existingRow instanceof HTMLElement) {
-      if (existingRow.previousElementSibling !== anchor || existingRow.parentElement !== anchor.parentElement) {
-        anchor.insertAdjacentElement('afterend', existingRow);
-      }
-      syncSettingsUi();
-      return;
-    }
-
-    document.querySelectorAll('[data-sgb-settings-row]').forEach(el => el.remove());
-    anchor.insertAdjacentElement('afterend', createSettingsRow());
-    syncSettingsUi();
+    return mountSettingsRowRescue();
   }
 
 
   function scheduleSettingsRowDecorateBurst(reason = 'settings-menu') {
     log('settings row scan scheduled', reason);
-    // 채팅방 정규 URL 밖에서는 재시도 타이머를 돌리지 않는다.
-    if (removeSettingsRowIfOutsideRoom()) return;
-
-    // pointerup + click이 연달아 들어와도 이전 burst를 취소해 타이머가 누적되지 않게 한다.
-    (state.settingsRowBurstTimers || []).forEach(timerId => clearTimeout(timerId));
-    state.settingsRowBurstTimers = [];
-    state.settingsMenuProbeUntil = Date.now() + 1800;
-
-    [0, 120, 420, 1000].forEach(ms => {
-      const timerId = window.setTimeout(() => {
-        try {
-          decorateSettingsRow();
-        } catch (err) {
-          console.warn(`[${SCRIPT_NAME}] settings row decorate failed:`, err);
-        }
-      }, ms);
-      state.settingsRowBurstTimers.push(timerId);
-    });
+    scheduleSettingsMenuRescueBurst();
   }
 
   function isPotentialNativeSettingsMenuTrigger(target) {
@@ -3781,91 +3715,65 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
   }
 
   function findRescueSettingsAnchor() {
-    const selector = [
-      '[data-radix-popper-content-wrapper] button',
-      '[data-radix-popper-content-wrapper] [role="button"]',
-      '[data-radix-popper-content-wrapper] span',
-      '[role="menu"] button',
-      '[role="menu"] [role="button"]',
-      '[role="menu"] span',
-      '[role="dialog"] button',
-      '[role="dialog"] [role="button"]',
-      '[role="dialog"] span',
-      'button',
-      '[role="button"]',
-      'span.whitespace-nowrap',
-      'span[class*="typo-text-sm"]'
-    ].join(',');
-
-    const elements = Array.from(document.querySelectorAll(selector));
-    for (const spec of SETTINGS_MENU_LABEL_SPECS) {
-      for (const el of elements) {
-        if (!(el instanceof HTMLElement) || isOwnSettingsUiElement(el)) continue;
+    const cached = state.settingsAnchor;
+    if (cached instanceof HTMLElement && cached.isConnected
+      && isKeyboardShortcutRow(cached) && isActuallyVisibleElement(cached)) {
+      return { row: cached, position: 'afterend' };
+    }
+    state.settingsAnchor = null;
+    const roots = document.querySelectorAll('[data-radix-popper-content-wrapper], [role="menu"], [role="dialog"], main .border-l.border-outline_tertiary');
+    const visited = new Set();
+    for (const root of roots) {
+      if (isOwnSettingsUiElement(root) || getMessageGroupFromNode(root)) continue;
+      for (const el of root.querySelectorAll('button, [role="button"], [role="menuitem"], a, span')) {
+        if (visited.has(el)) continue;
+        visited.add(el);
+        if (isOwnSettingsUiElement(el) || getMessageGroupFromNode(el)) continue;
         const text = getDirectOrCompactText(el);
-        if (!text || text.length > 100 || !spec.re.test(text)) continue;
-
-        const clickable = el.closest('button, [role="button"], a, [data-radix-collection-item]');
-        const seed = clickable instanceof HTMLElement ? clickable : el;
-        let row = getNativeSettingsRowCandidate(seed);
-
-        // Tailwind 클래스가 바뀐 최신 메뉴에서는 클릭 행/그 부모를 직접 사용한다.
-        if (!(row instanceof HTMLElement) || !row.parentElement) {
-          row = seed.closest('li, [role="menuitem"]');
-        }
-        if (!(row instanceof HTMLElement) || !row.parentElement) {
-          row = seed.parentElement;
-        }
-        if (!(row instanceof HTMLElement) || !row.parentElement) continue;
-
-        const panel = row.closest('[data-radix-popper-content-wrapper], [role="menu"], [role="dialog"]');
-        if (panel instanceof HTMLElement && !isActuallyVisibleElement(panel)) continue;
-        if (!isActuallyVisibleElement(row) && !(panel instanceof HTMLElement)) continue;
-
-        return { row, position: spec.position };
+        if (!/^키보드\s*단축키$/.test(text)) continue;
+        const seed = el.closest('button, [role="button"], a, [data-radix-collection-item]') || el;
+        const row = getNativeSettingsRowCandidate(seed) || seed.closest('li, [role="menuitem"]') || seed.parentElement;
+        if (!(row instanceof HTMLElement) || !row.parentElement || !root.contains(row)) continue;
+        if (!isKeyboardShortcutRow(row) || !isActuallyVisibleElement(row)) continue;
+        state.settingsAnchor = row;
+        return { row, position: 'afterend' };
       }
     }
     return null;
   }
 
   function mountSettingsRowRescue() {
-    const placement = findRescueSettingsAnchor();
-    const anchor = placement?.row;
-    const position = placement?.position || 'afterend';
+    if (removeSettingsRowIfOutsideRoom()) return false;
+    const anchor = findRescueSettingsAnchor()?.row;
     if (!(anchor instanceof HTMLElement) || !anchor.parentElement) return false;
-
     let row = document.getElementById(SGB_UI_IDS.row);
-    if (row instanceof HTMLElement && row.parentElement !== anchor.parentElement) {
-      row.remove();
-      row = null;
-    }
-
     if (!(row instanceof HTMLElement)) {
-      document.querySelectorAll('[data-sgb-settings-row]').forEach(el => el.remove());
       row = createSettingsRow();
-      // 현재 Crack 행의 바깥 여백/높이 클래스를 그대로 따라간다.
-      if (typeof anchor.className === 'string' && anchor.className.trim()) {
-        row.className = anchor.className;
-      }
+      if (typeof anchor.className === 'string' && anchor.className.trim()) row.className = anchor.className;
     }
-
-    const inPlace = position === 'beforebegin'
-      ? row.nextElementSibling === anchor
-      : row.previousElementSibling === anchor;
-    if (!inPlace || row.parentElement !== anchor.parentElement) {
-      anchor.insertAdjacentElement(position, row);
-    }
+    // 같은 메뉴에 있으면 다른 확프가 사이에 붙은 행을 밀어내지 않는다.
+    if (row.parentElement !== anchor.parentElement) anchor.insertAdjacentElement('afterend', row);
+    state.settingsMountedRow = row;
     syncSettingsUi();
     return true;
   }
 
   function scheduleSettingsMenuRescueBurst() {
-    (state.settingsMenuRescueTimers || []).forEach(id => clearTimeout(id));
+    (state.settingsMenuRescueTimers || []).forEach(clearTimeout);
+    (state.settingsRowBurstTimers || []).forEach(clearTimeout);
     state.settingsMenuRescueTimers = [];
-    [0, 40, 120, 280, 650, 1200].forEach(delay => {
+    state.settingsRowBurstTimers = [];
+    if (removeSettingsRowIfOutsideRoom()) return;
+    state.settingsMenuProbeUntil = Date.now() + 1800;
+    [0, 120, 420, 1000].forEach(delay => {
       const id = window.setTimeout(() => {
         state.settingsMenuRescueTimers = state.settingsMenuRescueTimers.filter(value => value !== id);
-        try { mountSettingsRowRescue(); }
-        catch (err) { console.warn(`[${SCRIPT_NAME}] settings menu rescue failed:`, err); }
+        try {
+          if (mountSettingsRowRescue()) {
+            state.settingsMenuRescueTimers.forEach(clearTimeout);
+            state.settingsMenuRescueTimers = [];
+          }
+        } catch (err) { console.warn(`[${SCRIPT_NAME}] settings menu recovery failed:`, err); }
       }, delay);
       state.settingsMenuRescueTimers.push(id);
     });
@@ -3878,10 +3786,15 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
     if (root) {
       const observer = new MutationObserver(mutations => {
         if (!isSupportedSettingsRoute()) return;
-        const hasMenuLikeChange = mutations.some(mutation =>
+        const removedMenu = mutations.some(mutation => Array.from(mutation.removedNodes || []).some(node =>
+          node instanceof Element && ((state.settingsAnchor && node.contains(state.settingsAnchor))
+            || (state.settingsMountedRow && node.contains(state.settingsMountedRow)))));
+        const hasMenuLikeChange = removedMenu || mutations.some(mutation =>
           Array.from(mutation.addedNodes || []).some(node => {
             const element = node instanceof Element ? node : node?.parentElement;
-            if (!(element instanceof Element) || isWeatherDecorationNode(element)) return false;
+            if (!(element instanceof Element) || isWeatherDecorationNode(element)
+              || isOwnSettingsUiElement(element) || isLiveComposerMutationNode(element)
+              || getMessageGroupFromNode(element)) return false;
             if (
               element.matches?.('[data-radix-popper-content-wrapper], [role="menu"], [role="dialog"]')
               || element.querySelector?.('[data-radix-popper-content-wrapper], [role="menu"], [role="dialog"]')
@@ -3891,7 +3804,8 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
             // 채팅 입력/메시지 갱신은 설정 메뉴 복구와 무관하다.
             // 긴 본문의 textContent를 매 변화마다 읽지 않도록 여기서 끝낸다.
             if (isLiveComposerMutationNode(element) || getMessageGroupFromNode(element)) return false;
-            return /키보드\s*단축키/.test(getDirectOrCompactText(element));
+            const control = element.matches?.('.ring-offset-sidebar') ? element : element.querySelector?.('.ring-offset-sidebar');
+            return !!control && /키보드\s*단축키/.test(getDirectOrCompactText(control));
           })
         );
         if (hasMenuLikeChange) scheduleSettingsMenuRescueBurst();
@@ -5358,6 +5272,8 @@ function createSettingsModal() {
       return;
     }
 
+    // 새 말풍선은 decorateHauntBubble에서 이미 현재 시각/제목을 받는다.
+    if (state.hauntTimecodeTimer) return;
     const now = new Date();
     updateHauntTimecodes(document, now);
     updateHauntRecTitles(document, getHauntRoomTitle());
@@ -6218,6 +6134,27 @@ function createSettingsModal() {
     scheduleIdleThemeWork(work);
   }
 
+  function decorateThemeGroupBatch(groups, generation, done) {
+    const path = location.pathname;
+    const style = normalizeUiStyle(CONFIG.uiStyle);
+    let index = 0;
+    const work = () => {
+      if (generation !== state.hydrationGeneration || location.pathname !== path
+        || state.themeHydratedPath !== path || normalizeUiStyle(CONFIG.uiStyle) !== style
+        || !shouldApplyThemeSkin() || isNormalUiStyle()) return;
+      const started = performance.now();
+      let count = 0;
+      while (index < groups.length && count < 12 && (!count || performance.now() - started < 6)) {
+        const group = groups[index++];
+        if (group?.isConnected) decorateMessageGroup(group, { final: false, updateLayout: false });
+        count++;
+      }
+      if (index < groups.length) scheduleIdleThemeWork(work);
+      else done();
+    };
+    work();
+  }
+
   function hydrateExistingThemeTargets(reason = 'hydrate', options = {}) {
     if (!isRoomPath() || !shouldApplyThemeSkin() || isNormalUiStyle()) return false;
 
@@ -6236,7 +6173,7 @@ function createSettingsModal() {
     const groups = Array.from(document.querySelectorAll('main [data-message-group-id]'))
       .filter(group => group instanceof HTMLElement);
 
-    groups.forEach(group => decorateMessageGroup(group, { final: false, updateLayout: false }));
+    decorateThemeGroupBatch(groups, generation, () => {
     syncNovelShadeContext();
     decorateInput();
     decorateEditableEditors(document);
@@ -6249,6 +6186,7 @@ function createSettingsModal() {
     }
 
     log('theme targets hydrated', reason, groups.length);
+    });
     return true;
   }
 
@@ -6271,22 +6209,23 @@ function createSettingsModal() {
   function flushMessageQueue() {
     clearTimeout(state.messageQueueTimer);
     state.messageQueueTimer = 0;
-
     if (!isRoomPath() || !shouldApplyThemeSkin() || isNormalUiStyle()) {
       state.messageQueue.clear();
       state.finalMessageQueue.clear();
       return;
     }
-
-    const groups = Array.from(state.messageQueue);
-    state.messageQueue.clear();
-    groups.forEach(group => {
+    const started = performance.now();
+    let count = 0;
+    for (const group of state.messageQueue) {
+      state.messageQueue.delete(group);
       const final = state.finalMessageQueue.has(group);
       state.finalMessageQueue.delete(group);
       if (group?.isConnected) decorateMessageGroup(group, { final, updateLayout: true });
-    });
-  
+      count++;
+      if (count >= 12 || performance.now() - started >= 6) break;
+    }
     syncNovelShadeContext();
+    if (state.messageQueue.size) state.messageQueueTimer = window.setTimeout(flushMessageQueue, 16);
   }
 
   function getMessageGroupSortKey(group, domIndex = 0) {
@@ -9505,9 +9444,17 @@ function createSettingsModal() {
         html.${CLS_ACTIVE}[data-sgb-ui-style="dossier"]{
           --do-perf-x:31px;
         }
-        html.${CLS_ACTIVE}[data-sgb-ui-style="dossier"] [data-sgb-bubble="chat"]{
+        html.${CLS_ACTIVE}[data-sgb-ui-style="dossier"] main [data-sgb-message-group] [data-sgb-bubble="chat"]{
           margin-block:5px!important;
           padding:30px 20px 24px 42px!important;
+          padding-left:calc(var(--do-perf-x,31px) + 11px)!important;
+        }
+        html.${CLS_ACTIVE}[data-sgb-ui-style="dossier"] main [data-sgb-message-group] [data-sgb-bubble="chat"] > .wrtn-markdown{
+          box-sizing:border-box!important;
+          min-width:0!important;
+          width:auto!important;
+          max-width:100%!important;
+          margin-inline:0!important;
         }
       }
 
@@ -17026,18 +16973,12 @@ html.${CLS_ACTIVE}[data-sgb-ui-style="arcana"][data-sgb-theme="light"][data-sgb-
     const processMutations = mutations => {
       state.__sgbLastMutationAt = Date.now();
       const groups = new Set();
-      let shouldRefresh = false;
       let shouldDecorateStaticUi = false;
       let lateBootstrapAdded = false;
       let touchedMessageGroup = null;
       const ignoreMessageMutations = Date.now() < Number(state.ignoreMessageMutationsUntil || 0);
 
       for (const mutation of mutations) {
-        if (mutation.type === 'attributes') {
-          const target = mutation.target;
-          if (target instanceof Element && target.matches?.('.csp-generated-scene-image img')) shouldRefresh = true;
-          continue;
-        }
         if (mutation.type !== 'childList') continue;
 
         const target = mutation.target instanceof Element ? mutation.target : mutation.target?.parentElement;
@@ -17049,8 +16990,10 @@ html.${CLS_ACTIVE}[data-sgb-ui-style="arcana"][data-sgb-theme="light"][data-sgb-
         if (changedNodes.some(nodeContainsLateBootstrapMarker)) lateBootstrapAdded = true;
 
         if (!ignoreMessageMutations && changedNodes.some(nodeHasMessageStructure)) {
-          collectMessageGroupsFromNode(target, groups);
-          changedNodes.forEach(node => collectMessageGroupsFromNode(node, groups));
+          // 목록 컨테이너의 모든 기존 형제까지 다시 수집하지 않는다.
+          const ownGroup = getMessageGroupFromNode(target);
+          if (ownGroup?.isConnected) groups.add(ownGroup);
+          mutation.addedNodes.forEach(node => collectMessageGroupsFromNode(node, groups));
           touchedMessageGroup = getMessageGroupFromNode(target) || touchedMessageGroup;
         }
 
@@ -17058,11 +17001,6 @@ html.${CLS_ACTIVE}[data-sgb-ui-style="arcana"][data-sgb-theme="light"][data-sgb-
           shouldDecorateStaticUi = true;
         }
 
-        for (const node of changedNodes) {
-          const el = node instanceof Element ? node : node?.parentElement;
-          if (!(el instanceof Element) || isThemeOwnedMutationNode(el) || isCrackNativePanelNode(el)) continue;
-          if (el.matches?.('.csp-generated-scene-image') || el.querySelector?.('.csp-generated-scene-image')) shouldRefresh = true;
-        }
       }
 
       if (groups.size) {
@@ -17088,12 +17026,10 @@ html.${CLS_ACTIVE}[data-sgb-ui-style="arcana"][data-sgb-theme="light"][data-sgb-
         });
       }
       if (shouldDecorateStaticUi) scheduleStaticUiDecorate('mutation', 90);
-      if (shouldRefresh) scheduleRefresh('mutation', 700);
     };
 
     state.observer = new MutationObserver(mutations => {
-      const relevant = mutations.filter(mutation => mutation.type !== 'attributes'
-        || (mutation.target instanceof Element && mutation.target.matches?.('.csp-generated-scene-image img')));
+      const relevant = mutations;
       if (!relevant.length) return;
       state.observerMutationBuffer.push(...relevant);
       if (state.observerMutationTimer) return;
@@ -17108,9 +17044,7 @@ html.${CLS_ACTIVE}[data-sgb-ui-style="arcana"][data-sgb-theme="light"][data-sgb-
 
     state.observer.observe(observerRoot, {
       childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ['src']
+      subtree: true
     });
 
     if (state.themeObserver) state.themeObserver.disconnect();
