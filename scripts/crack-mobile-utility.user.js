@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.5.6
-// @description  코드블록 자동 줄바꿈, 라이트 테마 코드·보조 글자 대비 수정, 테마 판별 통일, DOM·캐시·라디오존데 반복 처리 최적화. 모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
+// @version      4.5.7
+// @description  미니사이드바 다크/라이트·소설/채팅 전환 추가. 코드블록 자동 줄바꿈, 라이트 테마 코드·보조 글자 대비 수정, 테마 판별 통일, DOM·캐시·라디오존데 반복 처리 최적화. 모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       Assistant
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/crack-mobile-utility.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/crack-mobile-utility.user.js
@@ -30,7 +30,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.5.6';
+    const VERSION = '4.5.7';
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
     const CMU_RUNTIME_KEY = '__CRACK_MOBILE_UTILITY_RUNTIME__';
     const runtimeRoot = document.documentElement;
@@ -8613,12 +8613,15 @@
         ['deducted', '차감']
     ];
     const SIDE_PART_LABELS = [
+        ['themeButton', '다크/라이트'], ['episodeModeButton', '소설/채팅'],
         ['modelButton', '모델'], ['guideButton', '가이드'], ['profileButton', '프로필'], ['profileBoxButton', '프로필 박스'], ['noteButton', '노트'],
         ['outputButton', '출력'], ['summaryButton', '요약'], ['imageButton', '이미지'], ['archiveButton', '보관함'],
         ['roomBackgroundButton', '이미지 테마'], ['scenePainterButton', '모바일 삽화'], ['wishManagerButton', 'Wish RP'], ['sceneBlurButton', 'CSP 테마'],
         ['startButton', '시작'], ['loreButton', '로어'], ['translatorButton', '번역'], ['aiSummaryButton', 'AI 요약'], ['gameHudButton', '게임 HUD']
     ];
     const SIDE_PART_ICON_KEYS = Object.freeze({
+        themeButton: 'theme',
+        episodeModeButton: 'episodeMode',
         modelButton: 'model',
         guideButton: 'guide',
         profileButton: 'profile',
@@ -10401,6 +10404,8 @@
     };
     DASH_ICON.bittenCracker = DASH_ICON.cracker;
     const DASH_SIDE_DEFAULT_VISIBLE = {
+        themeButton: true,
+        episodeModeButton: true,
         modelButton: true,
         guideButton: true,
         profileButton: true,
@@ -10452,7 +10457,234 @@
         }
         catch (_) { }
     }
+    // Quick mode controls adapted from h-ap5/study chathub.user.js.
+    const QUICK_MODE_ICON = {
+        light: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" class="chud-btn-icon" aria-hidden="true"><circle cx="12" cy="12" r="3.5"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>`,
+        dark: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" class="chud-btn-icon" aria-hidden="true"><path d="M20.2 15.6A8.6 8.6 0 0 1 8.4 3.8 8.7 8.7 0 1 0 20.2 15.6Z"/></svg>`,
+        novel: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" class="chud-btn-icon" aria-hidden="true"><rect x="2.5" y="6.5" width="19" height="11" rx="5.5"/><circle cx="8.3" cy="12" r="3.1" fill="currentColor" stroke="none"/><path d="M14.4 10h4M14.4 12h4M14.4 14h2.7" stroke-width="1.1"/></svg>`,
+        chat: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" class="chud-btn-icon" aria-hidden="true"><rect x="2.5" y="6.5" width="19" height="11" rx="5.5"/><circle cx="15.7" cy="12" r="3.1" fill="currentColor" stroke="none"/><path d="M5.5 10h4M5.5 12h4M6.8 14h2.7" stroke-width="1.1"/></svg>`
+    };
+
+    function getQuickThemeMode() {
+        const bodyMode = document.body?.dataset?.theme;
+        if (bodyMode === 'light' || bodyMode === 'dark') return bodyMode;
+        const root = document.documentElement;
+        if (root.dataset.theme === 'light' || root.dataset.theme === 'dark') return root.dataset.theme;
+        if (root.classList.contains('dark')) return 'dark';
+        if (root.classList.contains('light')) return 'light';
+        try {
+            const saved = localStorage.getItem('theme');
+            if (saved === 'light' || saved === 'dark') return saved;
+        } catch (e) {}
+        return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+
+    function getQuickEpisodeMode() {
+        const group = document.querySelector('[data-message-group-id]');
+        const list = group?.closest?.('.flex-col-reverse');
+        if (list?.classList.contains('gap-0')) return 'chat';
+        if (list?.classList.contains('gap-10')) return 'novel';
+        try {
+            const saved = localStorage.getItem('crack_ui_episode_ui_mode') || localStorage.getItem('chud_episode_ui_mode');
+            if (saved === 'chat' || saved === 'novel') return saved;
+        } catch (e) {}
+        return 'novel';
+    }
+
+    function writeCrackThemeCookie(mode) {
+        try {
+            const expires = new Date();
+            expires.setFullYear(expires.getFullYear() + 99);
+            const base = `crack-user-theme=${mode}; path=/; expires=${expires.toUTCString()}; SameSite=Lax`;
+            const count = () => (String(document.cookie || '').match(/(?:^|;\s*)crack-user-theme=/g) || []).length;
+            const domain = '.' + location.hostname.split('.').slice(-2).join('.');
+            const before = count();
+            document.cookie = `${base}; domain=${domain}`;
+            if (count() > Math.max(1, before)) {
+                document.cookie = `crack-user-theme=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax; domain=${domain}`;
+                document.cookie = base;
+            }
+        } catch (e) {}
+    }
+
+    function toggleQuickTheme() {
+        const next = getQuickThemeMode() === 'dark' ? 'light' : 'dark';
+        // UI Plus가 실행 중이면 숨겨진 설정 패널의 기존 버튼을 사용한다.
+        // 이렇게 해야 UI Plus 내부 themeMode와 DOM 감시기의 상태도 함께 바뀐다.
+        const uiPlusChoice = document.querySelector(`#crack-ui-settings-panel [data-crack-ui-theme-mode="${next}"]`);
+        if (uiPlusChoice?.dataset.crackUiBound === '1') {
+            try { localStorage.removeItem('chud_pending_theme_mode'); } catch (e) {}
+            uiPlusChoice.click();
+            syncCmuQuickModeButtons();
+            return;
+        }
+        try {
+            localStorage.setItem('theme', next);
+            localStorage.removeItem('crack_ui_theme_mode');
+            // 쿠키에 바로 저장하므로 크랙 설정창을 대신 눌러 줄 필요가 없다(남아 있으면 나중에 설정에서 고른 테마를 되돌렸다).
+            localStorage.removeItem('chud_pending_theme_mode');
+        } catch (e) {}
+        writeCrackThemeCookie(next);
+        const root = document.documentElement;
+        root.classList.toggle('dark', next === 'dark');
+        root.classList.toggle('light', next === 'light');
+        root.dataset.theme = next;
+        root.style.colorScheme = next;
+        if (document.body) {
+            document.body.dataset.theme = next;
+            document.body.style.colorScheme = next;
+        }
+        syncCmuQuickModeButtons();
+    }
+
+    let quickEpisodeSaveBusy = false;
+    function readQuickCookie(name) {
+        const prefix = `${encodeURIComponent(name)}=`;
+        const item = String(document.cookie || '').split(';').map((part) => part.trim()).find((part) => part.startsWith(prefix));
+        if (!item) return '';
+        const raw = item.slice(prefix.length);
+        try { return decodeURIComponent(raw); } catch (e) { return raw; }
+    }
+
+    function getQuickAccessToken() {
+        const cookieToken = readQuickCookie('access_token');
+        if (cookieToken) return cookieToken;
+        try {
+            for (const key of ['access_token', 'accessToken', 'crack_access_token', 'wrtn_access_token']) {
+                const value = localStorage.getItem(key);
+                if (value && (/^eyJ/.test(value) || /^Bearer\s/i.test(value))) return value;
+            }
+        } catch (e) {}
+        return '';
+    }
+
+    async function requestQuickEpisodeMode(mode) {
+        const token = getQuickAccessToken();
+        const headers = {
+            Accept: 'application/json, text/plain, */*',
+            'Content-Type': 'application/json',
+            platform: 'web',
+            'wrtn-locale': 'ko-KR'
+        };
+        if (token) headers.Authorization = /^Bearer\s/i.test(token) ? token : `Bearer ${token}`;
+        const wrtnId = readQuickCookie('__w_id');
+        if (wrtnId) headers['x-wrtn-id'] = wrtnId;
+        const mixpanelId = readQuickCookie('Mixpanel-Distinct-Id');
+        if (mixpanelId) headers['mixpanel-distinct-id'] = mixpanelId;
+        const payload = JSON.stringify({ isEpisodeBubbleEnabled: mode === 'chat' });
+        const controller = new AbortController();
+        CMU_RESOURCES.controllers.add(controller);
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        try {
+            const response = await fetch('https://crack-api.wrtn.ai/crack-api/profiles/ui-setting', {
+                method: 'PATCH', credentials: 'include', cache: 'no-store',
+                headers, body: payload, signal: controller.signal
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return;
+        } catch (fetchError) {
+            if (CMU_RUNTIME.disposed) throw fetchError;
+            if (typeof GM_xmlhttpRequest !== 'function') throw fetchError;
+            await new Promise((resolve, reject) => {
+                GM_xmlhttpRequest({
+                    method: 'PATCH', url: 'https://crack-api.wrtn.ai/crack-api/profiles/ui-setting', headers, data: payload,
+                    withCredentials: true, anonymous: false, timeout: 10000,
+                    onload: (response) => response.status >= 200 && response.status < 300
+                        ? resolve() : reject(new Error(`HTTP ${response.status}`)),
+                    onerror: () => reject(new Error('네트워크 오류')),
+                    ontimeout: () => reject(new Error('요청 시간 초과'))
+                });
+            });
+        } finally {
+            clearTimeout(timeout);
+            CMU_RESOURCES.controllers.delete(controller);
+        }
+    }
+
+    async function toggleQuickEpisodeMode() {
+        if (quickEpisodeSaveBusy) return;
+        const next = getQuickEpisodeMode() === 'chat' ? 'novel' : 'chat';
+        const uiPlusChoice = document.querySelector(`#crack-ui-settings-panel [data-crack-ui-episode-ui-mode="${next}"]`);
+        if (uiPlusChoice?.dataset.crackUiBound === '1') {
+            // UI Plus의 API 저장·실패 안내·재로드 흐름을 그대로 사용한다.
+            quickEpisodeSaveBusy = true;
+            syncCmuQuickModeButtons();
+            let timeoutId;
+            const release = () => {
+                clearTimeout(timeoutId);
+                cmuUnlisten(window, 'crack-ui-episode-ui-mode-change', onSaved);
+                quickEpisodeSaveBusy = false;
+                syncCmuQuickModeButtons();
+            };
+            const onSaved = () => {
+                cmuUnlisten(window, 'crack-ui-episode-ui-mode-change', onSaved);
+                clearTimeout(timeoutId);
+                // UI Plus가 성공 후 450ms 뒤 새로고침하므로 그 사이의 중복 클릭을 막는다.
+                timeoutId = setTimeout(release, 4000);
+            };
+            cmuListen(window, 'crack-ui-episode-ui-mode-change', onSaved);
+            timeoutId = setTimeout(release, 23000);
+            try { cmuDraftFlush('episode-mode-delegate'); uiPlusChoice.click(); } catch (error) {
+                release();
+                showToast(`작품 UI를 바꾸지 못했어요 · ${error.message || error}`);
+            }
+            return;
+        }
+        quickEpisodeSaveBusy = true;
+        let saved = false;
+        syncCmuQuickModeButtons();
+        try {
+            await requestQuickEpisodeMode(next);
+            if (CMU_RUNTIME.disposed) return;
+            try {
+                localStorage.setItem('chud_episode_ui_mode', next);
+                localStorage.setItem('crack_ui_episode_ui_mode', next);
+                localStorage.removeItem('crack_ui_pending_episode_ui_mode');
+            } catch (e) {}
+            saved = true;
+            window.dispatchEvent(new CustomEvent('crack-ui-episode-ui-mode-change', {
+                detail: { mode: next, isEpisodeBubbleEnabled: next === 'chat' }
+            }));
+            setTimeout(() => {
+                cmuDraftFlush('episode-mode-reload');
+                window.location.reload();
+            }, 450);
+        } catch (error) {
+            if (CMU_RUNTIME.disposed) return;
+            showToast(`작품 UI를 바꾸지 못했어요 · ${error.message || error}`);
+        } finally {
+            if (!saved) quickEpisodeSaveBusy = false;
+            syncCmuQuickModeButtons();
+        }
+    }
+
+        function syncCmuQuickModeButtons() {
+            const btns = DASH_SIDE.btns || {};
+            const theme = getQuickThemeMode();
+            if (btns.themeButton) {
+                if (btns.themeButton.dataset.mode !== theme) btns.themeButton.innerHTML = QUICK_MODE_ICON[theme];
+                btns.themeButton.dataset.mode = theme;
+                btns.themeButton.title = theme === 'dark' ? '다크 모드 · 라이트 모드로 전환' : '라이트 모드 · 다크 모드로 전환';
+                btns.themeButton.setAttribute('aria-label', btns.themeButton.title);
+                btns.themeButton.setAttribute('aria-pressed', String(theme === 'dark'));
+            }
+            const episode = getQuickEpisodeMode();
+            if (btns.episodeModeButton) {
+                if (btns.episodeModeButton.dataset.mode !== episode) btns.episodeModeButton.innerHTML = QUICK_MODE_ICON[episode];
+                btns.episodeModeButton.dataset.mode = episode;
+                btns.episodeModeButton.disabled = quickEpisodeSaveBusy;
+                btns.episodeModeButton.title = quickEpisodeSaveBusy
+                    ? '작품 UI 변경 중'
+                    : episode === 'chat' ? '채팅형 UI · 소설형으로 전환' : '소설형 UI · 채팅형으로 전환';
+                btns.episodeModeButton.setAttribute('aria-label', btns.episodeModeButton.title);
+                btns.episodeModeButton.setAttribute('aria-pressed', String(episode === 'chat'));
+                btns.episodeModeButton.setAttribute('aria-busy', String(quickEpisodeSaveBusy));
+            }
+        }
+
     const SIDE_ICON = {
+        theme: QUICK_MODE_ICON.light,
+        episodeMode: QUICK_MODE_ICON.chat,
         model: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 3.5 6.5v11L12 22l8.5-4.5v-11L12 2Zm0 2.2 5.9 3.1L12 10.4 6.1 7.3 12 4.2ZM5.5 9l5.5 2.9v7.2l-5.5-2.9V9Zm13 0v7.2L13 19.1v-7.2L18.5 9Z"/></svg>',
         guide: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/></svg>',
         profile: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 22c1.8-4 4.4-6 8-6s6.2 2 8 6"/></svg>',
@@ -10950,6 +11182,8 @@
         }
         DASH_SIDE.availableAt = now;
         DASH_SIDE.available = {
+            themeButton: true,
+            episodeModeButton: true,
             modelButton: true,
             guideButton: true,
             profileButton: true,
@@ -11318,6 +11552,8 @@
             content.id = 'chud-side-content';
             DASH_SIDE.content = content;
             const buttons = {
+                themeButton: makeSideButton('themeButton', 'chud-theme-mode-btn', '다크/라이트 전환', QUICK_MODE_ICON[getQuickThemeMode()], toggleQuickTheme),
+                episodeModeButton: makeSideButton('episodeModeButton', 'chud-episode-mode-btn', '소설/채팅 전환', QUICK_MODE_ICON[getQuickEpisodeMode()], toggleQuickEpisodeMode),
                 modelButton: makeSideButton('modelButton', 'chud-model-btn', '모델 변경', SIDE_ICON.model, openNativeModelMenu),
                 guideButton: makeSideButton('guideButton', 'chud-guide-btn', '플레이 가이드', SIDE_ICON.guide, () => clickFirst([/플레이\s*가이드/], '플레이 가이드')),
                 profileButton: makeSideButton('profileButton', 'chud-profile-btn', '대화 프로필', SIDE_ICON.profile, () => clickFirst([/대화\s*프로필/], '대화 프로필')),
@@ -11341,7 +11577,7 @@
             buttons.profileButton.dataset.sideKey = 'nativeProfileButton';
             buttons.profileBoxButton.dataset.cpmExternalProfileLauncher = 'true';
             DASH_SIDE.btns = buttons;
-            content.append(buttons.modelButton, buttons.guideButton, buttons.profileButton, buttons.profileBoxButton, buttons.noteButton, buttons.outputButton, buttons.summaryButton, buttons.imageButton, buttons.archiveButton, buttons.roomBackgroundButton, buttons.scenePainterButton, buttons.wishManagerButton, buttons.sceneBlurButton, buttons.startButton, buttons.loreButton, buttons.translatorButton, buttons.aiSummaryButton, buttons.gameHudButton);
+            content.append(buttons.themeButton, buttons.episodeModeButton, buttons.modelButton, buttons.guideButton, buttons.profileButton, buttons.profileBoxButton, buttons.noteButton, buttons.outputButton, buttons.summaryButton, buttons.imageButton, buttons.archiveButton, buttons.roomBackgroundButton, buttons.scenePainterButton, buttons.wishManagerButton, buttons.sceneBlurButton, buttons.startButton, buttons.loreButton, buttons.translatorButton, buttons.aiSummaryButton, buttons.gameHudButton);
             bar.append(content);
         }
         if (bar.parentElement !== shell)
@@ -11358,6 +11594,7 @@
         DASH_SIDE.btns = {};
     }
     function applySideVisible() {
+        syncCmuQuickModeButtons();
         const visible = sideLoadVisible();
         const available = DASH_SIDE.available || refreshSideAvailability();
         Object.entries(DASH_SIDE.btns || {}).forEach(([key, btn]) => {
@@ -17029,6 +17266,7 @@
             if (next === CMU_DOM_WATCH.themeSignature)
                 return;
             CMU_DOM_WATCH.themeSignature = next;
+            syncCmuQuickModeButtons();
             CMU_DOM_ROUTER.themeDirty = true;
             scheduleCmuDomRouterFlush();
         });
@@ -18081,6 +18319,11 @@
     }, true);
     if (settings.logCapture)
         installLogCaptureHandlers();
+    cmuListen(window, 'storage', e => {
+        if (e.key === null || ['theme', 'crack_ui_theme_mode', 'crack_ui_episode_ui_mode', 'chud_episode_ui_mode'].includes(e.key))
+            syncCmuQuickModeButtons();
+    });
+    cmuListen(window, 'crack-ui-episode-ui-mode-change', syncCmuQuickModeButtons);
     hookHistory();
     installCmuMessageLongPressMenu();
     cmuDraftInstall();
