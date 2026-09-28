@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽 Wish RP Manager Core
 // @namespace    local.rp.context.manager
-// @version      1.3.1
+// @version      1.3.3
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @description  Crack RP용 컨텍스트 주입·인지·자동 장기기억·자료집·전체 재구축을 하나로 관리합니다.
@@ -47,7 +47,7 @@
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '1.3.1';
+  const SCRIPT_VERSION = '1.3.3';
   const RUNTIME_KEY = '__WISH_RP_MANAGER_V1__';
   const RELOAD_GUARD_KEY = `WISH_RP_clean_reload_${SCRIPT_VERSION}`;
   const previousRuntime = window[RUNTIME_KEY];
@@ -1927,6 +1927,17 @@ const WLOG=(()=>{
     for(const x of manifest||[]){const current=indices.get(x.id);if(!current||current.hash!==x.hash||current.role!==x.role||current.index<=previous)return false;previous=current.index;}
     return true;
   }
+  // Diagnostic twin of sourceStillPresent(): the first missing, changed or reordered row.
+  function sourceMismatch(manifest, messages) {
+    const live=sourceManifestOf([...messages].reverse()),indices=new Map(live.map((x,i)=>[x.id,{...x,index:i}]));
+    let previous=-1;
+    for(const [row,x] of (manifest||[]).entries()){
+      const current=indices.get(x.id),kind=!current?'누락 ID':current.hash!==x.hash?'본문 해시':current.role!==x.role?'역할':current.index<=previous?'순서':'';
+      if(kind)return {kind,row,total:manifest.length,role:String(x.role||''),id:String(x.id||'')};
+      previous=current.index;
+    }
+    return null;
+  }
   async function assertAiSourcesUnchanged(room,metas) {
     const list=(Array.isArray(metas)?metas:[metas]).filter(Boolean);
     if(!list.length||list.some(meta=>!meta?.sourceManifest))throw new Error('원문 검증 정보가 없는 이전 AI 결과입니다. 다시 갱신해 주세요.');
@@ -2145,10 +2156,12 @@ const ExternalReplay=(()=>{
   }
   async function validateMemoryBranch(room,frame) {
     if(ExternalReplay.pending(apiChatIdOf(room)))return false;const replayEpoch=ExternalReplay.revision(apiChatIdOf(room));
-    const entries=Object.entries(room.aiSourceManifests||{}),ids=new Set(frame.stable.map(m=>String(messageIdOf(m))));
-    const valid=(manifests,cursors)=>Object.values(manifests||{}).every(m=>sourceStillPresent(m,frame.stable))&&Object.values(cursors||{}).every(c=>!c?.messageId||ids.has(String(c.messageId)));
-    const manual=new Map();
-    if(!valid(room.aiSourceManifests,room.aiUpdateCursors))for(const id of ['currentState','logSummary']){
+    // Deleting the newest turn can move an unchanged processed turn back into the
+    // unconfirmed tail. Compare with the whole current path; edits and removals still fail.
+    const current=frame.messages,entries=Object.entries(room.aiSourceManifests||{}),ids=new Set(current.map(m=>String(messageIdOf(m))));
+    const valid=(manifests,cursors)=>Object.values(manifests||{}).every(m=>sourceStillPresent(m,current))&&Object.values(cursors||{}).every(c=>!c?.messageId||ids.has(String(c.messageId)));
+    const manual=new Map(),initiallyValid=valid(room.aiSourceManifests,room.aiUpdateCursors),reason=initiallyValid?'':memoryBranchDiagnostic(room,current,ids,frame);
+    if(!initiallyValid)for(const id of ['currentState','logSummary']){
       const slot=room.slots.find(s=>s.id===id),applied=room.aiAppliedContent?.[id];
       if(slot&&applied&&aiHashTiny(slot.content)!==applied){manual.set(id,slot.content);delete room.aiSourceManifests?.[id];delete room.aiUpdateCursors?.[id];delete room.aiAppliedContent[id];}
     }
@@ -2164,12 +2177,21 @@ const ExternalReplay=(()=>{
       for(const [id,text] of manual){room.slots.find(s=>s.id===id).content=text;delete room.aiSourceManifests[id];delete room.aiUpdateCursors[id];delete room.aiAppliedContent[id];}
       room.autoMemory.lastProcessedMessageId=String(room.aiUpdateCursors.logSummary?.messageId||'');room.autoMemory.committedTurns=0;room.autoMemory.dirtyScore=0;
       room.memoryBranchBlocked=false;room.autoMemory.lastError='대화 분기 변경으로 이전 확정 기억을 복원했습니다.';
+      WLOG.fail('기억 분기 확인',Error(room.autoMemory.lastError),{level:'warn',stage:reason});
       if(room.pending){replaceCurrentStatePendingItem(room);replacePendingLogItems(room);}
       await saveRoom(room);return true;
     }
+    if(!room.memoryBranchBlocked)WLOG.fail('기억 분기 확인',Error('기억의 근거가 현재 확정 대화와 다릅니다.'),{level:'warn',stage:reason});
     room.memoryBranchBlocked=true;
     room.autoMemory.lastError='기억의 근거가 현재 확정 대화와 다릅니다. 전체 재구축으로 맞춰 주세요. 해당 자동기억은 주입에서 제외됩니다.';
     return false;
+  }
+  function memoryBranchDiagnostic(room,current,ids,frame) {
+    try{
+      for(const [slot,manifest] of Object.entries(room.aiSourceManifests||{})){const miss=sourceMismatch(manifest,current);if(miss)return `기억 근거 ${slot} · 첫 불일치 ${miss.kind} · 기록 ${miss.row+1}/${miss.total}번째 ${miss.role||'역할 없음'} · 확정 ${frame.stable.length}/${current.length}개`;}
+      const cursor=Object.entries(room.aiUpdateCursors||{}).find(([,c])=>c?.messageId&&!ids.has(String(c.messageId)));
+      return cursor?`기억 커서 ${cursor[0]} · 현재 경로에 없음 · 확정 ${frame.stable.length}/${current.length}개`:'';
+    }catch{return '';}
   }
   function safeMemoryItems(room,items) {
     return room.memoryBranchBlocked?items.filter(i=>!['currentState','logSummary'].includes(i.sourceSlotId||i.slotId)&&i.group!=='log-auto'):items;
@@ -2860,6 +2882,7 @@ const U3 = (() => {
   const VERSION = 1;
   const timers = new Map(), running = new Map(), counts = new WeakMap();
   const active = new Set(), observed = new WeakMap(), checked = new WeakMap();
+  const historyDeferrals = new WeakMap();
   let quietCheck=false,unifiedStage='';
   function changeKey(room,frame) {
     return JSON.stringify([localRestoreEpoch,apiChatIdOf(room),settings(room),sourceManifestOf(frame.stable),String(messageIdOf(frame.latest)||''),frame.userIds]);
@@ -3367,8 +3390,28 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
     if(index<0)throw Error('자동 정리 기준 대화가 현재 분기에 없습니다. 시작점 또는 백업을 확인해 주세요.');
     return list.slice(index+1);
   }
-  function plan(list,u,force='') {
-    const mem=after(list,u.memoryCursor),obs=after(list,u.observeCursor),cfg=u.settings;
+  // Deleting the newest turn can move an already processed turn back into the
+  // unconfirmed latest turn. Nothing after it is confirmed yet; the source
+  // manifests still verify that the processed messages themselves are unchanged.
+  function afterConfirmed(list,cursor,unconfirmed=[]) {
+    const at=t=>t.key===cursor||t.assistantId===cursor;
+    return cursor&&!list.some(at)&&unconfirmed.some(at)?[]:after(list,cursor);
+  }
+  // Diagnostic stage for a failed source check: target, first mismatch, where that
+  // message is now, confirmed-range boundary and read path. No message text or IDs.
+  function sourceError(message,target,manifest,frame,checked,read) {
+    const error=Error(message);
+    try{
+      const miss=sourceMismatch(manifest,checked);if(!miss)return error;
+      const index=frame.messages.findIndex(m=>String(messageIdOf(m))===miss.id),tail=frame.messages.length-frame.stable.length;
+      error.diagnostic={stage:[`원문검사 ${target}`,`첫 불일치 ${miss.kind}`,`기록 ${miss.row+1}/${miss.total}번째 ${miss.role||'역할 없음'}(끝에서 ${miss.total-miss.row}번째)`,
+        index<0?'현재 경로에 없음':index<tail?'미확정 최신 턴':'확정 구간',`확정 ${frame.stable.length}/${frame.messages.length}개${frame.trailingUser?' · 답변 대기 USER':''}`,
+        read?`조회 ${read.path}${read.host?' '+read.host:''}${read.ageMs>0?' · 캐시 '+Math.round(read.ageMs/1000)+'초':''}`:'조회 경로 미기록'].join(' · ')};
+    }catch{}
+    return error;
+  }
+  function plan(list,u,force='',unconfirmed=[]) {
+    const mem=afterConfirmed(list,u.memoryCursor,unconfirmed),obs=afterConfirmed(list,u.observeCursor,unconfirmed),cfg=u.settings;
     return {memory:(force==='memory'||force==='all'||(!force&&cfg.enabled&&cfg.memoryEnabled&&mem.length>=cfg.memoryEvery))&&mem.length>0,
       observe:(force==='observe'||force==='all'||(!force&&cfg.enabled&&cfg.observeEnabled&&obs.length>=cfg.observeEvery))&&obs.length>0,
       mem,obs};
@@ -3670,47 +3713,58 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
     for(const pack of staged.packs){const i=lorePackCache.findIndex(p=>p.scopeId===pack.scopeId);if(i<0)lorePackCache.push(pack);else lorePackCache[i]=pack;}
     
   }
-  function schedule(room,delay=900) {
+  function schedule(room,delay=900,force='') {
     if(!room||unstartedRooms.has(room))return;const key=room.chatId,old=timers.get(key),due=Date.now()+delay;
-    if(old&&old.due<=due)return;if(old)clearTimeout(old.timer);
-    const entry={due,timer:setTimeout(()=>{timers.delete(key);if(state.currentRoom?.chatId===key)void run(state.currentRoom).catch(e=>notify(e.message,'error',7000));},delay)};timers.set(key,entry);
+    const requestedForce=force||old?.force||'';
+    if(old&&old.due<=due&&!force)return;if(old)clearTimeout(old.timer);
+    const entry={due,force:requestedForce,timer:setTimeout(()=>{timers.delete(key);if(state.currentRoom?.chatId===key)void run(state.currentRoom,requestedForce,true).catch(e=>notify(e.message,'error',7000));},delay)};timers.set(key,entry);
   }
   function retryDelay(error,count){
     const text=String(error?.message||error||'');
     return count<2&&/(?:\b(?:429|502|503|504|529)\b|네트워크 오류|network error|시간 초과|timeout)/i.test(text)?[30000,120000][count]:0;
   }
-  async function run(room,force='') {
+  async function run(room,force='',scheduled=false) {
     if(!room||state.currentRoom!==room)return false;
     if(unstartedRooms.has(room)){if(!force)return false;await saveRoom(room);if(state.currentRoom!==room)return false;}
-    if(!state.db){schedule(room,1500);return false;}
+    if(!state.db){schedule(room,1500,force);return false;}
     if(running.has(room.chatId))return running.get(room.chatId);
+    const historyDeferred=isWishHistoryStale(room.unified?.lastError);
     const retry=room.unified?.retry,retrying=!force&&room.unified?.lastError&&Number(retry?.at)>0;
-    if(!force&&room.unified?.lastError&&!retrying)return false;
+    if(!force&&room.unified?.lastError&&!retrying&&!historyDeferred)return false;
     if(retrying&&Date.now()<retry.at){schedule(room,retry.at-Date.now());return false;}
     const busy=()=>localRestoreInProgress()||aiUpdateRunning||memoryImportRunning||backgroundWorkPending(apiChatIdOf(room));
-    if(busy()){if(force)throw Error('진행 중인 생성·AI 작업이 끝난 뒤 실행해 주세요.');schedule(room,3000);return false;}
+    if(busy()){if(force&&!scheduled)throw Error('진행 중인 생성·AI 작업이 끝난 뒤 실행해 주세요.');schedule(room,3000,force);return false;}
     const job=withRoomExclusive('ai:'+apiChatIdOf(room),async()=>{
       if(busy()||state.currentRoom!==room)return false;
       let jobKind='';const replayEpoch=ExternalReplay.revision(apiChatIdOf(room));
-      quietCheck=true;aiUpdateRunning=true;
+      quietCheck=true;aiUpdateRunning=true;unifiedStage='';
       try {
         if(!bridge()?.snapshotRaw)throw Error('인지 저장소가 아직 준비되지 않았습니다.');
-        const epoch=localRestoreEpoch,frame=stableFrame([...(await observeFullRoomHistory(room))].reverse());
+        const epoch=localRestoreEpoch,history=await observeFullRoomHistory(room),frame=stableFrame([...history].reverse());
         if(ExternalReplay.changed(apiChatIdOf(room),replayEpoch)||epoch!==localRestoreEpoch||state.currentRoom!==room)return false;
+        historyDeferrals.delete(room);
         const change=changeKey(room,frame);
-        if(!force&&!retrying&&checked.get(room)===change)return false;
+        if(!force&&!retrying&&!historyDeferred&&checked.get(room)===change)return false;
         let cog=await bridge().snapshotRaw(apiChatIdOf(room));if(ExternalReplay.changed(apiChatIdOf(room),replayEpoch))return false;await initialize(room,frame,cog);
         if(ExternalReplay.changed(apiChatIdOf(room),replayEpoch)||epoch!==localRestoreEpoch||state.currentRoom!==room)return false;
         checked.set(room,changeKey(room,frame));
         const list=turns(frame),u=room.unified;
         updateCounts(room,frame);
-        if(!force&&!retrying&&u.lastError)return false;
-        if(room.relationshipBaseline?.manifest?.length&&!sourceStillPresent(room.relationshipBaseline.manifest,frame.stable))throw Error('관계 재구축에 사용한 원문이 수정·삭제되었습니다. 관계만 재구축에서 최신 분기를 확인해 주세요.');
-        const p=plan(list,{...u,settings:loadAiSettings().unifiedAutomation||u.settings},force==='retry'||retrying?(u.failedKind||''):force);
+        if(!force&&!retrying&&u.lastError&&!historyDeferred)return false;
+        if(room.relationshipBaseline?.manifest?.length&&!sourceStillPresent(room.relationshipBaseline.manifest,frame.messages))throw sourceError('관계 재구축에 사용한 원문이 수정·삭제되었습니다. 관계만 재구축에서 최신 분기를 확인해 주세요.','관계 재구축',room.relationshipBaseline.manifest,frame,frame.messages,history.wishRead);
+        const p=plan(list,{...u,settings:loadAiSettings().unifiedAutomation||u.settings},force==='retry'||retrying?(u.failedKind||''):force,turns({stable:frame.messages.slice(0,frame.messages.length-frame.stable.length)}));
         counts.set(room,{memory:p.mem.length,observe:p.obs.length});
-        if(!force&&!retrying&&u.lastError)return false;
+        if(!force&&!retrying&&u.lastError&&!historyDeferred)return false;
+        // Processed source must still exist unchanged on the current path. The latest
+        // unconfirmed turn is included because deleting a newer turn can expose it.
+        const sourceRecheck=historyDeferred||(!!force&&isUnifiedSourceBlock(u.lastError));
+        if(sourceRecheck||p.memory||p.observe)for(const [target,manifest] of [['기억 memory',u.memoryManifest],['인물 observe',u.observeManifest]])if(manifest?.length&&!sourceStillPresent(manifest,frame.messages))throw sourceError('기존 정리에 사용한 원문이 바뀌었습니다. 분기와 시작점을 확인해 주세요.',target,manifest,frame,frame.messages,history.wishRead);
+        // Clear only a read cancellation or a manually retried pre-AI branch check,
+        // after cursors and source guards pass again. Other failures stay visible.
+        if(sourceRecheck&&(isWishHistoryStale(u.lastError)||isUnifiedSourceBlock(u.lastError))){
+          u.lastError='';u.failedKind='';u.retry=null;u.status='대화 재확인 완료';await saveRoom(room);
+        }
         if(!p.memory&&!p.observe){if(force)notify('새로 정리할 확정 대화가 없습니다. 최신 1턴은 다음 응답 뒤 확정됩니다.','warn');return false;}
-        for(const manifest of [u.memoryManifest,u.observeManifest])if(manifest?.length&&!sourceStillPresent(manifest,frame.stable))throw Error('기존 정리에 사용한 원문이 바뀌었습니다. 분기와 시작점을 확인해 주세요.');
         // 기억 묶음이 자료를 갱신하기 전에 방별 canonical 자동팩을 준비한다.
         // 이 과정에서 같은 방의 옛 임의-ID 자동팩도 삭제 없이 한 번 안전 병합된다.
         if(p.memory)await ensureAutoLorePack(room);
@@ -3729,10 +3783,10 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
         const result=await callAiProvider(settings,requestSystem,req.prompt,{taskKind:'extract',responseMimeType:'application/json',operationLabel:unifiedStage});
         unifiedStage='통합 정리 응답 해석 중';renderModalIfIdle();const data=WLOG.parseJson(result.text,'기억·인물 통합 정리',result.diagnostic);
         unifiedStage='통합 결과 근거·참조 검증 중';renderModalIfIdle();const staged=stage(room,cog,packs,p,req,data);staged.room.unified.retry=null;
-        const latest=stableFrame([...(await fetchAllRoomMessages(apiChatIdOf(room)))].reverse());
+        const latestHistory=await fetchAllRoomMessages(apiChatIdOf(room)),latest=stableFrame([...latestHistory].reverse());
         if(ExternalReplay.changed(apiChatIdOf(room),replayEpoch))return false;
         const manifest=sourceManifestOf([...frame.stable].reverse());
-        if(!sourceStillPresent(manifest,latest.stable))throw Error('요청 중 기준 대화가 수정·삭제되었습니다. 결과를 적용하지 않았습니다.');
+        if(!sourceStillPresent(manifest,latest.stable))throw sourceError('요청 중 기준 대화가 수정·삭제되었습니다. 결과를 적용하지 않았습니다.','요청 중 재확인',manifest,latest,latest.stable,{path:'전체',host:String(latestHistory.wishReadHost||''),ageMs:0});
         const liveCog=await bridge().snapshotRaw(apiChatIdOf(room));
         if(state.currentRoom!==room)throw Error('정리 중 다른 방으로 이동하여 결과 적용을 보류했습니다. 원래 방에서 다시 확인해 주세요.');
         if(epoch!==localRestoreEpoch||settingsAtStart!==JSON.stringify(loadAiSettings())||rawSignature(room,liveCog,packs)!==signature)throw Error('요청 중 설정·기억·인지가 바뀌어 결과를 적용하지 않았습니다.');
@@ -3750,8 +3804,17 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
         if(staged.notices?.length)WishMemorySafety.reportNotices(staged.notices,room.unified.status);
         else notify(room.unified.status,'success',4500);return true;
       }catch(e){
+        if(isWishHistoryStale(e)){
+          checked.delete(room);
+          if(state.currentRoom===room){
+            const count=historyDeferrals.get(room)||0;historyDeferrals.set(room,count+1);
+            // Retry the read at most twice; no AI request has started on this path.
+            if(count<2)schedule(room,[1000,3000][count],force);
+          }
+          return false;
+        }
         if(ExternalReplay.changed(apiChatIdOf(room),replayEpoch))return false;
-        WLOG.fail('기억·인물 통합 정리',e,{stage:unifiedStage||'확정 대화 확인'});
+        WLOG.fail('기억·인물 통합 정리',e,{stage:e?.diagnostic?.stage||unifiedStage||'확정 대화 확인'});
         if(state.currentRoom===room&&room.unified&&!localRestoreInProgress()){
           room.unified.lastError=String(e.message||e);room.unified.failedKind=jobKind;
           const count=force?0:Number(room.unified.retry?.count||0),delay=retryDelay(e,count);
@@ -7428,11 +7491,26 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
 
   // Read-only observations reuse a verified history. AI commit/rebuild verification
   // still calls fetchAllRoomMessages directly and never trusts this cache alone.
+  // Only these two read-cancellation errors are recoverable here. Never classify
+  // source conflicts, HTTP failures, or AI/commit validation errors as cancellation.
+  function wishHistoryStaleError(message) {
+    const error=Error(message);error.code='WISH_HISTORY_STALE';return error;
+  }
+  function isWishHistoryStale(error) {
+    if(error?.code==='WISH_HISTORY_STALE')return true;
+    if(error?.code)return false;
+    const message=String(error?.message||error||'');
+    return message==='대화 조회 중 방 또는 재전송 기준이 바뀌었습니다.'||message==='대화 조회 중 기준이 바뀌어 다시 확인해야 합니다.';
+  }
+  function isUnifiedSourceBlock(error) {
+    return ['자동 정리 기준 대화가 현재 분기에 없습니다. 시작점 또는 백업을 확인해 주세요.','기존 정리에 사용한 원문이 바뀌었습니다. 분기와 시작점을 확인해 주세요.','관계 재구축에 사용한 원문이 수정·삭제되었습니다. 관계만 재구축에서 최신 분기를 확인해 주세요.'].includes(String(error?.message||error||''));
+  }
   const WishHistory=(()=>{
     const records=new Map(),flights=new Map(),revisions=new Map();let sequence=0;
     const MAX_CHARS=12000000,RECHECK_MS=300000;
     const scope=rid=>JSON.stringify([state.routeEpoch,localRestoreEpoch,ExternalReplay.revision(rid),revisions.get(rid)||0]);
     const begin=rid=>({scope:scope(rid),seq:++sequence});
+    const readTag=(list,info)=>Object.defineProperty(list,'wishRead',{value:info});
     function invalidate(rid){rid=String(rid||'');if(!rid)return;records.delete(rid);revisions.set(rid,(revisions.get(rid)||0)+1);while(revisions.size>8)revisions.delete(revisions.keys().next().value);}
     function freezeMessage(value,seen=new WeakSet()){
       if(!value||typeof value!=='object'||seen.has(value))return value;
@@ -7443,7 +7521,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
       rid=String(rid);if(ticket.scope!==scope(rid)||generationPending(rid)||ExternalReplay.pending(rid)||(records.get(rid)?.seq||0)>ticket.seq)return;
       const newest=[...oldestFirst].reverse(),chars=newest.reduce((n,m)=>n+messageTextOf(m).length,0);
       if(chars>MAX_CHARS){records.delete(rid);return;}
-      records.delete(rid);records.set(rid,{messages:snapshot(newest),ids:new Set(newest.map(m=>String(messageIdOf(m)))),chars,scope:ticket.scope,seq:ticket.seq,verifiedAt:Date.now()});
+      records.delete(rid);records.set(rid,{messages:snapshot(newest),ids:new Set(newest.map(m=>String(messageIdOf(m)))),chars,scope:ticket.scope,seq:ticket.seq,verifiedAt:Date.now(),host:String(oldestFirst.wishReadHost||'')});
       while(records.size>2)records.delete(records.keys().next().value);
     }
     function merge(record,head){
@@ -7461,17 +7539,17 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     async function read(room,knownHead=null){
       const rid=String(apiChatIdOf(room)||''),stamp=scope(rid);
       const head=knownHead||await fetchRecentMessages(rid,50);
-      if(stamp!==scope(rid)||ExternalReplay.pending(rid))throw Error('대화 조회 중 방 또는 재전송 기준이 바뀌었습니다.');
+      if(stamp!==scope(rid)||ExternalReplay.pending(rid))throw wishHistoryStaleError('대화 조회 중 방 또는 재전송 기준이 바뀌었습니다.');
       const record=records.get(rid);
       if(record&&record.scope===stamp&&Date.now()-record.verifiedAt<RECHECK_MS&&!generationPending(rid)){
         const joined=merge(record,head);
-        if(joined){record.messages=joined.messages;record.chars=joined.chars;for(const id of joined.addedIds)record.ids.add(id);record.seq=++sequence;return [...record.messages].reverse();}
+        if(joined){record.messages=joined.messages;record.chars=joined.chars;for(const id of joined.addedIds)record.ids.add(id);record.seq=++sequence;return readTag([...record.messages].reverse(),{path:'병합',host:record.host,ageMs:Date.now()-record.verifiedAt});}
       }
-      const key=rid+'|'+stamp;let flight=flights.get(key);
+      const key=rid+'|'+stamp;let flight=flights.get(key);const shared=!!flight;
       if(!flight){flight=fetchAllRoomMessages(rid);flights.set(key,flight);flight.then(()=>{if(flights.get(key)===flight)flights.delete(key);},()=>{if(flights.get(key)===flight)flights.delete(key);});}
-      const all=await flight;if(stamp!==scope(rid)||ExternalReplay.pending(rid))throw Error('대화 조회 중 기준이 바뀌어 다시 확인해야 합니다.');
+      const all=await flight;if(stamp!==scope(rid)||ExternalReplay.pending(rid))throw wishHistoryStaleError('대화 조회 중 기준이 바뀌어 다시 확인해야 합니다.');
       const seeded=records.get(rid);
-      return seeded&&seeded.scope===stamp?[...seeded.messages].reverse():snapshot(all);
+      return readTag(seeded&&seeded.scope===stamp?[...seeded.messages].reverse():snapshot(all),{path:shared?'공유 전체':'전체',host:String(all.wishReadHost||''),ageMs:0});
     }
     function mutation(method,url){
       if(!/^(PATCH|PUT|DELETE|POST)$/i.test(String(method)))return '';
@@ -7539,7 +7617,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
       if (cursors.has(next)) throw new Error('같은 대화 cursor가 반복되어 전체 읽기를 중단했습니다.');
       cursors.add(next); cursor = next;
     }
-    const oldest=messages.reverse();WishHistory.seed(String(chatId),oldest,historyTicket);return oldest;
+    const oldest=Object.defineProperty(messages.reverse(),'wishReadHost',{value:useCrackApiFallback?'crack-api':'contents-api'});WishHistory.seed(String(chatId),oldest,historyTicket);return oldest;
   
     } finally {finish();}
   }
@@ -9747,7 +9825,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     let p = room.pending;
     if (!p) throw new Error('현재 예약된 임시 주입이 없습니다.');
     // 실패 당시 아직 carrier/contextBlock이 만들어지지 않았다면 AI 없이 로컬 순서로 한 번만 복구한다.
-    if(!p.messageId||!p.contextBlock){await reconcileStableCarrier(room,'manual-recovery',frame);p=room.pending;}
+    if(!p.messageId||!p.contextBlock){const recovery=await reconcileStableCarrier(room,'manual-recovery',frame);if(recovery?.deferred)return recovery;p=room.pending;}
     if(!p?.messageId||!p?.contextBlock)throw new Error('재검증할 저장 주입본이 없습니다. 주입을 해제한 뒤 다시 시작해 주세요.');
     const current = await fetchMessage(apiChatIdOf(room), p.messageId);
     if (!current) throw new Error('carrier AI 메시지를 서버에서 다시 읽지 못했습니다.');
@@ -9761,8 +9839,9 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     // 현재 후보로 안전 예산을 다시 계산한 뒤 그 결과를 검증합니다.
     if(expected.length>allFitLimit(room)){
       const resized=await reconcileStableCarrier(room,'manual-resize',frame),nextPending=room.pending;
+      if(resized?.deferred)return resized;
       if(nextPending?.verified)return {verified:true,text:buildInjectedMessage(nextPending.originalText,nextPending.contextBlock),serverChars:nextPending.serverChars,repaired:true,resized:true};
-      if(resized?.deferred)throw new Error('주입 안전 크기 재조정이 대기 중입니다. 잠시 뒤 다시 확인해 주세요.');
+
       throw new Error('저장 주입본을 안전 크기로 재조정했지만 서버 확인이 끝나지 않았습니다.');
     }
     let verification;
@@ -10356,7 +10435,8 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     // item뿐 아니라 pending/cadence/빠른 제외 항목의 USER anchor도 전체조회 판단에 포함합니다.
     const needed=pendingTurnAnchorIds(p);
     if(cognitionIds.some(id=>!frame.stable.some(m=>String(messageIdOf(m))===id)) || needed.some(id=>!frame.userIds.includes(id)) || Object.values(room.aiSourceManifests||{}).some(list=>list.some(x=>!frame.stable.some(m=>String(messageIdOf(m))===x.id))) || Object.values(room.aiUpdateCursors||{}).some(c=>c.messageId&&!frame.stable.some(m=>String(messageIdOf(m))===c.messageId)))
-      frame=stableFrame([...(await observeFullRoomHistory(room,frame.messages.slice(0,50)))].reverse());
+      try{frame=stableFrame([...(await observeFullRoomHistory(room,frame.messages.slice(0,50)))].reverse());}
+      catch(error){if(isWishHistoryStale(error))return {deferred:true};throw error;}
     control?.assertActive?.();
     carrierFrameCache.delete(rid);carrierFrameCache.set(rid,{signature:headSignature,frame});
     while(carrierFrameCache.size>3)carrierFrameCache.delete(carrierFrameCache.keys().next().value);
@@ -12544,12 +12624,18 @@ body[data-theme="dark"] .m3-ui,body[data-theme="dark"] #wish-rp-monitor{--m3-she
 #wish-rp-root{position:fixed;inset:0;z-index:2147483000;pointer-events:none}
 #wish-rp-root .m3-overlay{pointer-events:auto}
 /* ── 3. 상태 모니터 (전송 버튼 옆 원형 버튼) ── */
-#wish-rp-monitor{position:relative;display:inline-flex;align-items:center;flex-shrink:0;margin-left:auto;margin-right:6px;font-family:var(--f)}
+#wish-rp-monitor{position:relative;z-index:0;isolation:isolate;display:inline-flex;align-items:center;flex-shrink:0;margin-left:auto;margin-right:6px;font-family:var(--f)}
 #wish-rp-monitor + #crack-pure-send-left-group{margin-left:0 !important}
 .wish-mon-core{position:relative;width:32px;height:32px;padding:0;display:grid;place-items:center;border-radius:50%;cursor:pointer;border:1px solid var(--m3-accent-line);background:var(--mon-bg)!important;box-sizing:border-box;font:inherit;color:var(--m3-accent);box-shadow:0 3px 10px rgba(30,40,90,.2),inset 0 1px 0 var(--mon-top);touch-action:none;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;transition:transform .18s var(--spring),opacity .25s}
 .wish-mon-core:hover{transform:scale(1.08)}
 .wish-mon-core:active{transform:scale(.93)}
 .wish-mon-core:focus-visible{outline:2px solid var(--m3-accent);outline-offset:3px}
+/* Wish buttons stay flat in every state; keyboard focus outlines remain visible. */
+:is(#wish-rp-root,#wish-rp-quick,#wish-rp-monitor) button,
+:is(#wish-rp-root,#wish-rp-quick,#wish-rp-monitor) button::before,
+:is(#wish-rp-root,#wish-rp-quick,#wish-rp-monitor) button::after,
+:is(#wish-rp-root,#wish-rp-quick,#wish-rp-monitor) button *{box-shadow:none!important}
+#wish-rp-monitor .wish-mon-core:hover{transform:none}
 .wish-mon-core b{position:relative;font:700 10.5px/1 var(--f);font-variant-numeric:tabular-nums}
 .wish-mon-gauge{position:absolute;inset:0;width:100%;height:100%;transform:rotate(-90deg)}
 .wish-mon-gauge circle{fill:none;stroke-width:2.4;stroke-linecap:round}
@@ -12574,7 +12660,7 @@ body[data-theme="dark"] .m3-ui,body[data-theme="dark"] #wish-rp-monitor{--m3-she
 
 @keyframes wmon-pop{from{transform:scale(0)}}
 /* ── 4. 빠른 패널 (모니터 짧게 탭) ── */
-#wish-rp-quick{position:fixed;z-index:2147483100;width:min(352px,calc(100% - 24px));max-height:min(500px,calc(100% - 150px));display:flex;flex-direction:column;border-radius:14px;border:1px solid var(--m3-line);background:var(--m3-sheet);box-shadow:var(--m3-lift),0 30px 60px -30px rgba(10,20,50,.5);overflow:hidden;transform-origin:92% 100%;animation:q-in .42s var(--spring) both}
+#wish-rp-quick{position:fixed;z-index:calc(var(--crack-ui-z-panel,2147482999) + 1);width:min(352px,calc(100% - 24px));max-height:min(500px,calc(100% - 150px));display:flex;flex-direction:column;border-radius:14px;border:1px solid var(--m3-line);background:var(--m3-sheet);box-shadow:var(--m3-lift),0 30px 60px -30px rgba(10,20,50,.5);overflow:hidden;transform-origin:92% 100%;animation:q-in .42s var(--spring) both}
 #wish-rp-quick.leaving{animation:q-out .2s var(--ease) both;pointer-events:none}
 @keyframes q-in{from{opacity:0;transform:translateY(10px) scale(.92)}}
 @keyframes q-out{to{opacity:0;transform:translateY(8px) scale(.95)}}
@@ -13056,7 +13142,7 @@ pre.m3-block.tall{max-height:none;min-height:340px}
 .m3-toast.m3-out{animation:m3-toastOut .3s var(--m3-ease) both}
 @keyframes m3-toastIn{from{opacity:0;transform:translateY(16px) scale(.9)}}
 @keyframes m3-toastOut{to{opacity:0;transform:translateY(10px) scale(.96)}}
-.m3-tip{position:fixed;z-index:2147483200;font-family:'Pretendard','Noto Sans KR',sans-serif;max-width:280px;padding:9px 12px;border-radius:8px;font-size:12px;line-height:1.65;box-shadow:0 12px 30px -12px rgba(0,0,0,.45);pointer-events:none;animation:m3-fieldIn .2s var(--ease,ease) both}
+.m3-tip{position:fixed;z-index:calc(var(--crack-ui-z-panel,2147482999) + 2);font-family:'Pretendard','Noto Sans KR',sans-serif;max-width:280px;padding:9px 12px;border-radius:8px;font-size:12px;line-height:1.65;box-shadow:0 12px 30px -12px rgba(0,0,0,.45);pointer-events:none;animation:m3-fieldIn .2s var(--ease,ease) both}
 .m3-tip.light{background:#fff;color:#566079;border:1px solid #e0e5f0}
 .m3-tip.dark{background:#1f2430;color:#b2bacd;border:1px solid #303747}
 
@@ -15118,7 +15204,7 @@ const WUI_ADAPTER={isChatPath:path=>!!getChatIdFromPath(path),vm:WUIReadModel,mo
  onOpen(){void WUIOnOpen().catch(e=>notify(e.message,'error'));},onClose(){state.modal=null;},onNav(tab,sub){if(tab==='lore')wishRefreshRoomNames();state.v2Tab=tab;state.v2MemoryView=tab==='cognition'?'cog-'+(sub==='review'?'reviews':'facts'):sub==='char'?'character':sub||state.v2MemoryView;v2ScheduleAsyncRefresh(state.currentRoom);},onRoute(){WUICache.settings.clear();},loadLayout(){try{return JSON.parse(localStorage.getItem('wish-m3-layout')||'null');}catch{return null;}},saveLayout(layout){localStorage.setItem('wish-m3-layout',JSON.stringify(layout));},copy:copyPlainText};
 Object.assign(WUI_ADAPTER.act,{
  release:()=>restorePending(state.currentRoom,'manual'),
- reverify:async()=>{const result=await reverifyPending(state.currentRoom);notify(result.repaired?'저장된 주입본을 서버에 복구하고 재검증했습니다.':'서버 재검증 성공 ✓','success',5000);renderModalIfOpen();return result;},
+ reverify:async()=>{const result=await reverifyPending(state.currentRoom);if(result?.deferred){notify('대화 갱신 대기 중 · 자동 확인을 이어갑니다.','warn',3000);scheduleRecovery(1000);renderModalIfOpen();return result;}notify(result.repaired?'저장된 주입본을 서버에 복구하고 재검증했습니다.':'서버 재검증 성공 ✓','success',5000);renderModalIfOpen();return result;},
  memoryBase:WUIResetMemoryBaseline,
  spSourceEdit:id=>{const x=resolvedSpeechRelations(state.currentRoom).find(r=>r.id===id);if(x?.sourcePackId)return WUIEditor('entry',x.sourceEntryId,{pack:x.sourcePackId});},spSourceDel:id=>{const x=resolvedSpeechRelations(state.currentRoom).find(r=>r.id===id);if(x?.sourcePackId)return WUIInvoke('lore-entry-delete','',{}, {type:'lore-entry',packId:x.sourcePackId,entryId:x.sourceEntryId});},
 
