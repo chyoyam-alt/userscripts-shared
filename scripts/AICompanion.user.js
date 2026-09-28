@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🧭 Crack AI Companion (크랙 AI 도우미)
 // @namespace    https://crack.wrtn.ai/
-// @version      1.3.0
+// @version      1.3.1
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/AICompanion.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/AICompanion.user.js
 // @description  Crack RP 로그를 ChatGPT로 보내고 찐빠 검사·질문·장기기억·유저노트·로어·커스텀 작업을 작업별 대화와 증분 전달로 관리합니다.
@@ -42,7 +42,7 @@
     'use strict';
 
     /*
-     * Crack AI Companion v1.3.0
+     * Crack AI Companion v1.3.1
      * - Job-first transport with durable task conversations and verified submit/result handling.
      * - PC Chrome/iOS/Android delivery behavior is preserved from the proven pre-release build.
      * - Firefox TXT attachment runs inside a page-side runner on both desktop and Android to avoid userscript/page realm boundaries.
@@ -54,7 +54,7 @@
 
     const APP = Object.freeze({
         id: 'cgc',
-        version: '1.3.0',
+        version: '1.3.1',
         protocol: 'crack-gpt-companion/v4.2.0-durable-web-delivery',
         name: 'Crack AI Companion',
     });
@@ -4556,14 +4556,14 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
         completionDomEvidence(receipt){
             const empty={text:'',final:false};
             if(!receipt?.expected)return empty;
-            const matchedUsers=this.userRoots().filter(root=>{
+            const roots=this.messageRoots();
+            const matchedUsers=roots.filter(root=>this.messageRole(root)==='user').filter(root=>{
                 const key=this.identity(root);
                 if(receipt.userKey?key!==receipt.userKey:(receipt.beforeUsers||[]).includes(key))return false;
                 return this.matches(root.innerText||root.textContent,receipt.expected);
             });
             if(matchedUsers.length!==1)return empty;
             const user=matchedUsers[0];
-            const roots=this.messageRoots();
             const at=roots.indexOf(user);if(at<0)return empty;
             let candidate=null,text='';
             for(let i=at+1;i<roots.length;i++){
@@ -4848,7 +4848,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             }
             return {url:'',message:r.linkVerifiedAt?'대화 주소는 확인됐지만 연결 반영을 기다리는 중이에요. 잠시 뒤 다시 눌러 주세요.':'GPT 연결 응답을 기다리고 있어요. 작업 중인 GPT 탭을 열고 「현재 대화 연결 복구」를 눌러 주세요. 버튼이 없으면 작업이 끝난 뒤 GPT 탭도 새로고침해 주세요.'};
         },
-        async wake(){
+        async wake({recover=true}={}){
             if(this.wakeRunning){this.wakeAgain=true;return;}this.wakeRunning=true;
             try{
                 await refreshAsyncStorageKey(KEY.state);
@@ -4864,7 +4864,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                     catch(error){console.warn('[cgc] link discovery',error.message);}
                 }
                 // This existing recovery confirms a matching submitted USER message; it never resends.
-                if(!ChatGPTBridge.processingJobId)await WebDelivery.recover();
+                if(recover&&!ChatGPTBridge.processingJobId)await WebDelivery.recover();
             }finally{
                 this.wakeRunning=false;
                 if(this.wakeAgain){this.wakeAgain=false;clearTimeout(this.wakeTimer);this.wakeTimer=setTimeout(()=>void this.wake().catch(()=>{}),150);}
@@ -4877,7 +4877,16 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             for(const name of ['pageshow','focus','popstate','hashchange','urlchange'])window.addEventListener(name,wake);
             document.addEventListener('visibilitychange',()=>{if(document.visibilityState!=='hidden')wake();});
             // Scan only requests/messages relevant to this GPT page. No document-wide mutation observer.
-            this.timer=setInterval(()=>{if(document.visibilityState!=='hidden')wake();},10000);
+            // One periodic recovery owner; event-driven wakeups still recover immediately.
+            const tick=async()=>{
+                try{if(document.visibilityState!=='hidden')await this.wake({recover:false});}
+                catch(error){console.warn('[cgc] link recovery',error);}
+                // A link-discovery failure must not disable durable result recovery.
+                try{await WebDelivery.recover();}
+                catch(error){console.warn('[cgc] resume',error);}
+                finally{this.timer=setTimeout(tick,document.visibilityState==='hidden'?15000:10000);}
+            };
+            this.timer=setTimeout(tick,10000);
             setTimeout(wake,400);
         },
         installCrack(){
@@ -8387,7 +8396,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             CompanionTaskUI.install();
             if (this.bootstrapJobId) setTimeout(() => {void this.processJobById(this.bootstrapJobId).catch(showStartupError);}, 0);
             else setTimeout(()=>WebDelivery.recover().catch(error=>console.warn('[cgc] resume',error)),500);
-            setInterval(()=>{if(persistentConversationUrl(location.href))void WebDelivery.recover().catch(error=>console.warn('[cgc] resume',error));},15000);
+            // Periodic recovery is owned by CgcJobLinks.installGpt().
         },
 
         readStoredSurfaceMode(){
@@ -10068,7 +10077,8 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                     if(!['submitted','result'].includes(r.phase)){cleanup();return;}
                     const visible=document.visibilityState!=='hidden';
                     const busy=visible&&this.isGenerationBusy();
-                    const evidence=visible?WebDelivery.completionDomEvidence(r):{text:'',final:false};
+                    // Streaming cannot be final: defer text extraction until the stop control disappears.
+                    const evidence=visible&&!busy?WebDelivery.completionDomEvidence(r):{text:'',final:false};
                     const now=Date.now();
                     if(!busy&&evidence.final&&evidence.text){
                         const hash=hashString(evidence.text);
