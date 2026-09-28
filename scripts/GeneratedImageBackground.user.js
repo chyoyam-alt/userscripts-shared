@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🖼️ CSP - Generated Image Background Blur (배경 이미지&테마)
 // @namespace    crack-scene-painter-background-borderless
-// @version      4.0.6
+// @version      4.0.6.2
 // @description  다크/라이트와 소설형/채팅형을 자동 구분해 조합별 배경·테마 설정을 적용하고, 라이트 전용 테마·입력창·라디오존데 색과 HANGAR·Cozy 다크를 함께 최적화합니다.
 // @match        https://crack.wrtn.ai/*
 // @require      https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js
@@ -50,7 +50,7 @@
   }
 
   const SCRIPT_NAME = 'CSP Borderless Background Blur';
-  const VERSION = '4.0.6';
+  const VERSION = '4.0.6.2';
   const SGB_MUTATION_BATCH_MS = 32;
 
   /**
@@ -17245,6 +17245,59 @@ html.${CLS_ACTIVE}[data-sgb-ui-style="arcana"][data-sgb-theme="light"][data-sgb-
         background-image:none!important;
         box-shadow:none!important;
       }
+
+      /* Local 4.0.6.2: AOI glass optics. Native settings remain authoritative. */
+/* AOI keeps its existing summer window, prism symbols and recommended/custom text palette. */
+html.sgb-bg-active[data-sgb-ui-style="aoi"] {
+  --sgb-glass-optic-rgb:99,200,255;
+  --sgb-glass-optic-secondary:122,147,174;
+  --sgb-glass-text-depth:rgba(0,0,0,.50);
+}
+html.sgb-bg-active[data-sgb-ui-style="aoi"][data-sgb-theme="light"] {
+  --sgb-glass-optic-rgb:111,181,224;
+  --sgb-glass-optic-secondary:164,191,211;
+  --sgb-glass-text-depth:rgba(15,56,90,.16);
+}
+html.sgb-bg-active[data-sgb-ui-style="aoi"] [data-sgb-bubble="chat"] {
+  box-shadow:inset 0 0 0 1px var(--ao-line-soft),inset 0 1px 0 rgba(255,255,255,calc(var(--sgb-theme-surface-alpha,.86)*.38))!important;
+}
+html.sgb-bg-active[data-sgb-ui-style="aoi"] [data-sgb-input-box] {
+  box-shadow:inset 0 1px 0 rgba(255,255,255,calc(var(--sgb-theme-surface-alpha,.86)*.38))!important;
+}
+
+/* Hollow, softly refracted contour outside bottom/right of the existing glass face. */
+html.sgb-bg-active[data-sgb-ui-style="aoi"] :is([data-sgb-bubble="chat"],[data-sgb-input-box])::before {
+  content:""!important; display:block!important; position:absolute!important;
+  inset:4px -8px -10px 5px!important; width:auto!important; height:auto!important;
+  margin:0!important; padding:1.3px!important; border:0!important; border-radius:inherit!important;
+  box-sizing:border-box!important; z-index:0!important; pointer-events:none!important;
+  background:linear-gradient(125deg,rgba(var(--sgb-glass-optic-rgb),.12) 0%,rgba(255,255,255,.58) 15%,rgba(var(--sgb-glass-optic-rgb),.32) 32%,transparent 43%,rgba(var(--sgb-glass-optic-rgb),.18) 57%,rgba(255,255,255,.70) 62%,rgba(var(--sgb-glass-optic-secondary),.22) 66%,rgba(var(--sgb-glass-optic-rgb),.30) 77%,transparent 94%)!important;
+  -webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0)!important;
+  mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0)!important;
+  -webkit-mask-composite:xor!important; mask-composite:exclude!important;
+  opacity:calc(var(--sgb-theme-surface-alpha,.86)*.68)!important;
+  filter:blur(.6px)!important; box-shadow:none!important;
+  transform:skewY(-.4deg)!important; transform-origin:left center!important;
+  clip-path:polygon(calc(100% - 8px) 0,100% 0,100% 100%,0 100%,0 calc(100% - 10px),calc(100% - 8px) calc(100% - 10px))!important;
+}
+
+/* The existing "글자 그림자" setting enables this shallow depth in both display modes.
+   Avoid stacking the generic triple drop-shadow filter with the new text shadow. */
+html.sgb-bg-active[data-sgb-ui-style][data-sgb-text-shadow="on"][data-sgb-ui-style="aoi"] main [data-sgb-message-group] .wrtn-markdown {
+  filter:none!important; text-shadow:.6px 1.1px 1.7px var(--sgb-glass-text-depth)!important;
+}
+html.sgb-bg-active[data-sgb-ui-style][data-sgb-text-shadow="on"][data-sgb-ui-style="aoi"] main [data-sgb-message-group] .wrtn-markdown :is(p,li,blockquote,h1,h2,h3,h4,h5,h6,strong,em,a,[data-sgb-quote]) {
+  text-shadow:.6px 1.1px 1.7px var(--sgb-glass-text-depth)!important;
+}
+html.sgb-bg-active[data-sgb-ui-style][data-sgb-text-shadow="on"][data-sgb-ui-style="aoi"] [data-sgb-input-box] :is(.tiptap,.ProseMirror,textarea),
+html.sgb-bg-active[data-sgb-ui-style][data-sgb-text-shadow="on"][data-sgb-ui-style="aoi"] main [data-sgb-edit-bubble] :is(.tiptap,.ProseMirror,textarea) {
+  text-shadow:.5px 1px 1.5px var(--sgb-glass-text-depth)!important;
+}
+html.sgb-bg-active[data-sgb-ui-style][data-sgb-text-shadow="on"][data-sgb-ui-style="aoi"] main [data-sgb-message-group] .wrtn-markdown :is(pre,code),
+html.sgb-bg-active[data-sgb-ui-style][data-sgb-text-shadow="on"][data-sgb-ui-style="aoi"] main [data-sgb-message-group] .wrtn-markdown [data-sgb-codeblock-body] * {
+  text-shadow:none!important;
+}
+
 
 `;
 
