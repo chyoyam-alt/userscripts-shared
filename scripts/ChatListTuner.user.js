@@ -1,11 +1,9 @@
 // ==UserScript==
-// @name         📑 Crack Chat List Tuner (크랙 채팅방 목록 튜너)
+// @name         📑 Crack Chat List Tuner + 폴더
 // @namespace    chat list tuner
-// @version      1.2.3
-// @description  채팅방 목록을 프로필 링 색상·통합 검색·한눈에 보기(PC·모바일)·스마트 자동 정리로 정돈합니다.
+// @version      1.3.3
+// @description  채팅방 목록 튜너에 로컬 폴더 표시와 한눈에 보기 다중 선택 관리를 통합합니다.
 // @match        *://crack.wrtn.ai/*
-// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/ChatListTuner.user.js
-// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/ChatListTuner.user.js
 // @grant        none
 // @run-at       document-start
 // ==/UserScript==
@@ -1470,7 +1468,7 @@
             bottom: 0;
             z-index: 9995;
             display: grid;
-            grid-template-rows: auto minmax(0, 1fr);
+            grid-template-rows: auto auto minmax(0, 1fr);
             box-sizing: border-box;
             background: var(--ct-canvas);
             color: var(--ct-text);
@@ -1632,6 +1630,12 @@
             transition: color 180ms;
         }
         .crack-lg-seg button[aria-pressed="true"] { color: var(--ct-text); }
+        .crack-lg-view-tools { display: flex; align-items: center; flex: 0 0 auto; gap: 6px; }
+        .crack-lg-quick-actions { display: flex; align-items: center; gap: 4px; padding: 3px; border-radius: 10px; background: var(--ct-sunk); }
+        .crack-lg-quick-actions button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: var(--ct-muted); cursor: pointer; transition: background 150ms, color 150ms, transform 120ms; }
+        .crack-lg-quick-actions button:hover { background: var(--ct-hover2); color: var(--ct-text); }
+        .crack-lg-quick-actions button:active { transform: scale(.94); }
+        .crack-lg-quick-actions button.is-on { background: var(--ct-knob); color: var(--ct-text); box-shadow: 0 1px 3px rgba(0,0,0,.14), 0 0 0 1px var(--ct-line); }
         .crack-lg-body { display: grid; grid-template-columns: 196px minmax(0, 1fr); min-height: 0; }
         .crack-lg-rail {
             padding: 12px 8px;
@@ -1880,6 +1884,113 @@
         .crack-lg-pop-dot:hover { transform: scale(1.18); }
         .crack-lg-pop-dot.is-on { outline-color: var(--d); outline-offset: 2px; }
         .crack-lg-pop-dot.is-on::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #fff; }
+        /* 로컬 폴더는 튜너의 색상 토큰을 그대로 사용한다. */
+        #crack-local-folders { padding: 12px 16px 0; border-bottom: 1px solid var(--ct-line); color: var(--ct-text); background: var(--ct-bg); }
+        .crack-folder-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; width: 100%; }
+        .crack-folder-tab, .crack-folder-toggle, .crack-lg-folder-tools button, .crack-lg-pick {
+            border: 1px solid var(--ct-line); border-radius: 8px; background: var(--ct-raise);
+            color: var(--ct-text); cursor: pointer; font: inherit; transition: background 150ms, border-color 150ms;
+        }
+        .crack-folder-tab { display: flex; align-items: center; min-width: 0; height: 40px; padding: 0 8px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+        .crack-folder-tab { gap: 6px; text-align: left; }
+        .crack-folder-tab-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .crack-folder-tab.is-on { background: color-mix(in srgb, var(--folder-color) 12%, var(--ct-raise)); border-color: var(--folder-color); color: var(--ct-text); }
+        .crack-folder-tab-icon { display: grid; place-items: center; width: 20px; height: 20px; flex: 0 0 20px; color: var(--folder-color); }
+        .crack-folder-tab-icon svg { width: 18px; height: 18px; }
+        .crack-folder-tab:hover, .crack-lg-folder-tools button:hover, .crack-lg-pick:hover { background: var(--ct-hover2); border-color: var(--ct-line2); }
+        .crack-folder-tab.is-on:hover { background: color-mix(in srgb, var(--folder-color, #2563eb) 18%, var(--ct-raise)); border-color: var(--folder-color, #2563eb); }
+        .crack-folder-tab:active, .crack-lg-folder-tools button:active { transform: scale(.98); }
+        .crack-lg-folder-tools button:disabled { opacity: .45; cursor: default; }
+        .crack-folder-tab:focus-visible, .crack-folder-toggle:focus-visible, .crack-lg-folder-tools button:focus-visible, .crack-lg-quick-actions button:focus-visible, .crack-lg-pick:focus-visible { outline: 2px solid var(--ct-ink); outline-offset: 2px; }
+        .crack-folder-toggle { display: grid; place-items: center; width: 100%; height: 14px; padding: 0; margin-bottom: 6px; border-color: var(--ct-line); border-radius: 4px; background: var(--ct-field); color: var(--ct-muted); font-size: 10px; line-height: 1; }
+        .crack-folder-toggle:hover { background: var(--ct-hover2); }
+        .crack-folder-tabs { padding-bottom: 8px; }
+        .crack-folder-tabs[hidden] { display: none; }
+        #crack-folder-results { padding: 10px; background: var(--ct-bg); color: var(--ct-text); }
+        #crack-folder-results[hidden] { display: none !important; }
+        .crack-folder-card { display: flex; align-items: center; height: 74px; padding: 8px; margin: 0 0 8px; border: 1px solid var(--ct-line); border-radius: 12px; color: var(--ct-text); text-decoration: none; background: var(--ct-raise); overflow: hidden; }
+        .crack-folder-card:hover { border-color: var(--ct-line2); }
+        .crack-folder-card-border { width: 4px; height: 100%; margin-right: 8px; border-radius: 2px; flex: 0 0 4px; background: var(--folder-color); }
+        .crack-folder-card-thumb { display: grid; place-items: center; width: 48px; height: 48px; flex: 0 0 48px; margin-right: 12px; border: 1px solid var(--ct-line); border-radius: 50%; overflow: hidden; background: var(--ct-field); color: var(--ct-muted); }
+        .crack-folder-card-thumb img { width: 100%; height: 100%; object-fit: cover; }
+        .crack-folder-card-content { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 4px; }
+        .crack-folder-card-title, .crack-folder-card-desc { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+        .crack-folder-card-title { font-size: 15px; font-weight: 600; }
+        .crack-folder-card-desc { color: var(--ct-muted); font-size: 13px; }
+        .crack-folder-empty { padding: 16px 8px; color: var(--ct-muted); font-size: .875rem; }
+        #crack-local-assign { position: fixed; z-index: 10001; width: min(240px, calc(100vw - 16px)); max-height: min(60vh, 420px); overflow: auto; padding: 8px; border: 1px solid var(--ct-line); border-radius: 12px; background: var(--ct-bg); color: var(--ct-text); box-shadow: var(--ct-lift); }
+        #crack-local-assign strong { display: block; padding: 8px; font-size: .875rem; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+        #crack-local-assign button { display: block; width: 100%; min-height: 36px; padding: 4px 8px; border: 0; border-radius: 8px; background: transparent; color: inherit; text-align: left; font: inherit; font-size: .875rem; cursor: pointer; }
+        #crack-local-assign button:hover, #crack-local-assign button:focus-visible { background: var(--ct-hover); }
+        .crack-folder-filtering a[href*="/stories/"]:not(.crack-folder-card),
+        .crack-folder-filtering a[href*="/characters/"]:not(.crack-folder-card) { display: none !important; }
+        .crack-lg-folder-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--ct-line); background: var(--ct-bg); font-size: .875rem; }
+        #crack-lounge:not(.is-selecting) .crack-lg-folder-tools { display: none; }
+        .crack-lg-folder-tools button { min-height: 32px; padding: 4px 8px; }
+        .crack-lg-folder-tools button.is-on { background: var(--ct-current); font-weight: 700; }
+        .crack-lg-folder-tools select { min-height: 32px; max-width: 160px; padding: 4px 8px; border: 1px solid var(--ct-line); border-radius: 8px; background: var(--ct-field); color: var(--ct-text); font: inherit; }
+        .crack-lg-pick { display: none; flex: 0 0 28px; width: 28px; height: 28px; padding: 0; font-weight: 700; }
+        #crack-lounge.is-selecting .crack-lg-pick { display: grid; place-items: center; }
+        #crack-lounge.is-selecting .crack-lg-tile.is-picked { border-color: var(--ct-ink); background: var(--ct-current); }
+        #crack-lounge.is-selecting .crack-lg-tile { cursor: default; }
+        #crack-lounge.is-selecting .crack-lg-more { display: none; }
+        .crack-lg-local-folder .crack-lg-gh strong { color: var(--folder-color); }
+        .crack-folder-manage { position: fixed; inset: 0; z-index: 10002; display: grid; place-items: center; padding: 16px; background: var(--ct-scrim); color: var(--ct-text); font-family: -apple-system, BlinkMacSystemFont, "Pretendard", "Apple SD Gothic Neo", "Segoe UI", sans-serif; -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); opacity: 0; transition: opacity 180ms; }
+        .crack-folder-manage.is-open { opacity: 1; }
+        .crack-folder-manage * { box-sizing: border-box; }
+        .crack-folder-manage-panel { display: flex; flex-direction: column; width: min(620px, 100%); max-height: min(760px, calc(100dvh - 32px)); overflow: hidden; border: 1px solid var(--ct-line2); border-radius: 22px; background: var(--ct-raise); box-shadow: var(--ct-shadow-lg); opacity: 0; transform: translateY(14px) scale(.965); transition: transform 200ms var(--ct-ease), opacity 150ms; }
+        .crack-folder-manage.is-open .crack-folder-manage-panel { opacity: 1; transform: none; transition: transform 420ms var(--ct-soft), opacity 200ms; }
+        .crack-folder-manage-head { display: flex; align-items: center; gap: 13px; padding: 18px 16px 14px 20px; border-bottom: 1px solid var(--ct-line); }
+        .crack-folder-manage-mark { display: grid; place-items: center; width: 40px; height: 40px; flex: 0 0 40px; border-radius: 13px; background: var(--ct-sunk); color: var(--ct-text); }
+        .crack-folder-manage-mark svg { width: 21px; height: 21px; }
+        .crack-folder-manage-heading { flex: 1; min-width: 0; }
+        .crack-folder-manage-heading h2 { margin: 0; font-size: 16.5px; font-weight: 760; line-height: 1.3; letter-spacing: -.02em; }
+        .crack-folder-manage-heading p { margin: 3px 0 0; color: var(--ct-muted); font-size: 12px; line-height: 1.5; }
+        .crack-folder-manage-close { display: grid; place-items: center; width: 32px; height: 32px; flex: 0 0 32px; padding: 0; border: 0; border-radius: 9px; background: transparent; color: var(--ct-muted); cursor: pointer; }
+        .crack-folder-manage-close:hover { background: var(--ct-hover2); color: var(--ct-text); }
+        .crack-folder-create-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 16px 20px; border-bottom: 1px solid var(--ct-line); }
+        .crack-folder-create-form label { grid-column: 1 / -1; color: var(--ct-muted); font-size: 12px; font-weight: 680; }
+        .crack-folder-create-form input, .crack-folder-inspector input { width: 100%; min-width: 0; min-height: 40px; padding: 0 12px; border: 1px solid var(--ct-line2); border-radius: 10px; outline: 0; background: var(--ct-field); color: var(--ct-text); font: inherit; font-size: 13px; }
+        .crack-folder-create-form input:focus, .crack-folder-inspector input:focus { background: var(--ct-raise); box-shadow: 0 0 0 1px var(--ct-line2), 0 0 0 4px var(--ct-ring); }
+        .crack-folder-create-form input::placeholder { color: var(--ct-faint); }
+        .crack-folder-create-form .crack-folder-create { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; padding: 0 14px; border: 1px solid transparent; border-radius: 10px; background: var(--ct-ink); color: var(--ct-ink-fg); font: inherit; font-size: 12.5px; font-weight: 700; white-space: nowrap; cursor: pointer; }
+        .crack-folder-create-form .crack-folder-create:hover:not(:disabled) { background: color-mix(in srgb, var(--ct-ink) 86%, var(--ct-raise)); }
+        .crack-folder-create-form .crack-folder-create:disabled { opacity: .42; cursor: default; }
+        .crack-folder-create svg { width: 16px; height: 16px; }
+        .crack-folder-create-hint { grid-column: 1 / -1; margin: 0; color: var(--ct-muted); font-size: 12px; }
+        .crack-folder-manage-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; min-height: 120px; max-height: 320px; overflow-y: auto; overscroll-behavior: contain; padding: 16px 20px; }
+        .crack-folder-file { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-width: 0; min-height: 116px; padding: 12px 8px; border: 1px solid transparent; border-radius: 12px; background: transparent; color: var(--ct-text); font: inherit; cursor: pointer; }
+        .crack-folder-file:hover { background: var(--ct-hover); }
+        .crack-folder-file.is-selected { border-color: var(--ct-line2); background: var(--ct-current); }
+        .crack-folder-file-icon { display: grid; place-items: center; width: 48px; height: 48px; color: var(--folder-color); }
+        .crack-folder-file-icon svg { width: 42px; height: 42px; stroke-width: 1.7; }
+        .crack-folder-file-name { display: -webkit-box; width: 100%; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; text-align: center; font-size: 13px; font-weight: 640; line-height: 1.35; }
+        .crack-folder-manage-empty { grid-column: 1 / -1; align-self: center; padding: 24px 8px; color: var(--ct-muted); text-align: center; font-size: 13px; }
+        .crack-folder-inspector { padding: 16px 20px 20px; border-top: 1px solid var(--ct-line); background: var(--ct-bg); }
+        .crack-folder-inspector[hidden] { display: none; }
+        .crack-folder-inspector-top { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+        .crack-folder-inspector-top strong { margin-right: auto; font-size: 12.5px; font-weight: 700; }
+        .crack-folder-inspector-top button { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid var(--ct-line2); border-radius: 8px; background: transparent; color: var(--ct-muted); font: inherit; cursor: pointer; }
+        .crack-folder-inspector-top button:hover:not(:disabled) { background: var(--ct-hover); color: var(--ct-text); }
+        .crack-folder-inspector-top button:disabled { opacity: .35; cursor: default; }
+        .crack-folder-inspector-top button svg { width: 15px; height: 15px; }
+        .crack-folder-inspector-top .crack-folder-delete:hover { color: var(--ct-danger); }
+        .crack-folder-inspector label { display: block; margin-bottom: 6px; color: var(--ct-muted); font-size: 12px; font-weight: 680; }
+        .crack-folder-palette { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+        .crack-folder-palette button { width: 26px; height: 26px; padding: 0; border: 2px solid var(--ct-bg); border-radius: 50%; background: var(--swatch-color); cursor: pointer; }
+        .crack-folder-palette button.is-selected { outline: 2px solid var(--ct-ink); outline-offset: 2px; }
+        .crack-folder-manage button:focus-visible { outline: 2px solid var(--ct-ink); outline-offset: 2px; }
+        @media (max-width: 700px) {
+            .crack-folder-manage { align-items: end; padding: 0; }
+            .crack-folder-manage-panel { width: 100%; max-height: 92dvh; overflow-y: auto; border-radius: 20px 20px 0 0; transform: translateY(40px); }
+            .crack-folder-create-form { padding: 16px; }
+            .crack-folder-manage-list { padding: 16px; max-height: 40dvh; }
+            .crack-folder-inspector { padding: 16px; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .crack-folder-manage, .crack-folder-manage-panel { transition: none !important; }
+        }
+        @media (max-width: 700px) { .crack-lg-folder-tools { padding: 8px; } .crack-lg-folder-tools button, .crack-lg-folder-tools select { min-height: 44px; } }
         #crack-lounge button:focus-visible { outline: 2px solid var(--ct-ink); outline-offset: 2px; }
         @container (max-width: 700px) {
             .crack-lg-body { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
@@ -1891,7 +2002,7 @@
         /* Mobile lounge: full visual viewport, independent scroll areas. */
         #crack-lounge.is-mobile {
             border: 0; overflow: hidden;
-            grid-template-rows: minmax(0, auto) minmax(0, 1fr);
+            grid-template-rows: minmax(0, auto) auto minmax(0, 1fr);
             padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
             clip-path: none; transform: translateY(16px);
             transition: transform 240ms var(--ct-ease), opacity 180ms, visibility 0s 240ms;
@@ -1904,10 +2015,12 @@
         }
         #crack-lounge.is-mobile .crack-lg-heading { min-width: 0; flex-wrap: wrap; gap: 2px 6px; }
         #crack-lounge.is-mobile .crack-lg-heading strong { font-size: 15px; }
-        #crack-lounge.is-mobile .crack-lg-seg { grid-column: 3; grid-row: 1; }
-        #crack-lounge.is-mobile .crack-lg-search { grid-column: 1 / -1; max-width: none; height: 44px; }
+        #crack-lounge.is-mobile .crack-lg-heading { grid-column: 2 / -1; grid-row: 1; }
+        #crack-lounge.is-mobile .crack-lg-view-tools { grid-column: 1 / -1; grid-row: 2; justify-self: end; }
+        #crack-lounge.is-mobile .crack-lg-quick-actions button { width: 44px; height: 44px; }
+        #crack-lounge.is-mobile .crack-lg-search { grid-column: 1 / -1; grid-row: 3; max-width: none; height: 44px; }
         #crack-lounge.is-mobile .crack-lg-search input { font-size: 16px; }
-        #crack-lounge.is-mobile .crack-lg-colors { grid-column: 1 / -1; min-width: 0; overflow-x: auto; gap: 0; padding: 0; border-radius: 12px; }
+        #crack-lounge.is-mobile .crack-lg-colors { grid-column: 1 / -1; grid-row: 4; min-width: 0; overflow-x: auto; gap: 0; padding: 0; border-radius: 12px; }
         #crack-lounge.is-mobile .crack-lg-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
         #crack-lounge.is-mobile .crack-lg-rail { display: flex; gap: 4px; overflow-x: auto; overflow-y: hidden; border-right: 0; border-bottom: 1px solid var(--ct-line); padding: 4px 8px; overscroll-behavior-x: contain; }
         #crack-lounge.is-mobile .crack-lg-rail-btn { width: auto; flex: 0 0 auto; max-width: 240px; }
@@ -1932,6 +2045,11 @@
         #crack-lounge.is-mobile .crack-lg-pop { max-width: calc(100% - 16px); flex-wrap: wrap; gap: 0; padding: 8px; }
         #crack-lounge.is-mobile .crack-lg-pop-label { flex: 0 0 100%; padding: 0 8px 4px; }
         #crack-lounge.is-mobile button { touch-action: manipulation; }
+        @media (max-width: 280px) {
+            #crack-lounge.is-mobile .crack-lg-seg button { padding: 6px 4px; font-size: 11px; }
+            #crack-lounge.is-mobile .crack-lg-view-tools { gap: 4px; }
+            #crack-lounge.is-mobile .crack-lg-quick-actions button { width: 32px; height: 36px; }
+        }
         @media (max-width: 900px), (pointer: coarse) {
             .crack-lounge-btn { width: 44px; height: 44px; flex-basis: 44px; }
             .crack-lg-more { opacity: 1; }
@@ -1999,6 +2117,9 @@
         all: ctSvg('<rect x="4" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.6"/>', 15),
         chat: ctSvg('<path d="M20 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 20 12z"/>', 15),
         folder: ctSvg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>', 15),
+        plus: ctSvg('<path d="M12 5v14M5 12h14"/>', 18),
+        select: ctSvg('<rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="m7.5 12 3 3 6-6"/>', 18),
+        settings: ctSvg('<path d="M10.5 3h3l.5 2.1 1.7.7 1.9-1.1 2.1 2.1-1.1 1.9.7 1.7L21 11v3l-2.1.5-.7 1.7 1.1 1.9-2.1 2.1-1.9-1.1-1.7.7L13.5 21h-3l-.5-2.1-1.7-.7-1.9 1.1-2.1-2.1 1.1-1.9-.7-1.7L3 14v-3l2.1-.5.7-1.7-1.1-1.9 2.1-2.1 1.9 1.1 1.7-.7z"/><circle cx="12" cy="12.5" r="2.6"/>', 15),
         alert: ctSvg('<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.01"/>', 26)
     };
 
@@ -2198,7 +2319,7 @@
     function isInActiveSidebar(el) {
         if (!el) return false;
 
-        if (el.closest('[data-message-group-id], .wrtn-markdown, .__chat_input_textarea, #crack-search-overlay, #crack-smart-organize-modal, .crack-so, #crack-lounge')) return false;
+        if (el.closest('[data-message-group-id], .wrtn-markdown, .__chat_input_textarea, #crack-search-overlay, #crack-smart-organize-modal, .crack-so, #crack-lounge, #crack-local-folders, #crack-folder-results, #crack-folder-manager')) return false;
 
         // 1. 드롭다운 메뉴, 팝오버, 라디오그룹 내부 제외
         if (
@@ -2246,6 +2367,7 @@
 
     function isRealChatLink(el) {
         if (!(el instanceof HTMLElement)) return false;
+        if (el.closest('#crack-folder-results')) return false;
         if (!isInActiveSidebar(el)) return false;
         if (el.tagName.toLowerCase() !== 'a') return false;
         if (el.closest('[role="tablist"]')) return false;
@@ -3819,7 +3941,7 @@
     let countRetryAt = 0;
     let countFailures = 0;
     const pendingMenuInjections = new WeakSet();
-    const OWN_TUNER_UI = '.crack-section-count, .crack-search-container, #crack-search-overlay, #crack-smart-organize-modal, .crack-so, #crack-lounge, .custom-palette-container, .crack-smart-organize-menu-item';
+    const OWN_TUNER_UI = '.crack-section-count, .crack-search-container, #crack-search-overlay, #crack-smart-organize-modal, .crack-so, #crack-lounge, #crack-local-folders, #crack-folder-results, #crack-folder-manager, #crack-local-assign, .custom-palette-container, .crack-smart-organize-menu-item';
     const NON_LIST_CONTENT = '[data-message-group-id], .wrtn-markdown, .__chat_input_textarea, #cawf-root, #cawf-panel, #sgb-bg-root';
 
     function getListScope() {
@@ -3862,7 +3984,7 @@
         if (cached?.isConnected && cleanText(cached.textContent) === label && cached.getClientRects().length) return cached;
         const found = Array.from(document.querySelectorAll('span')).find(el => {
             if (cleanText(el.textContent) !== label) return false;
-            if (el.closest('#crack-search-overlay, [data-message-group-id], .wrtn-markdown, .__chat_input_textarea')) return false;
+            if (el.closest('#crack-search-overlay, #crack-local-folders, #crack-folder-results, #crack-folder-manager, [data-message-group-id], .wrtn-markdown, .__chat_input_textarea')) return false;
             if (!el.getClientRects().length) return false;
             const dialog = el.closest('[role="dialog"]');
             if (dialog && (
@@ -4718,6 +4840,7 @@
         archiveSearchState.lastRenderKey = '';
         saveArchiveSearchCache();
         scheduleArchiveSearchRender();
+        if (localFolderView !== LOCAL_ROOT_ID) renderLocalFolderBar();
 
         return archiveSearchState.items;
     }
@@ -4993,6 +5116,450 @@
         handleArchiveSearchQuery(normalizedQuery);
     }
 
+    // ── 폴더 정리기 v12의 로컬 폴더 데이터 ───────────────────────────
+    const LOCAL_FOLDER_KEY = 'towa_wrtn_folders_v8';
+    const LOCAL_MAP_KEY = 'towa_wrtn_map_v8';
+    const LOCAL_SORT_KEY = 'towa_wrtn_sort_v1';
+    const LOCAL_UI_KEY = 'towa_wrtn_ui_state_v1';
+    const LOCAL_ROOT_ID = 'root_folder_all';
+    const LOCAL_PALETTE = ['#ff922b', '#fab005', '#94d82d', '#51cf66', '#20c997', '#22b8cf', '#339af0', '#5c7cfa', '#845ef7', '#be4bdb', '#f06595', '#868e96'];
+    let localFolderView = LOCAL_ROOT_ID;
+    let localFolderVersion = 0;
+
+    function readLocalJson(key, fallback) {
+        try { return JSON.parse(localStorage.getItem(key) || 'null') ?? fallback; }
+        catch { return fallback; }
+    }
+    function migrateLocalFolders() {
+        try {
+            if (!localStorage.getItem(LOCAL_FOLDER_KEY) && localStorage.getItem('towa_wrtn_folders_v3')) {
+                localStorage.setItem(LOCAL_FOLDER_KEY, localStorage.getItem('towa_wrtn_folders_v3'));
+                if (!localStorage.getItem(LOCAL_MAP_KEY) && localStorage.getItem('towa_wrtn_map_v3')) {
+                    localStorage.setItem(LOCAL_MAP_KEY, localStorage.getItem('towa_wrtn_map_v3'));
+                }
+            }
+        } catch (error) { console.warn('[Crack UI] 폴더 데이터 마이그레이션 실패:', error); }
+    }
+    migrateLocalFolders();
+
+    function normalizeLocalColor(value) {
+        const raw = String(value || '').toLowerCase();
+        if (LOCAL_PALETTE.includes(raw)) return raw;
+        const rgb = /^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/.exec(raw);
+        if (rgb) {
+            const hex = '#' + rgb.slice(1).map(channel => Number(channel).toString(16).padStart(2, '0')).join('');
+            if (LOCAL_PALETTE.includes(hex)) return hex;
+        }
+        return LOCAL_PALETTE[0];
+    }
+
+    function loadLocalFolders() {
+        const saved = readLocalJson(LOCAL_FOLDER_KEY, []);
+        const folders = Array.isArray(saved) ? saved.filter(folder => folder && typeof folder.id === 'string' && folder.id !== LOCAL_ROOT_ID)
+            .map(folder => ({ id: folder.id, name: String(folder.name || '새 폴더'), color: normalizeLocalColor(folder.color) })) : [];
+        return [{ id: LOCAL_ROOT_ID, name: '전체', color: 'transparent' }, ...folders];
+    }
+    function saveLocalFolders(folders) {
+        localStorage.setItem(LOCAL_FOLDER_KEY, JSON.stringify(folders));
+        localFolderVersion++;
+        refreshLocalFolderSurfaces();
+    }
+    function localChatKey(href) {
+        try { return new URL(String(href || ''), location.origin).pathname.replace(/\/$/, ''); }
+        catch { return String(href || '').split('?')[0].replace(/\/$/, ''); }
+    }
+    function loadLocalMap() {
+        const raw = readLocalJson(LOCAL_MAP_KEY, {});
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+        const result = {};
+        for (const [href, folderId] of Object.entries(raw)) {
+            if (typeof folderId === 'string') result[localChatKey(href)] = folderId;
+        }
+        return result;
+    }
+    function saveLocalMap(map) {
+        localStorage.setItem(LOCAL_MAP_KEY, JSON.stringify(map));
+        localFolderVersion++;
+        refreshLocalFolderSurfaces();
+    }
+    function loadLocalSort() { return readLocalJson(LOCAL_SORT_KEY, {}); }
+    function folderForItem(item, map = loadLocalMap()) { return map[localChatKey(item.href)] || LOCAL_ROOT_ID; }
+    function localFolderItems(folderId) {
+        const map = loadLocalMap();
+        const items = Array.isArray(archiveSearchState.items) ? archiveSearchState.items : [];
+        const result = items.filter(item => item?.href && folderForItem(item, map) === folderId);
+        const present = new Set(result.map(item => localChatKey(item.href)));
+        const meta = readLocalJson('towa_wrtn_meta_v1', {});
+        for (const [href, assignedId] of Object.entries(map)) {
+            if (assignedId !== folderId || present.has(href)) continue;
+            const saved = meta[href] || {};
+            result.push({ href, title: saved.title || '채팅방', imageUrl: saved.imgSrc || '', lastMessage: saved.desc || '', updatedAt: saved.lastSeen || '' });
+        }
+        const order = loadLocalSort()[folderId] || [];
+        if (Array.isArray(order) && order.length) {
+            const positions = new Map(order.map((href, index) => [localChatKey(href), index]));
+            result.sort((a, b) => (positions.get(localChatKey(a.href)) ?? Infinity) - (positions.get(localChatKey(b.href)) ?? Infinity));
+        } else result.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+        return result;
+    }
+    function setLocalFolderForKeys(keys, folderId) {
+        if (!keys.length) return;
+        const map = loadLocalMap();
+        for (const key of keys) {
+            if (folderId === LOCAL_ROOT_ID) delete map[localChatKey(key)];
+            else map[localChatKey(key)] = folderId;
+        }
+        saveLocalMap(map);
+    }
+    function refreshLocalFolderSurfaces() {
+        renderLocalFolderBar();
+        if (loungeState.open) renderLounge();
+    }
+
+    function renderLocalFolderBar() {
+        const search = document.querySelector('.crack-search-container');
+        if (!search?.parentElement) return;
+        let bar = document.getElementById('crack-local-folders');
+        if (!bar) {
+            bar = ctEl('section', '');
+            bar.id = 'crack-local-folders';
+            search.parentElement.insertBefore(bar, search);
+            bar.addEventListener('click', onLocalFolderBarClick);
+        }
+        if (bar.nextElementSibling !== search) search.parentElement.insertBefore(bar, search);
+        const signature = `${localFolderVersion}|${localFolderView}|${archiveSearchState.savedAt}|${archiveSearchState.status}|${archiveSearchState.items.length}|${localStorage.getItem(LOCAL_UI_KEY)}`;
+        if (bar.dataset.renderSig === signature && document.getElementById('crack-folder-results')?.previousElementSibling === search) {
+            getListScope()?.classList.toggle('crack-folder-filtering', localFolderView !== LOCAL_ROOT_ID);
+            return;
+        }
+        bar.dataset.renderSig = signature;
+        const folders = loadLocalFolders();
+        if (!folders.some(folder => folder.id === localFolderView)) localFolderView = LOCAL_ROOT_ID;
+        const state = readLocalJson(LOCAL_UI_KEY, { listOpen: true });
+        const open = state?.listOpen !== false;
+        const toggle = ctEl('button', 'crack-folder-toggle', open ? '▲' : '▼');
+        toggle.type = 'button'; toggle.dataset.folderAction = 'toggle';
+        toggle.setAttribute('aria-label', open ? '폴더 목록 접기' : '폴더 목록 펼치기');
+        toggle.setAttribute('aria-expanded', String(open));
+        const tabs = ctEl('div', 'crack-folder-tabs');
+        tabs.hidden = !open;
+        for (const folder of folders.slice(1)) {
+            const button = ctEl('button', 'crack-folder-tab');
+            button.type = 'button'; button.dataset.folderId = folder.id;
+            button.classList.toggle('is-on', folder.id === localFolderView);
+            button.style.setProperty('--folder-color', folder.color);
+            const icon = ctEl('span', 'crack-folder-tab-icon');
+            icon.innerHTML = CT_ICON.folder;
+            button.append(icon, ctEl('span', 'crack-folder-tab-text', folder.name));
+            tabs.append(button);
+        }
+        bar.replaceChildren(toggle, tabs);
+        renderLocalFolderResults(bar, folders);
+    }
+    function renderLocalFolderResults(bar, folders) {
+        let results = document.getElementById('crack-folder-results');
+        if (!results) { results = ctEl('section', ''); results.id = 'crack-folder-results'; }
+        const search = document.querySelector('.crack-search-container');
+        if (search && results.previousElementSibling !== search) search.insertAdjacentElement('afterend', results);
+        const selected = localFolderView !== LOCAL_ROOT_ID;
+        results.hidden = !selected;
+        const scope = getListScope();
+        scope?.classList.toggle('crack-folder-filtering', selected);
+        if (!selected) { results.replaceChildren(); return; }
+        const folder = folders.find(entry => entry.id === localFolderView);
+        const items = localFolderItems(localFolderView);
+        const frag = document.createDocumentFragment();
+        if (!items.length) frag.append(ctEl('div', 'crack-folder-empty', archiveSearchState.status === 'indexing' || archiveSearchState.status === 'idle' ? '채팅방을 불러오는 중이에요.' : '이 폴더는 비어 있어요. 한눈에 보기에서 채팅방을 선택해 추가하세요.'));
+        for (const item of items) {
+            const card = ctEl('a', 'crack-folder-card');
+            card.href = item.href;
+            card.draggable = true;
+            card.dataset.folderHref = item.href;
+            const stripe = ctEl('i', 'crack-folder-card-border');
+            stripe.style.setProperty('--folder-color', folder?.color || LOCAL_PALETTE[0]);
+            const thumb = ctEl('span', 'crack-folder-card-thumb');
+            if (item.imageUrl) { const img = document.createElement('img'); img.src = item.imageUrl; img.alt = ''; thumb.append(img); }
+            else thumb.innerHTML = CT_ICON.chat;
+            const content = ctEl('span', 'crack-folder-card-content');
+            content.append(ctEl('span', 'crack-folder-card-title', item.title || '제목 없음'));
+            content.append(ctEl('span', 'crack-folder-card-desc', item.lastMessage || item.storyName || ''));
+            card.append(stripe, thumb, content);
+            frag.append(card);
+        }
+        results.replaceChildren(frag);
+        if (!results.dataset.dragReady) {
+            results.dataset.dragReady = 'true';
+            let dragged = '';
+            results.addEventListener('dragstart', event => { dragged = event.target.closest('.crack-folder-card')?.dataset.folderHref || ''; });
+            results.addEventListener('dragover', event => { if (dragged && event.target.closest('.crack-folder-card')) event.preventDefault(); });
+            results.addEventListener('drop', event => {
+                const target = event.target.closest('.crack-folder-card')?.dataset.folderHref;
+                if (!dragged || !target || dragged === target) return;
+                event.preventDefault();
+                const order = [...results.querySelectorAll('.crack-folder-card')].map(card => card.dataset.folderHref);
+                order.splice(order.indexOf(dragged), 1);
+                order.splice(order.indexOf(target), 0, dragged);
+                const sort = loadLocalSort(); sort[localFolderView] = order;
+                localStorage.setItem(LOCAL_SORT_KEY, JSON.stringify(sort));
+                dragged = '';
+                renderLocalFolderResults(bar, loadLocalFolders());
+            });
+            results.addEventListener('dragend', () => { dragged = ''; });
+        }
+    }
+    function onLocalFolderBarClick(event) {
+        const action = event.target.closest('[data-folder-action]')?.dataset.folderAction;
+        if (action === 'toggle') {
+            const state = readLocalJson(LOCAL_UI_KEY, { listOpen: true });
+            state.listOpen = state.listOpen === false;
+            localStorage.setItem(LOCAL_UI_KEY, JSON.stringify(state));
+            renderLocalFolderBar();
+        }
+        const tab = event.target.closest('[data-folder-id]');
+        if (tab) {
+            localFolderView = localFolderView === tab.dataset.folderId ? LOCAL_ROOT_ID : tab.dataset.folderId;
+            renderLocalFolderBar();
+            if (localFolderView !== LOCAL_ROOT_ID) {
+                ensureArchiveSearchIndex();
+                archiveSearchState.inFlight?.then(() => renderLocalFolderBar()).catch(() => {});
+            }
+        }
+    }
+
+    function openLocalFolderManager(focusCreate = false) {
+        document.getElementById('crack-folder-manager')?.remove();
+        const returnFocus = document.activeElement;
+        const overlay = ctEl('div', 'crack-folder-manage');
+        overlay.id = 'crack-folder-manager';
+        overlay.setAttribute('role', 'dialog');
+        overlay.setAttribute('aria-modal', 'true');
+        overlay.setAttribute('aria-labelledby', 'crack-folder-manager-title');
+        const panel = ctEl('section', 'crack-folder-manage-panel');
+        const head = ctEl('div', 'crack-folder-manage-head');
+        const mark = ctEl('span', 'crack-folder-manage-mark');
+        mark.innerHTML = CT_ICON.folder;
+        const heading = ctEl('div', 'crack-folder-manage-heading');
+        const title = ctEl('h2', '', '내 폴더 관리');
+        title.id = 'crack-folder-manager-title';
+        heading.append(title, ctEl('p', '', '폴더를 선택해 이름, 색상, 순서를 변경하세요.'));
+        const closeButton = ctEl('button', 'crack-folder-manage-close');
+        closeButton.type = 'button';
+        closeButton.innerHTML = CT_ICON.x;
+        closeButton.setAttribute('aria-label', '닫기');
+        closeButton.title = '닫기';
+        head.append(mark, heading, closeButton);
+
+        const createForm = ctEl('div', 'crack-folder-create-form');
+        const createLabel = ctEl('label', '', '새 폴더 이름');
+        createLabel.htmlFor = 'crack-folder-new-name';
+        const createInput = ctEl('input');
+        createInput.id = 'crack-folder-new-name';
+        createInput.type = 'text'; createInput.maxLength = 60; createInput.placeholder = '폴더 이름을 입력하세요';
+        const createButton = ctEl('button', 'crack-folder-create');
+        createButton.type = 'button';
+        createButton.innerHTML = `${CT_ICON.plus}<span>만들기</span>`;
+        createButton.disabled = true;
+        const createHint = ctEl('p', 'crack-folder-create-hint');
+        createHint.hidden = !loungeState.selected.size;
+        if (loungeState.selected.size) createHint.textContent = `선택한 채팅방 ${loungeState.selected.size}개를 새 폴더에 넣습니다.`;
+        createForm.append(createLabel, createInput, createButton, createHint);
+        const list = ctEl('div', 'crack-folder-manage-list');
+        list.setAttribute('aria-label', '폴더 목록');
+        const inspector = ctEl('div', 'crack-folder-inspector');
+        panel.append(head, createForm, list, inspector);
+        overlay.append(panel);
+        document.body.append(overlay);
+        requestAnimationFrame(() => overlay.classList.add('is-open'));
+        let selectedFolderId = loadLocalFolders()[1]?.id || null;
+        function close() {
+            overlay.remove();
+            refreshLocalFolderSurfaces();
+            const focusTarget = returnFocus?.isConnected ? returnFocus : document.querySelector('#crack-lounge [data-folder-tool="manage"]') || document.querySelector('.crack-folder-toggle');
+            focusTarget?.focus?.();
+        }
+        closeButton.addEventListener('click', close);
+        overlay.addEventListener('click', event => { if (event.target === overlay) close(); });
+        overlay.addEventListener('keydown', event => {
+            if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); }
+            if (event.key !== 'Tab') return;
+            const focusable = [...panel.querySelectorAll('button:not(:disabled), input:not(:disabled)')].filter(node => !node.closest('[hidden]'));
+            if (!focusable.length) return;
+            const first = focusable[0], last = focusable[focusable.length - 1];
+            if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+            else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+        });
+        createInput.addEventListener('input', () => { createButton.disabled = !createInput.value.trim(); });
+        function create() {
+            const name = createInput.value.trim();
+            if (!name) { createInput.focus(); return; }
+            const folders = loadLocalFolders();
+            const id = `f_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+            folders.push({ id, name, color: LOCAL_PALETTE[(folders.length - 1) % LOCAL_PALETTE.length] });
+            selectedFolderId = id;
+            saveLocalFolders(folders);
+            if (loungeState.selected.size) {
+                setLocalFolderForKeys([...loungeState.selected], id);
+                loungeState.selected.clear();
+                if (loungeState.open) renderLounge();
+            }
+            createInput.value = '';
+            createButton.disabled = true;
+            createHint.hidden = true;
+            renderFolders();
+        }
+        createButton.addEventListener('click', create);
+        createInput.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); create(); } });
+        function renderFolders() {
+            list.replaceChildren();
+            const folders = loadLocalFolders().slice(1);
+            if (!folders.some(folder => folder.id === selectedFolderId)) selectedFolderId = folders[0]?.id || null;
+            if (!folders.length) list.append(ctEl('p', 'crack-folder-manage-empty', '아직 만든 폴더가 없어요. 위에서 첫 폴더를 만들어보세요.'));
+            folders.forEach((folder, index) => {
+                const file = ctEl('button', 'crack-folder-file');
+                file.type = 'button';
+                file.dataset.folderId = folder.id;
+                file.style.setProperty('--folder-color', folder.color);
+                file.classList.toggle('is-selected', folder.id === selectedFolderId);
+                file.setAttribute('aria-pressed', String(folder.id === selectedFolderId));
+                file.title = folder.name;
+                const icon = ctEl('span', 'crack-folder-file-icon');
+                icon.innerHTML = CT_ICON.folder;
+                file.append(icon, ctEl('span', 'crack-folder-file-name', folder.name));
+                file.addEventListener('click', () => {
+                    selectedFolderId = folder.id;
+                    for (const tile of list.querySelectorAll('.crack-folder-file')) {
+                        const selected = tile.dataset.folderId === selectedFolderId;
+                        tile.classList.toggle('is-selected', selected);
+                        tile.setAttribute('aria-pressed', String(selected));
+                    }
+                    renderInspector();
+                });
+                list.append(file);
+            });
+            renderInspector();
+        }
+        function move(folderId, step) {
+            const all = loadLocalFolders();
+            const from = all.findIndex(folder => folder.id === folderId), to = from + step;
+            if (from < 1 || to < 1 || to >= all.length) return;
+            [all[from], all[to]] = [all[to], all[from]];
+            saveLocalFolders(all); renderFolders();
+            list.querySelector('.crack-folder-file.is-selected')?.focus();
+        }
+        function renderInspector() {
+            inspector.replaceChildren();
+            const folders = loadLocalFolders().slice(1);
+            const index = folders.findIndex(folder => folder.id === selectedFolderId);
+            inspector.hidden = index < 0;
+            if (index < 0) return;
+            const folder = folders[index];
+            const top = ctEl('div', 'crack-folder-inspector-top');
+            const heading = ctEl('strong', '', '선택한 폴더');
+            function action(icon, label, onClick, disabled = false, className = '') {
+                const button = ctEl('button', className);
+                button.type = 'button'; button.innerHTML = icon;
+                button.title = label; button.setAttribute('aria-label', label);
+                button.disabled = disabled; button.addEventListener('click', onClick);
+                return button;
+            }
+            const upIcon = ctSvg('<path d="M12 19V5m-6 6 6-6 6 6"/>', 15);
+            const downIcon = ctSvg('<path d="M12 5v14m-6-6 6 6 6-6"/>', 15);
+            const trashIcon = ctSvg('<path d="M4 7h16M9 7V4h6v3m3 0-.8 13H6.8L6 7m4 4v6m4-6v6"/>', 15);
+            const up = action(upIcon, '앞으로 이동', () => move(folder.id, -1), index === 0);
+            const down = action(downIcon, '뒤로 이동', () => move(folder.id, 1), index === folders.length - 1);
+            const remove = action(trashIcon, '폴더 삭제', () => {
+                const currentName = loadLocalFolders().find(entry => entry.id === folder.id)?.name || folder.name;
+                if (!confirm(`「${currentName}」 폴더를 삭제할까요? 채팅방은 삭제되지 않습니다.`)) return;
+                if (localFolderView === folder.id) localFolderView = LOCAL_ROOT_ID;
+                if (loungeState.folder === `local:${folder.id}`) loungeState.folder = 'all';
+                const map = loadLocalMap();
+                for (const [href, id] of Object.entries(map)) if (id === folder.id) delete map[href];
+                saveLocalMap(map);
+                saveLocalFolders(loadLocalFolders().filter(entry => entry.id !== folder.id));
+                renderFolders();
+                (list.querySelector('.crack-folder-file.is-selected') || createInput).focus();
+            }, false, 'crack-folder-delete');
+            top.append(heading, up, down, remove);
+            const nameLabel = ctEl('label', '', '폴더 이름');
+            nameLabel.htmlFor = 'crack-folder-edit-name';
+            const nameInput = ctEl('input');
+            nameInput.id = 'crack-folder-edit-name';
+            nameInput.type = 'text'; nameInput.maxLength = 60; nameInput.value = folder.name;
+            nameInput.addEventListener('change', () => {
+                const next = nameInput.value.trim();
+                const all = loadLocalFolders();
+                const target = all.find(entry => entry.id === folder.id);
+                if (!target) return;
+                if (!next) { nameInput.value = target.name; return; }
+                target.name = next;
+                saveLocalFolders(all);
+                const tile = [...list.querySelectorAll('.crack-folder-file')].find(node => node.dataset.folderId === folder.id);
+                if (tile) { tile.querySelector('.crack-folder-file-name').textContent = next; tile.title = next; }
+            });
+            const paletteLabel = ctEl('label', '', '폴더 색상');
+            paletteLabel.id = 'crack-folder-palette-label';
+            const palette = ctEl('div', 'crack-folder-palette');
+            palette.setAttribute('role', 'group');
+            palette.setAttribute('aria-labelledby', paletteLabel.id);
+            LOCAL_PALETTE.forEach((color, colorIndex) => {
+                const swatch = ctEl('button');
+                swatch.type = 'button';
+                swatch.style.setProperty('--swatch-color', color);
+                swatch.classList.toggle('is-selected', color === folder.color);
+                swatch.setAttribute('aria-label', `색상 ${colorIndex + 1}`);
+                swatch.setAttribute('aria-pressed', String(color === folder.color));
+                swatch.addEventListener('click', () => {
+                    const all = loadLocalFolders();
+                    const target = all.find(entry => entry.id === folder.id);
+                    if (!target) return;
+                    target.color = color;
+                    saveLocalFolders(all);
+                    const tile = [...list.querySelectorAll('.crack-folder-file')].find(node => node.dataset.folderId === folder.id);
+                    tile?.style.setProperty('--folder-color', color);
+                    for (const button of palette.querySelectorAll('button')) {
+                        const selected = button === swatch;
+                        button.classList.toggle('is-selected', selected);
+                        button.setAttribute('aria-pressed', String(selected));
+                    }
+                });
+                palette.append(swatch);
+            });
+            inspector.append(top, nameLabel, nameInput, paletteLabel, palette);
+        }
+        renderFolders();
+        (focusCreate ? createInput : closeButton).focus();
+    }
+
+    function closeLocalAssignMenu() { document.getElementById('crack-local-assign')?.remove(); }
+    function openLocalAssignMenu(x, y, href, title) {
+        closeLocalAssignMenu();
+        const menu = ctEl('div'); menu.id = 'crack-local-assign';
+        menu.setAttribute('role', 'menu');
+        menu.setAttribute('aria-label', '채팅방 폴더 지정');
+        menu.append(ctEl('strong', '', title || '채팅방 폴더 지정'));
+        const current = loadLocalMap()[localChatKey(href)] || LOCAL_ROOT_ID;
+        for (const folder of loadLocalFolders()) {
+            const button = ctEl('button', '', `${folder.id === current ? '✓ ' : ''}${folder.name}`);
+            button.type = 'button'; button.setAttribute('role', 'menuitem');
+            button.addEventListener('click', () => { setLocalFolderForKeys([href], folder.id); closeLocalAssignMenu(); });
+            menu.append(button);
+        }
+        document.body.append(menu);
+        menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - menu.offsetWidth - 8))}px`;
+        menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - menu.offsetHeight - 8))}px`;
+    }
+    document.addEventListener('contextmenu', event => {
+        const link = event.target.closest?.('a[href*="/stories/"], a[href*="/characters/"]');
+        if (!link || !getListScope()?.contains(link) || link.closest('#crack-lounge')) return;
+        const href = link.getAttribute('href');
+        if (!href) return;
+        event.preventDefault(); event.stopPropagation();
+        openLocalAssignMenu(event.clientX, event.clientY, href, link.textContent?.trim());
+    });
+    document.addEventListener('click', event => { if (!event.target.closest?.('#crack-local-assign')) closeLocalAssignMenu(); });
+    document.addEventListener('scroll', closeLocalAssignMenu, true);
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') closeLocalAssignMenu(); });
+
     // ── 한눈에 보기 (PC·모바일 넓은 목록) ─────────────────────────────
     // 크랙 원래 목록(Virtuoso)은 건드리지 않는다. 검색용으로 모아 둔 archiveSearchState.items로 따로 그린다.
     const LOUNGE_VIEW_KEY = 'crackTunerLoungeView_v1';
@@ -5003,6 +5570,9 @@
         color: '',
         query: '',
         view: 'grid',
+        selecting: false,
+        selected: new Set(),
+        eligible: [],
         expanded: new Set(),
         popChatId: '',
         pollTimer: 0,
@@ -5030,7 +5600,7 @@
     }
 
     function getLoungeSig() {
-        return `${archiveSearchState.items.length}|${archiveSearchState.status}|${archiveSearchState.savedAt}`;
+        return `${archiveSearchState.items.length}|${archiveSearchState.status}|${archiveSearchState.savedAt}|${localFolderVersion}`;
     }
 
     function ensureLounge() {
@@ -5051,8 +5621,23 @@
                     <button type="button" class="crack-lg-cf is-all" data-k="">전체</button>
                     ${Object.keys(colorValues).map(key => `<button type="button" class="crack-lg-cf" data-k="${key}" aria-label="${key}만 보기" title="${key}"></button>`).join('')}
                 </div>
-                <div class="crack-lg-seg" role="group" aria-label="보기 방식"><i></i><button type="button" data-view="grid">카드</button><button type="button" data-view="dense">촘촘히</button></div>
+                <div class="crack-lg-view-tools">
+                    <div class="crack-lg-seg" role="group" aria-label="보기 방식"><i></i><button type="button" data-view="grid">카드</button><button type="button" data-view="dense">촘촘히</button></div>
+                    <div class="crack-lg-quick-actions" role="group" aria-label="폴더 도구">
+                        <button type="button" data-folder-tool="select" aria-label="채팅방 선택" title="채팅방 선택" aria-pressed="false">${CT_ICON.select}</button>
+                        <button type="button" data-folder-tool="create" aria-label="폴더 만들기" title="폴더 만들기">${CT_ICON.plus}</button>
+                        <button type="button" data-folder-tool="manage" aria-label="폴더 관리" title="폴더 관리">${CT_ICON.settings}</button>
+                    </div>
+                </div>
             </header>
+            <div class="crack-lg-folder-tools" role="toolbar" aria-label="선택한 채팅방 관리">
+                <button type="button" data-folder-tool="all">전체 선택</button>
+                <button type="button" data-folder-tool="clear">선택 해제</button>
+                <span class="crack-lg-selected-count" aria-live="polite">0개 선택</span>
+                <select class="crack-lg-folder-target" aria-label="이동할 폴더"></select>
+                <button type="button" data-folder-tool="move">폴더로 이동</button>
+                <button type="button" data-folder-tool="remove">폴더에서 빼기</button>
+            </div>
             <div class="crack-lg-body">
                 <nav class="crack-lg-rail" aria-label="보관함 고르기"></nav>
                 <div class="crack-lg-scroll"><div class="crack-lg-status"></div><div class="crack-lg-groups"></div></div>
@@ -5063,7 +5648,7 @@
         root.addEventListener('click', onLoungeClick);
         root.addEventListener('input', onLoungeInput);
         root.addEventListener('keydown', event => {
-            if (event.key === 'Enter' && event.target.classList?.contains('crack-lg-tile')) {
+            if ((event.key === 'Enter' || (loungeState.selecting && event.key === ' ')) && event.target.classList?.contains('crack-lg-tile')) {
                 event.preventDefault();
                 openLoungeItem(event.target);
             }
@@ -5124,10 +5709,12 @@
 
     function makeLoungeTile(item, index, color, themeColors, currentPath) {
         const tile = ctEl('div', 'crack-lg-tile');
-        tile.setAttribute('role', 'link');
+        tile.setAttribute('role', loungeState.selecting ? 'button' : 'link');
         tile.tabIndex = 0;
+        if (loungeState.selecting) tile.setAttribute('aria-pressed', String(loungeState.selected.has(localChatKey(item.href))));
         tile.dataset.chatId = item.chatId || '';
         tile.dataset.href = item.href || '';
+        tile.classList.toggle('is-picked', loungeState.selected.has(localChatKey(item.href)));
         tile.title = item.source === 'root' ? (item.title || '') : `${item.folderName || '보관함'} / ${item.title || ''}`;
         tile.style.setProperty('--i', String(Math.min(index, 30)));
 
@@ -5163,7 +5750,11 @@
         more.setAttribute('aria-expanded', 'false');
         more.innerHTML = CT_ICON.dots;
 
-        tile.append(thumb, main, ctEl('span', 'crack-lg-date', formatArchiveDate(item.updatedAt)), more);
+        const pick = ctEl('button', 'crack-lg-pick', loungeState.selected.has(localChatKey(item.href)) ? '✓' : '');
+        pick.type = 'button';
+        pick.setAttribute('aria-label', `${item.title || '채팅방'} 선택`);
+        pick.setAttribute('aria-pressed', String(loungeState.selected.has(localChatKey(item.href))));
+        tile.append(pick, thumb, main, ctEl('span', 'crack-lg-date', formatArchiveDate(item.updatedAt)), more);
         return tile;
     }
 
@@ -5186,7 +5777,13 @@
 
         const rootItems = [];
         const folderMap = new Map();
+        const localMap = loadLocalMap();
+        const localFolders = loadLocalFolders().slice(1);
+        const localGroups = localFolders.map(folder => ({ key: `local:${folder.id}`, name: folder.name, color: folder.color, items: [] }));
+        const localGroupsById = new Map(localGroups.map(group => [group.key.slice(6), group]));
         for (const item of items) {
+            const local = localGroupsById.get(folderForItem(item, localMap));
+            if (local) { local.items.push(item); continue; }
             if (item.source === 'root') {
                 rootItems.push(item);
                 continue;
@@ -5196,7 +5793,7 @@
             folderMap.get(key).items.push(item);
         }
         const folders = [...folderMap.values()].sort((a, b) => a.name.localeCompare(b.name, 'ko'));
-        if (!['all', '__root__'].includes(loungeState.folder) && !folderMap.has(loungeState.folder)) {
+        if (!['all', '__root__'].includes(loungeState.folder) && !folderMap.has(loungeState.folder) && !localGroups.some(group => group.key === loungeState.folder)) {
             loungeState.folder = 'all';
         }
 
@@ -5205,15 +5802,19 @@
         rail.replaceChildren(
             makeLoungeRailButton('all', '전체', items.length, CT_ICON.all),
             makeLoungeRailButton('__root__', '채팅 목록', rootItems.length, CT_ICON.chat),
+            ctEl('div', 'crack-lg-rail-h', '내 폴더'),
+            ...localGroups.map(folder => makeLoungeRailButton(folder.key, folder.name, folder.items.length, CT_ICON.folder)),
             ctEl('div', 'crack-lg-rail-h', '보관함'),
             ...folders.map(folder => makeLoungeRailButton(folder.key, folder.name, folder.items.length, CT_ICON.folder))
         );
 
         // 묶음 목록
         let groups;
-        if (loungeState.folder === 'all') groups = [{ key: '__root__', name: '채팅 목록', items: rootItems }, ...folders];
+        if (loungeState.folder === 'all') groups = [...localGroups, { key: '__root__', name: '채팅 목록', items: rootItems }, ...folders];
         else if (loungeState.folder === '__root__') groups = [{ key: '__root__', name: '채팅 목록', items: rootItems }];
-        else groups = [folderMap.get(loungeState.folder)];
+        else groups = [localGroups.find(group => group.key === loungeState.folder) || folderMap.get(loungeState.folder)];
+
+        loungeState.eligible = groups.flatMap(group => group.items.filter(pass).map(item => localChatKey(item.href)));
 
         const limited = loungeState.folder === 'all';
         const currentPath = location.pathname;
@@ -5227,6 +5828,10 @@
             shown += list.length;
 
             const section = ctEl('section', 'crack-lg-group');
+            if (group.color) {
+                section.classList.add('crack-lg-local-folder');
+                section.style.setProperty('--folder-color', group.color);
+            }
             const head = ctEl('div', 'crack-lg-gh');
             head.append(ctEl('strong', '', group.name), ctEl('em', '', list.length.toLocaleString()));
             const grid = ctEl('div', 'crack-lg-grid');
@@ -5296,12 +5901,63 @@
             button.setAttribute('aria-pressed', String(button.dataset.view === loungeState.view));
         });
         root.classList.toggle('is-dense', loungeState.view === 'dense');
+        root.classList.toggle('is-selecting', loungeState.selecting);
+        updateLoungeFolderTools(root, localFolders);
 
         loungeState.lastSig = getLoungeSig();
         playLoungeAnim(mode);
     }
 
+    function updateLoungeFolderTools(root, folders) {
+        const target = root.querySelector('.crack-lg-folder-target');
+        const chosen = target.value;
+        target.replaceChildren();
+        for (const folder of folders) {
+            const option = ctEl('option', '', folder.name);
+            option.value = folder.id;
+            target.append(option);
+        }
+        if (folders.some(folder => folder.id === chosen)) target.value = chosen;
+        root.querySelector('.crack-lg-selected-count').textContent = `${loungeState.selected.size}개 선택`;
+        root.querySelector('[data-folder-tool="select"]').classList.toggle('is-on', loungeState.selecting);
+        root.querySelector('[data-folder-tool="select"]').setAttribute('aria-pressed', String(loungeState.selecting));
+        root.querySelector('[data-folder-tool="all"]').textContent = `전체 선택 (${loungeState.eligible.length})`;
+        root.querySelector('[data-folder-tool="all"]').disabled = !loungeState.eligible.length;
+        root.querySelector('[data-folder-tool="clear"]').disabled = !loungeState.selected.size;
+        root.querySelector('[data-folder-tool="move"]').disabled = !loungeState.selected.size || !folders.length;
+        root.querySelector('[data-folder-tool="remove"]').disabled = !loungeState.selected.size;
+    }
+
+    function onLoungeFolderTool(action) {
+        if (action === 'select') {
+            loungeState.selecting = !loungeState.selecting;
+            if (!loungeState.selecting) loungeState.selected.clear();
+        } else if (action === 'all') {
+            loungeState.selecting = true;
+            loungeState.eligible.forEach(key => loungeState.selected.add(key));
+        } else if (action === 'clear') loungeState.selected.clear();
+        else if (action === 'create') { openLocalFolderManager(true); return; }
+        else if (action === 'manage') { openLocalFolderManager(false); return; }
+        else if (action === 'move' || action === 'remove') {
+            if (!loungeState.selected.size) return;
+            const folderId = action === 'remove' ? LOCAL_ROOT_ID : getLoungeRoot()?.querySelector('.crack-lg-folder-target')?.value;
+            if (!folderId || (folderId !== LOCAL_ROOT_ID && !loadLocalFolders().some(folder => folder.id === folderId))) return;
+            setLocalFolderForKeys([...loungeState.selected], folderId);
+            loungeState.selected.clear();
+        }
+        renderLounge();
+    }
+
+    function toggleLoungeItemSelection(tile) {
+        const key = localChatKey(tile?.dataset?.href);
+        if (!key) return;
+        if (loungeState.selected.has(key)) loungeState.selected.delete(key);
+        else loungeState.selected.add(key);
+        renderLounge();
+    }
+
     function openLoungeItem(tile) {
+        if (loungeState.selecting) { toggleLoungeItemSelection(tile); return; }
         const href = tile?.dataset?.href;
         if (href) location.href = href;
     }
@@ -5365,6 +6021,16 @@
     function onLoungeClick(event) {
         const target = event.target;
         let el;
+
+        if ((el = target.closest('[data-folder-tool]'))) {
+            onLoungeFolderTool(el.dataset.folderTool);
+            return;
+        }
+        if (target.closest('.crack-lg-pick')) {
+            event.stopPropagation();
+            toggleLoungeItemSelection(target.closest('.crack-lg-tile'));
+            return;
+        }
 
         if ((el = target.closest('.crack-lg-pop-dot'))) {
             const chatId = loungeState.popChatId;
@@ -5508,6 +6174,8 @@
         const hadFocus = !!root?.contains(document.activeElement);
 
         loungeState.open = false;
+        loungeState.selecting = false;
+        loungeState.selected.clear();
         clearInterval(loungeState.pollTimer);
         loungeState.pollTimer = 0;
         closeLoungePop();
@@ -5602,6 +6270,7 @@
         try {
             // 1. 검색창 및 보관함/채팅 목록 개수 주입
             injectSearchBar();
+            renderLocalFolderBar();
             ensureArchiveCount();
             scheduleSearchOverlayPositionUpdate();
 
@@ -5744,7 +6413,7 @@
     function installUiPlusInteractionGuard() {
         const PANEL = '[data-crack-ui-chat-list-panel="1"]';
         const ZONE = '#crack-ui-chat-list-zone';
-        const OWN = '#crack-lounge, .crack-so, .crack-lounge-btn, .crack-search-container, #crack-search-overlay, #crack-smart-organize-modal, .custom-palette-container, .crack-smart-organize-menu-item, .crack-resizer-handle';
+        const OWN = '#crack-lounge, #crack-local-folders, #crack-folder-results, #crack-folder-manager, #crack-local-assign, .crack-so, .crack-lounge-btn, .crack-search-container, #crack-search-overlay, #crack-smart-organize-modal, .custom-palette-container, .crack-smart-organize-menu-item, .crack-resizer-handle';
         const nativeMatches = Element.prototype.matches;
         const patched = new Map();
         const dialogs = new Set();
