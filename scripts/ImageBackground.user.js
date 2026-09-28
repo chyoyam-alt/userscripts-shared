@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🖼️ Crack Custom Room Image Background (배경 이미지&테마)
 // @namespace    crack-custom-room-background
-// @version      4.0.4
+// @version      4.0.5
 // @description  오른쪽 메뉴의 "배경 이미지 보기"에서 방별 이미지를 직접 추가하고, 최신 테마(온실·해구·Inkfold·HANGAR 포함)를 적용할 수 있습니다.
 // @match        https://crack.wrtn.ai/*
 // @run-at       document-idle
@@ -49,7 +49,8 @@
   }
 
   const SCRIPT_NAME = 'Custom Room Image Background';
-  const VERSION = '4.0.4';
+  const VERSION = '4.0.5';
+  const SGB_MUTATION_BATCH_MS = 32;
 
   /**
    * 값 조절은 여기만 보면 됨.
@@ -16865,9 +16866,8 @@ html.${CLS_ACTIVE}[data-sgb-ui-style="arcana"][data-sgb-theme="light"][data-sgb-
   function onGenerateDoneSignal() {
     if (!isRoomPath()) return;
 
-    // Game HUD와 같은 generate_done 중심 경로: 전체 채팅을 다시 훑지 않고 최신 그룹만 마무리한다.
+    // 방별 배경은 생성된 메시지와 무관하므로 최신 그룹 장식만 마무리한다.
     scheduleFinalizeLatestMessage('generate-done', 500);
-    scheduleRefresh('generate-done', 700);
   }
 
   function getThemeObserverSignature() {
@@ -17018,9 +17018,12 @@ html.${CLS_ACTIVE}[data-sgb-ui-style="arcana"][data-sgb-theme="light"][data-sgb-
 
   function installObservers() {
     if (state.observer) state.observer.disconnect();
+    clearTimeout(state.observerMutationTimer);
+    state.observerMutationTimer = 0;
+    state.observerMutationBuffer = [];
 
     const observerRoot = document.body || document.documentElement;
-    state.observer = new MutationObserver(mutations => {
+    const processMutations = mutations => {
       state.__sgbLastMutationAt = Date.now();
       const groups = new Set();
       let shouldRefresh = false;
@@ -17086,6 +17089,21 @@ html.${CLS_ACTIVE}[data-sgb-ui-style="arcana"][data-sgb-theme="light"][data-sgb-
       }
       if (shouldDecorateStaticUi) scheduleStaticUiDecorate('mutation', 90);
       if (shouldRefresh) scheduleRefresh('mutation', 700);
+    };
+
+    state.observer = new MutationObserver(mutations => {
+      const relevant = mutations.filter(mutation => mutation.type !== 'attributes'
+        || (mutation.target instanceof Element && mutation.target.matches?.('.csp-generated-scene-image img')));
+      if (!relevant.length) return;
+      state.observerMutationBuffer.push(...relevant);
+      if (state.observerMutationTimer) return;
+      // 고정된 짧은 창으로 묶어 연속 스트리밍에도 처리가 무기한 밀리지 않게 한다.
+      state.observerMutationTimer = window.setTimeout(() => {
+        state.observerMutationTimer = 0;
+        const batch = state.observerMutationBuffer;
+        state.observerMutationBuffer = [];
+        processMutations(batch);
+      }, SGB_MUTATION_BATCH_MS);
     });
 
     state.observer.observe(observerRoot, {
