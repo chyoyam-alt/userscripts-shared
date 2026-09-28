@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.5.5
+// @version      4.5.6
 // @description  코드블록 자동 줄바꿈, 라이트 테마 코드·보조 글자 대비 수정, 테마 판별 통일, DOM·캐시·라디오존데 반복 처리 최적화. 모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       Assistant
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/crack-mobile-utility.user.js
@@ -30,7 +30,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.5.5';
+    const VERSION = '4.5.6';
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
     const CMU_RUNTIME_KEY = '__CRACK_MOBILE_UTILITY_RUNTIME__';
     const runtimeRoot = document.documentElement;
@@ -1294,18 +1294,18 @@
       font-size: calc(1em * var(--cmu-font-scale, 1)) !important;
     }
 
-    html.cmu-enabled main [data-message-group-id] .wrtn-markdown :is(p, li, blockquote, h1, h2, h3, h4, h5, h6):not(:where(pre, pre *, code, .wrtn-codeblock, .wrtn-codeblock *)),
-    html.cmu-enabled main [data-message-group-id] [class*="wrtn-markdown"] :is(p, li, blockquote, h1, h2, h3, h4, h5, h6):not(:where(pre, pre *, code, .wrtn-codeblock, .wrtn-codeblock *)),
-    html.cmu-enabled main [data-message-group-id] .markdown-body :is(p, li, blockquote, h1, h2, h3, h4, h5, h6):not(:where(pre, pre *, code, .wrtn-codeblock, .wrtn-codeblock *)),
-    html.cmu-enabled main [data-message-group-id] .prose :is(p, li, blockquote, h1, h2, h3, h4, h5, h6):not(:where(pre, pre *, code, .wrtn-codeblock, .wrtn-codeblock *)) {
+    html.cmu-enabled main [data-message-group-id] .wrtn-markdown :is(p, li, blockquote):not(:where(pre, pre *, code, .wrtn-codeblock, .wrtn-codeblock *)),
+    html.cmu-enabled main [data-message-group-id] [class*="wrtn-markdown"] :is(p, li, blockquote):not(:where(pre, pre *, code, .wrtn-codeblock, .wrtn-codeblock *)),
+    html.cmu-enabled main [data-message-group-id] .markdown-body :is(p, li, blockquote):not(:where(pre, pre *, code, .wrtn-codeblock, .wrtn-codeblock *)),
+    html.cmu-enabled main [data-message-group-id] .prose :is(p, li, blockquote):not(:where(pre, pre *, code, .wrtn-codeblock, .wrtn-codeblock *)) {
       font-size: inherit !important;
       line-height: inherit !important;
     }
 
-    html.cmu-enabled main [data-message-group-id] .wrtn-markdown :is(p, li, blockquote, h1, h2, h3, h4, h5, h6) :not(:where(pre, pre *, code, code *, .wrtn-codeblock, .wrtn-codeblock *)),
-    html.cmu-enabled main [data-message-group-id] [class*="wrtn-markdown"] :is(p, li, blockquote, h1, h2, h3, h4, h5, h6) :not(:where(pre, pre *, code, code *, .wrtn-codeblock, .wrtn-codeblock *)),
-    html.cmu-enabled main [data-message-group-id] .markdown-body :is(p, li, blockquote, h1, h2, h3, h4, h5, h6) :not(:where(pre, pre *, code, code *, .wrtn-codeblock, .wrtn-codeblock *)),
-    html.cmu-enabled main [data-message-group-id] .prose :is(p, li, blockquote, h1, h2, h3, h4, h5, h6) :not(:where(pre, pre *, code, code *, .wrtn-codeblock, .wrtn-codeblock *)) {
+    html.cmu-enabled main [data-message-group-id] .wrtn-markdown :is(p, li, blockquote) :not(:where(pre, pre *, code, code *, .wrtn-codeblock, .wrtn-codeblock *, h1, h2, h3, h4, h5, h6)),
+    html.cmu-enabled main [data-message-group-id] [class*="wrtn-markdown"] :is(p, li, blockquote) :not(:where(pre, pre *, code, code *, .wrtn-codeblock, .wrtn-codeblock *, h1, h2, h3, h4, h5, h6)),
+    html.cmu-enabled main [data-message-group-id] .markdown-body :is(p, li, blockquote) :not(:where(pre, pre *, code, code *, .wrtn-codeblock, .wrtn-codeblock *, h1, h2, h3, h4, h5, h6)),
+    html.cmu-enabled main [data-message-group-id] .prose :is(p, li, blockquote) :not(:where(pre, pre *, code, code *, .wrtn-codeblock, .wrtn-codeblock *, h1, h2, h3, h4, h5, h6)) {
       font-size: inherit !important;
     }
 
@@ -18029,6 +18029,20 @@
     ['fullscreenchange', 'webkitfullscreenchange'].forEach(type => {
         cmuListen(document, type, () => syncCmuFullscreenControls(document), true);
     });
+    // 모바일 전체화면에서는 키보드가 화면을 밀어 올리지 못해 입력창이 가려지므로, 채팅 입력을 시작하면 전체화면을 푼다.
+    const exitCmuFullscreenForChatInput = e => {
+        if (!isCmuFullscreenActive() || !isMobileLike() || !isChatInputElement(e.target))
+            return;
+        const exit = document.exitFullscreen || document.webkitExitFullscreen;
+        if (!exit)
+            return;
+        try {
+            Promise.resolve(exit.call(document)).catch(() => { }).then(() => syncCmuFullscreenControls());
+        }
+        catch (_) { }
+    };
+    cmuListen(document, 'focusin', exitCmuFullscreenForChatInput, true);
+    cmuListen(document, 'pointerdown', exitCmuFullscreenForChatInput, true);
     cmuRegisterGlobalGesture('native-situation-image', signal => {
         ['pointerdown', 'mousedown', 'touchstart'].forEach(type => {
             cmuGestureListen(signal, document, type, e => {
