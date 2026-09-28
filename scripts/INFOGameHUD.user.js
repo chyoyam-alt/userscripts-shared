@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         👾 Crack INFO Game HUD (미니 RPG HUD)
 // @namespace    crack-info-game-hud-clean
-// @version      3.5.9
+// @version      3.5.10
 // @description  크랙 채팅 최신 답변을 게임식 로그·관계도·HUD 코멘트로 정리하고, PET/마스코트·토큰 사용량·암호화 클라우드 인계·펫 다이어리를 지원합니다.
 // @author       뤼부이
-// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/INFOGameHUD.user.js
-// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/INFOGameHUD.user.js
+// @updateURL    https://gist.github.com/chyoyam-alt/e7370c75740314a4a34e4c1d2d4ed9d2/raw/INFOGameHUD.user.js
+// @downloadURL  https://gist.github.com/chyoyam-alt/e7370c75740314a4a34e4c1d2d4ed9d2/raw/INFOGameHUD.user.js
 // @match        https://crack.wrtn.ai/*
 // @run-at       document-idle
 // @grant        GM_xmlhttpRequest
@@ -29,7 +29,7 @@
   if (window.__CIGH_CLEAN_V240_RELEASE_LOADED__) return;
   window.__CIGH_CLEAN_V240_RELEASE_LOADED__ = true;
 
-  const VERSION = '3.5.9';
+  const VERSION = '3.5.10';
   const FAB_ID = 'cigh-clean-fab';
   const PANEL_ID = 'cigh-clean-panel';
   const POPUP_ID = 'cigh-clean-popup';
@@ -9113,11 +9113,11 @@
     const width = Math.max(1, Math.min(Math.round(rect.width), vp.width - left));
     let bottom = Math.max(0, vp.height - anchorTop + 1);
 
-    ticker.style.left = left + 'px';
-    ticker.style.width = width + 'px';
-    ticker.style.right = 'auto';
-    ticker.style.top = 'auto';
-    ticker.style.bottom = bottom + 'px';
+    setStyleIfChanged(ticker, 'left', left + 'px');
+    setStyleIfChanged(ticker, 'width', width + 'px');
+    setStyleIfChanged(ticker, 'right', 'auto');
+    setStyleIfChanged(ticker, 'top', 'auto');
+    setStyleIfChanged(ticker, 'bottom', bottom + 'px');
     setTickerBoxVisible(ticker);
 
     const livePopup = document.getElementById('igx-live-popup');
@@ -9129,15 +9129,38 @@
         && popupStyle.visibility !== 'collapse' && rectsIntersect(tickerRect, popupRect)) {
         // Align above the popup even when it fully contains the ticker vertically.
         bottom = Math.max(bottom, vp.height - popupRect.top + 1);
-        ticker.style.bottom = bottom + 'px';
+        setStyleIfChanged(ticker, 'bottom', bottom + 'px');
       }
     }
 
     return true;
   }
 
+
+
+  // Adopted from 3.5.8.1: suppress redundant DOM writes and allow adjacent extension icons.
+  function setStyleIfChanged(el, prop, value) {
+    if (el && el.style[prop] !== value) el.style[prop] = value;
+  }
+
+  function setAttrIfChanged(el, name, value) {
+    if (el && el.getAttribute(name) !== value) el.setAttribute(name, value);
+  }
+
+  function isPanelShown() {
+    const panel = document.getElementById(PANEL_ID);
+    return !!panel && panel.classList.contains('open') && panel.style.display !== 'none';
+  }
+
+  function isDockFabPlaced(dockFab, titleButton) {
+    return !!dockFab?.isConnected
+      && dockFab.parentElement === titleButton?.parentElement
+      && !!(titleButton.compareDocumentPosition(dockFab) & Node.DOCUMENT_POSITION_FOLLOWING);
+  }
   function applyDockButtonInlineStyle(dockFab) {
     if (!(dockFab instanceof HTMLElement)) return;
+    // 이미 입힌 스타일이 그대로면 건너뛴다. 누가 바꿨으면 예전처럼 다시 입힌다.
+    if (dockFab.__cighDockCssApplied && dockFab.style.cssText === dockFab.__cighDockCssApplied) return;
     dockFab.style.cssText = [
       'margin-left: 6px',
       'margin-right: auto',
@@ -9164,13 +9187,14 @@
       'box-shadow: var(--cigh-shadow-fab)',
       'z-index: 10'
     ].join('; ');
+    dockFab.__cighDockCssApplied = dockFab.style.cssText;
   }
 
   function ensureDockButtonInHeader(titleButton) {
     if (!(titleButton instanceof HTMLElement) || !(titleButton.parentElement instanceof HTMLElement)) return null;
 
     let dockFab = document.getElementById(DOCK_FAB_ID);
-    if (dockFab?.isConnected && dockFab.previousElementSibling === titleButton && dockFab.parentElement === titleButton.parentElement) {
+    if (isDockFabPlaced(dockFab, titleButton)) {
       applyDockButtonInlineStyle(dockFab);
       return dockFab;
     }
@@ -9194,7 +9218,9 @@
     }
 
     applyDockButtonInlineStyle(dockFab);
-    titleButton.insertAdjacentElement('afterend', dockFab);
+    // CrackSafe 아이콘이 제목 바로 옆에 있으면 그 뒤에 선다(제목 → CrackSafe → ◆).
+    const anchor = titleButton.nextElementSibling?.id === 'hcd-hdr-btn' ? titleButton.nextElementSibling : titleButton;
+    anchor.insertAdjacentElement('afterend', dockFab);
     return dockFab;
   }
 
@@ -9229,7 +9255,7 @@
 
   function setTickerBoxVisible(ticker, visible = shouldShowTickerBox()) {
     if (!ticker) return;
-    ticker.style.display = visible ? 'block' : 'none';
+    setStyleIfChanged(ticker, 'display', visible ? 'block' : 'none');
   }
 
   function positionDockUi() {
@@ -9245,7 +9271,7 @@
     }
 
     const { dockFab, ticker, titleButton } = ui;
-    if (!dockFab?.isConnected || dockFab.previousElementSibling !== titleButton || dockFab.parentElement !== titleButton.parentElement) {
+    if (!isDockFabPlaced(dockFab, titleButton)) {
       try {
         document.getElementById(DOCK_FAB_ID)?.remove();
         ensureDockButtonInHeader(titleButton);
@@ -9254,15 +9280,16 @@
       }
     }
 
-    document.documentElement.classList.add(DOCK_ACTIVE_CLASS);
+    // classList.add는 이미 있는 클래스여도 <html>에 변경 기록을 남겨 테마 감시(applyThemeMode)를 다시 돌렸다.
+    document.documentElement.classList.toggle(DOCK_ACTIVE_CLASS, true);
 
     const fab = document.getElementById(FAB_ID);
-    if (fab) fab.style.display = 'none';
+    setStyleIfChanged(fab, 'display', 'none');
 
     const popup = document.getElementById(POPUP_ID);
     const commentPopup = document.getElementById(COMMENT_POPUP_ID);
-    popup?.classList.remove('show');
-    commentPopup?.classList.remove('show');
+    popup?.classList.toggle('show', false);
+    commentPopup?.classList.toggle('show', false);
 
     if (!positionTickerNearInput(ticker)) {
       teardownDockUi();
@@ -9375,7 +9402,7 @@
   }
 
   function teardownDockUi() {
-    document.documentElement.classList.remove(DOCK_ACTIVE_CLASS);
+    document.documentElement.classList.toggle(DOCK_ACTIVE_CLASS, false);
     const dockFab = document.getElementById(DOCK_FAB_ID);
     const ticker = document.getElementById(TICKER_ID);
     dockFab?.remove();
@@ -9383,7 +9410,7 @@
     resetTickerLine();
 
     const fab = document.getElementById(FAB_ID);
-    if (fab) fab.style.display = isHudUiRouteAllowed() ? '' : 'none';
+    setStyleIfChanged(fab, 'display', isHudUiRouteAllowed() ? '' : 'none');
   }
 
   function syncHudUiForRoute() {
@@ -9396,17 +9423,17 @@
 
       const panel = document.getElementById(PANEL_ID);
       if (panel) {
-        panel.classList.remove('open');
-        panel.style.display = 'none';
+        panel.classList.toggle('open', false);
+        setStyleIfChanged(panel, 'display', 'none');
       }
 
       { const settings = document.getElementById(SETTINGS_ID); if (settings && !settings.rbRequestClose) settings.remove(); }
-      document.getElementById(COMMENT_POPUP_ID)?.classList.remove('show');
-      if (fab) fab.style.display = 'none';
+      document.getElementById(COMMENT_POPUP_ID)?.classList.toggle('show', false);
+      setStyleIfChanged(fab, 'display', 'none');
       return false;
     }
 
-    if (fab && !isDockActive()) fab.style.display = '';
+    if (fab && !isDockActive()) setStyleIfChanged(fab, 'display', '');
     return true;
   }
 
@@ -9428,7 +9455,7 @@
         teardownDockUi();
         return;
       }
-      if (!dockFab?.isConnected || dockFab.previousElementSibling !== titleButton || dockFab.parentElement !== titleButton.parentElement) {
+      if (!isDockFabPlaced(dockFab, titleButton)) {
         dockFab?.remove();
       }
       positionDockUi();
@@ -10896,8 +10923,8 @@ ${String(brokenJson || '').slice(0, 14000)}`;
 
     const popup = document.getElementById(POPUP_ID);
     if (popup) {
-      popup.classList.remove('show');
-      popup.innerHTML = '';
+      popup.classList.toggle('show', false);
+      if (popup.firstChild) popup.innerHTML = '';
     }
   }
 
@@ -10930,6 +10957,15 @@ ${String(brokenJson || '').slice(0, 14000)}`;
 
     let pos = 0;
     const tick = () => {
+      // 패널이 닫혀 있으면 보이지 않는 푸터에 0.06초마다 글자를 쓰지 않는다.
+      // 다음 문구로 넘어가는 시각(코멘트 팝업 순서 포함)은 타이핑했을 때와 같게 맞춘다.
+      if (!isPanelShown()) {
+        const remainingTicks = Math.max(0, Math.ceil((comment.length - pos) / 2) - 1);
+        footerLastText = comment;
+        footerTypingTimer = null;
+        footerLoopTimer = setTimeout(typeFooterComment, remainingTicks * 60 + 6400);
+        return;
+      }
       pos += 2;
       footerLastText = comment.slice(0, pos);
 
@@ -11776,7 +11812,7 @@ ${String(brokenJson || '').slice(0, 14000)}`;
     const html = renderPetSpriteHTML(pet, size);
     const signature = `${mode}|${size}|${html}`;
 
-    container.dataset.cighPetMode = mode;
+    if (container.dataset.cighPetMode !== mode) container.dataset.cighPetMode = mode;
     container.classList.toggle('is-sleep', mode === 'sleep');
 
     // 같은 상태/같은 도트는 다시 그리지 않는다.
@@ -13470,7 +13506,7 @@ ${String(brokenJson || '').slice(0, 14000)}`;
 
     updateMascotSprite();
     if (isPetSleeping()) {
-      el.style.transition = 'none';
+      setStyleIfChanged(el, 'transition', 'none');
       scheduleMascotWander();
       return;
     }
@@ -14603,6 +14639,9 @@ ${String(brokenJson || '').slice(0, 14000)}`;
         // 기존 시퀀스를 재시작하지 않는다. 재시작하면 남은 팝업 카운트가 0으로 초기화된다.
         if (!isFooterCommentSequenceActive()) {
           startFooterComments(data.hudComments, { popup: false });
+        } else if (footerLastText) {
+          // 닫혀 있는 동안 건너뛴 타이핑 대신 지금 문구를 바로 보여 준다.
+          setFooter(footerLastText);
         }
       } else if (footerLastText) {
         setFooter(footerLastText);
@@ -16128,10 +16167,10 @@ ${String(brokenJson || '').slice(0, 14000)}`;
       document.getElementById(SETTINGS_ID),
       document.getElementById(MASCOT_ID),
     ].filter(Boolean).forEach(el => {
-      el.setAttribute('data-cigh-theme', mode);
+      setAttrIfChanged(el, 'data-cigh-theme', mode);
 
       const prevFont = el.getAttribute('data-cigh-font');
-      el.setAttribute('data-cigh-font', fontSize);
+      setAttrIfChanged(el, 'data-cigh-font', fontSize);
 
       // 최초 로드가 아니라 설정에서 실제 UI 크기가 바뀐 경우에만
       // 이전 크기의 인라인 width/height를 버리고 새 크기의 기본값을 적용한다.
