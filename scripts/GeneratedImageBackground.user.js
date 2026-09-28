@@ -2479,6 +2479,7 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
       novelShadeOpacity: current.novelShadeOpacity,
       textShadowEnabled: current.textShadowEnabled,
       customFontCssUrl: current.customFontCssUrl,
+      inputFontEnabled: current.inputFontEnabled,
       customFontFamily: current.customFontFamily,
       textScale: current.textScale,
       codeTextScale: current.codeTextScale,
