@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽 Wish RP Manager Core
 // @namespace    local.rp.context.manager
-// @version      1.3.7
+// @version      1.3.8
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @description  Crack RP용 컨텍스트 주입·인지·자동 장기기억·자료집·전체 재구축을 하나로 관리합니다.
@@ -46,7 +46,7 @@
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '1.3.7';
+  const SCRIPT_VERSION = '1.3.8';
   const RUNTIME_KEY = '__WISH_RP_MANAGER_V1__';
   const RELOAD_GUARD_KEY = `WISH_RP_clean_reload_${SCRIPT_VERSION}`;
   const previousRuntime = window[RUNTIME_KEY];
@@ -12691,6 +12691,8 @@ body[data-theme="dark"] .m3-ui,body[data-theme="dark"] #wish-rp-monitor{--m3-she
 .m3-dialog.m3-leaving{animation:m3-ovlOut .22s var(--m3-ease) both;pointer-events:none}
 .m3-sheet{width:min(560px,100%);max-height:calc(100% - 8px);display:flex;flex-direction:column;min-height:0;border-radius:var(--m3-r-card);border:1px solid var(--m3-line);background:var(--m3-sheet);box-shadow:0 34px 70px -26px rgba(0,0,0,.45);overflow:hidden;animation:m3-sheetIn .46s var(--m3-spring) both}
 .m3-sheet.wide{width:min(880px,100%)}
+.m3-dialog>[data-approved-view]{animation:m3-sheetIn .46s var(--m3-spring) both}
+.m3-dialog.m3-leaving>[data-approved-view]{animation:m3-sheetOut .22s var(--m3-ease) both}
 .m3-dialog.m3-leaving .m3-sheet{animation:m3-sheetOut .22s var(--m3-ease) both}
 @keyframes m3-sheetIn{from{opacity:0;transform:translateY(18px) scale(.955)}}
 @keyframes m3-sheetOut{to{opacity:0;transform:translateY(8px) scale(.98)}}
@@ -13334,29 +13336,42 @@ font-family:var(--f);color:var(--m3-fg);-webkit-font-smoothing:antialiased}
 .m3-ui.dark{--m3-sheet:#181c25;--m3-bg:#121620;--m3-card:#1f2430;--m3-card2:#252b39;--m3-line:#303747;--m3-line2:#272d3a;--m3-fg:#eef1f8;--m3-fg2:#b2bacd;--m3-muted:#828ba3;--m3-accent:#8ba1e4;--m3-accent-ink:#141a28;--m3-accent-soft:#232a3c;--m3-accent-line:#39425c;--m3-ok:#78c8ab;--m3-warn:#d5ab6d;--m3-danger:#e08b96;
 --m3-shadow:0 1px 1px rgba(0,0,0,.25),0 12px 26px -20px rgba(0,0,0,.8);--m3-shell-shadow:0 28px 64px -32px rgba(0,0,0,.85)}
 svg.ic{width:15px;height:15px;flex:none}
-.m3-shell{display:flex;flex-direction:column;max-height:calc(100dvh - 32px);border-radius:16px;border:1px solid var(--m3-line);background:var(--m3-sheet);box-shadow:var(--m3-shell-shadow);overflow:hidden}
-.m3-head{display:flex;align-items:center;gap:10px;padding:13px 12px 12px 16px;border-bottom:1px solid var(--m3-line2);flex:none}
-.hd-ic{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:var(--m3-accent-soft);color:var(--m3-accent);flex:none}
-.hd-ic svg.ic{width:17px;height:17px}
-.m3-head strong{font-size:15.5px;font-weight:650;letter-spacing:-.2px;white-space:nowrap}
-.m3-head small{font-size:11.5px;color:var(--m3-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.m3-shell{display:flex;flex-direction:column;max-height:calc(100dvh - 32px);border-radius:11px;border:1px solid var(--m3-line);background:var(--m3-sheet);box-shadow:0 34px 70px -26px rgba(0,0,0,.45);overflow:hidden}
+.m3-head{display:flex;align-items:flex-start;gap:12px;padding:16px 16px 13px 18px;border-bottom:1px solid var(--m3-line2);flex:none}
+.hd-ic{display:none}
+.hd-t{flex:1;min-width:0}
+.m3-head strong{display:block;font-size:16px;font-weight:600;line-height:1.4}
+.m3-head small{display:block;font-size:12px;line-height:1.7;color:var(--m3-muted);margin-top:2px}
+.m3-head small:empty{display:none}
+.icb.x{width:34px;height:34px}
+.icb.x svg.ic{width:17px;height:17px}
+.m3-foot{flex:none;display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid var(--m3-line2);background:var(--m3-card2)}
 .grow{flex:1;min-width:0}
 .icb{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:var(--m3-muted);flex:none;transition:background .2s,color .2s}
 .icb:hover:not(:disabled){background:var(--m3-card2);color:var(--m3-fg)}
 .icb:disabled{opacity:.28}
 .icb:focus-visible,.chipb:focus-visible,.seg button:focus-visible{outline:2px solid var(--m3-accent);outline-offset:1px}
-.m3-body{flex:1;min-height:0;overflow:auto;padding:14px;background:var(--m3-bg);scrollbar-width:thin;scrollbar-color:var(--m3-line) transparent}
-.box{border:1px solid var(--m3-line);border-radius:12px;background:var(--m3-card);box-shadow:var(--m3-shadow)}
-.sec-t{display:flex;align-items:center;justify-content:space-between;font-size:11.5px;font-weight:600;color:var(--m3-muted);margin:16px 2px 7px;letter-spacing:.02em}
+.m3-body{flex:1;min-height:0;overflow:auto;padding:16px 18px;background:var(--m3-sheet);scrollbar-width:thin;scrollbar-color:var(--m3-line) transparent}
+.box{border:1px solid var(--m3-line);border-radius:11px;background:var(--m3-card);box-shadow:var(--m3-shadow)}
+.sec-t{display:flex;align-items:center;justify-content:space-between;font-size:13.5px;font-weight:600;color:var(--m3-fg);margin:20px 1px 10px}
 .muted{color:var(--m3-muted)}
-.empty{padding:18px 12px;text-align:center;font-size:12px;color:var(--m3-muted)}
+.empty{padding:26px 14px;text-align:center;font-size:12.5px;line-height:1.8;color:var(--m3-muted);border:1px dashed var(--m3-line);border-radius:11px}
+.box .empty{border:0;padding:18px 12px}
+.two>.empty{margin:16px 18px}
 .chipb{font-size:11.5px;padding:4px 10px;border-radius:999px;border:1px solid var(--m3-line);background:var(--m3-card);color:var(--m3-fg2);white-space:nowrap;transition:background .2s,color .2s,border-color .2s}
 .chipb:hover:not(:disabled){border-color:var(--m3-accent-line);color:var(--m3-accent)}
 .chipb[aria-pressed=true]{background:var(--m3-accent-soft);color:var(--m3-accent);border-color:var(--m3-accent-line);font-weight:600}
-.seg{display:flex;gap:2px;padding:2px;border-radius:9px;background:var(--m3-card2)}
+.seg{display:flex;gap:2px;padding:2px;border-radius:9px;background:var(--m3-card2);border:1px solid var(--m3-line)}
 .seg button{font-size:11.5px;padding:4px 10px;border-radius:7px;color:var(--m3-muted);transition:background .25s,color .25s}
 .seg button[aria-pressed=true]{background:var(--m3-card);color:var(--m3-fg);font-weight:600;box-shadow:var(--m3-shadow)}
-.btn{display:inline-flex;align-items:center;gap:5px;border-radius:8px;padding:7px 13px;font-size:12px;font-weight:550;border:1px solid var(--m3-line);background:var(--m3-card);color:var(--m3-fg2)}
+.seg.tabs{gap:3px;padding:3px;border:0;border-radius:11px;margin-bottom:14px}
+.seg.tabs button{flex:1;padding:8px 3px;border-radius:8px;font-size:12px;font-weight:500}
+.seg.tabs button[aria-pressed=true]{font-weight:600}
+.btn{display:inline-flex;align-items:center;gap:6px;border-radius:8px;padding:8px 13px;font-size:12.5px;font-weight:500;border:1px solid var(--m3-line);background:var(--m3-card);color:var(--m3-fg2);white-space:nowrap;transition:background .2s,color .2s,border-color .2s,transform .22s var(--spring)}
+.btn:hover{background:var(--m3-card2);color:var(--m3-fg);border-color:var(--m3-accent-line);transform:translateY(-1px)}
+.btn:active{transform:scale(.96)}
+.btn:focus-visible{outline:2px solid var(--m3-accent);outline-offset:1px}
+.btn.more{display:flex;margin:6px auto 0}
 .btn.pri{background:var(--m3-accent);color:var(--m3-accent-ink);border-color:transparent}
 .st{font-size:10.5px;line-height:1.5;padding:1px 8px;border-radius:999px;white-space:nowrap;color:var(--m3-muted);background:var(--m3-card2)}
 .st.inj{color:var(--m3-ok);background:color-mix(in srgb,var(--m3-ok) 12%,transparent)}
@@ -13370,7 +13385,6 @@ summary::-webkit-details-marker{display:none}
 @keyframes fadein{from{opacity:0}}
 
 /* ── 가계부 ── */
-[data-kind=cost] .m3-head .seg{margin-left:auto}
 .mnav{display:flex;align-items:center;justify-content:center;gap:6px;margin:-2px 0 10px}
 .mnav.off{display:none}
 .mnav b{min-width:110px;text-align:center;font-size:14px;font-weight:650;font-variant-numeric:tabular-nums}
@@ -13412,7 +13426,7 @@ summary::-webkit-details-marker{display:none}
 .pane-r{min-width:0}
 @media(min-width:760px){
  .two{display:grid;grid-template-columns:minmax(330px,1fr) minmax(0,1fr);grid-template-rows:minmax(0,1fr);gap:0;padding:0;overflow:hidden}
- .two>.pane-l,.two>.pane-r{padding:14px;overflow:auto;min-height:0;scrollbar-width:thin;scrollbar-color:var(--m3-line) transparent}
+ .two>.pane-l,.two>.pane-r{padding:16px 18px;overflow:auto;min-height:0;scrollbar-width:thin;scrollbar-color:var(--m3-line) transparent}
  .two>.pane-r{border-left:1px solid var(--m3-line2);background:var(--m3-sheet)}
  [data-kind=map] .two{grid-template-columns:minmax(0,1.25fr) minmax(300px,1fr)}
 }
@@ -13478,9 +13492,10 @@ summary::-webkit-details-marker{display:none}
 
 /* ── 관계도 ── */
 .tools{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
-.search{flex:1;min-width:140px;display:flex;align-items:center;gap:6px;padding:0 10px;height:30px;border-radius:9px;border:1px solid var(--m3-line);background:var(--m3-card);color:var(--m3-muted)}
-.search input{flex:1;min-width:0;border:0;background:none;outline:none;font-size:12px;color:var(--m3-fg)}
-.search:focus-within{border-color:var(--m3-accent)}
+.search{flex:1;min-width:140px;display:flex;align-items:center;gap:8px;padding:0 12px;height:36px;border-radius:8px;border:1px solid var(--m3-line);background:var(--m3-card2);color:var(--m3-muted);transition:border-color .24s,background .24s,box-shadow .24s}
+.search input{flex:1;min-width:0;border:0;background:none;outline:none;font-size:13px;color:var(--m3-fg)}
+.search input::placeholder{color:var(--m3-muted)}
+.search:focus-within{border-color:var(--m3-accent-line);background:var(--m3-card);box-shadow:0 0 0 3.5px var(--m3-accent-soft);color:var(--m3-accent)}
 .filters{display:flex;gap:4px}
 .map{position:relative;overflow:hidden;background:radial-gradient(ellipse at 50% 50%,var(--m3-accent-soft) 0,transparent 65%),var(--m3-card)}
 .map>svg{display:block;width:100%;height:auto;touch-action:manipulation}
@@ -13604,14 +13619,15 @@ svg.ic-calendar rect:last-of-type,svg.ic-relation circle,svg.ic-list path,svg.ic
 [data-kind=diff] .m3-shell{height:min(720px,calc(100dvh - 32px))}
 [data-kind=diff] .m3-shell:has(.two>.empty){height:auto}
 @media(min-width:760px){[data-kind=diff] .two{grid-template-columns:240px minmax(0,1fr)}}
-.tl{background:var(--m3-bg)}
+.tl{background:var(--m3-sheet)}
 .tl-h{font-size:11px;font-weight:600;color:var(--m3-muted);margin:0 4px 8px}
 .tl button{position:relative;display:block;width:100%;text-align:left;padding:9px 10px 9px 26px;border-radius:9px;margin-bottom:3px;transition:background .2s;animation:rise .35s var(--spring) both;animation-delay:calc(var(--i)*35ms)}
-.tl button::before{content:"";position:absolute;left:11px;top:14px;width:7px;height:7px;border-radius:50%;background:var(--m3-line);box-shadow:0 0 0 3px var(--m3-bg)}
+.tl button::before{content:"";position:absolute;left:11px;top:14px;width:7px;height:7px;border-radius:50%;background:var(--m3-line);box-shadow:0 0 0 3px var(--m3-sheet)}
 .tl button::after{content:"";position:absolute;left:14px;top:24px;bottom:-12px;width:1px;background:var(--m3-line)}
 .tl button:last-child::after{display:none}
 .tl button:hover{background:var(--m3-card2)}
-.tl button.sel{background:var(--m3-card);box-shadow:var(--m3-shadow)}
+.tl button.sel{background:var(--m3-accent-soft)}
+.tl button.sel .r{color:var(--m3-accent)}
 .tl button.sel::before{background:var(--m3-accent)}
 .tl .r{display:block;font-size:12px;font-weight:600;color:var(--m3-fg)}
 .tl .a{display:block;font-size:10.5px;color:var(--m3-muted);margin-top:2px}
@@ -13639,10 +13655,10 @@ svg.ic-calendar rect:last-of-type,svg.ic-relation circle,svg.ic-list path,svg.ic
 .scope svg.ic{margin-top:2px}`;
   const APPROVED_TEMPLATES={
 cost:`<div class="m3-shell">
- <div class="m3-head"><span class="hd-ic"></span><strong>AI 사용량</strong><span class="grow"></span>
-  <div class="seg" data-mode><button data-v="month" aria-pressed="true">월별</button><button data-v="all" aria-pressed="false">12개월</button></div>
-  <button class="icb" aria-label="닫기" data-ic="close"></button></div>
+ <div class="m3-head"><span class="hd-ic"></span><div class="hd-t"><strong>AI 사용량</strong><small>이 브라우저 · 모든 방 합산 · 최근 12개월</small></div>
+  <button class="icb x" aria-label="닫기" data-close data-ic="close"></button></div>
  <div class="m3-body">
+  <div class="seg tabs" data-mode><button data-v="month" aria-pressed="true">월별</button><button data-v="all" aria-pressed="false">12개월</button></div>
   <div class="mnav" data-nav><button class="icb" data-prev aria-label="이전 달" data-ic="left"></button><b data-label></b><button class="icb" data-next aria-label="다음 달" data-ic="right"></button></div>
   <div class="box" data-cap>
    <div class="sum"><div><div class="k">예상 비용</div><div class="big" data-usd></div></div>
@@ -13654,10 +13670,11 @@ cost:`<div class="m3-shell">
   <div class="sec-t">작업별</div><div class="box list" data-tasks></div>
   <div class="sec-t">모델별</div><div class="box list" data-models></div>
   <p class="note" data-note></p>
- </div></div>`,
+ </div>
+ <div class="m3-foot"><span class="grow"></span><button type="button" class="btn" data-close>닫기</button></div></div>`,
 cal:`<div class="m3-shell">
- <div class="m3-head"><span class="hd-ic"></span><strong>날짜로그 달력</strong><small data-count></small><span class="grow"></span>
-  <button class="icb" aria-label="닫기" data-ic="close"></button></div>
+ <div class="m3-head"><span class="hd-ic"></span><div class="hd-t"><strong>날짜로그 달력</strong><small data-count></small></div>
+  <button class="icb x" aria-label="닫기" data-close data-ic="close"></button></div>
  <div class="m3-body two">
   <div class="pane-l">
    <div class="box cal">
@@ -13675,10 +13692,11 @@ cal:`<div class="m3-shell">
    <div data-cards></div>
    <details class="nodate" data-nd><summary><span data-ic="clock"></span><span data-nd-sum></span><span class="chev" data-ic="chev"></span></summary><div class="nd-in" data-nd-list></div></details>
   </div>
- </div></div>`,
+ </div>
+ <div class="m3-foot"><span class="grow"></span><button type="button" class="btn" data-close>닫기</button></div></div>`,
 map:`<div class="m3-shell">
- <div class="m3-head"><span class="hd-ic"></span><strong>인물 관계도</strong><small data-count></small><span class="grow"></span>
-  <button class="icb" aria-label="닫기" data-ic="close"></button></div>
+ <div class="m3-head"><span class="hd-ic"></span><div class="hd-t"><strong>인물 관계도</strong><small data-count></small></div>
+  <button class="icb x" aria-label="닫기" data-close data-ic="close"></button></div>
  <div class="m3-body two">
   <div class="pane-l">
    <div class="tools"><label class="search"><span data-ic="search"></span><input data-q placeholder="인물 찾기" aria-label="인물 찾기"></label>
@@ -13687,11 +13705,13 @@ map:`<div class="m3-shell">
    <p class="note map-n">저장된 호칭·말투 · 관계·감정선 · 인지 자료만 사용 · 추가 API 호출 없음</p>
   </div>
   <div class="pane-r" data-det></div>
- </div></div>`,
+ </div>
+ <div class="m3-foot"><span class="grow"></span><button type="button" class="btn" data-close>닫기</button></div></div>`,
 diff:`<div class="m3-shell">
- <div class="m3-head"><span class="hd-ic"></span><strong>정리 전후 비교</strong><small data-count></small><span class="grow"></span>
-  <button class="icb" aria-label="닫기" data-ic="close"></button></div>
- <div class="m3-body two"><div class="pane-l tl" data-tl></div><div class="pane-r" data-df></div></div></div>`
+ <div class="m3-head"><span class="hd-ic"></span><div class="hd-t"><strong>정리 전후 비교</strong><small data-count></small></div>
+  <button class="icb x" aria-label="닫기" data-close data-ic="close"></button></div>
+ <div class="m3-body two"><div class="pane-l tl" data-tl></div><div class="pane-r" data-df></div></div>
+ <div class="m3-foot"><span class="grow"></span><button type="button" class="btn" data-close>닫기</button></div></div>`
   };
 
   // 뷰 전용 아이콘(IC에 없는 방향·검색 등). IC 값이 있으면 IC를 우선 사용.
@@ -13710,7 +13730,7 @@ diff:`<div class="m3-shell">
   function calendarSelect(d,year){d.draft.year=Number(year);const rows=d.calendar.rows.filter(r=>d.calendar.valid(r)&&r.year===Number(year)&&r.month&&r.day);d.draft.month=rows.at(-1)?.month||1;d.draft.day=rows.at(-1)?.day||0;}
   function localCalendarOpen(){const calendar=WishLocalViews.calendar(state.currentRoom),d=openSheet('logCalendar',{calendar,logState:new Map(V.logs.blocks.map(b=>{const w=logWhy(b);return [b.key,{included:b.included,verified:V.inj.verified,why:w.k,reason:w.i?.offReason||''}];})),injectionOn:V.inj.armed,logsOn:V.logs.inject,draft:{}});calendarSelect(d,calendar.years.at(-1)||0);}
   function localGraphOpen(){openSheet('relationMap',{graph:WishLocalViews.graph(V),draft:{page:0}});}
-  function approvedSheet(d,kind,title){return `<div class="m3-dialog m3-ui ${d.leaving?'m3-leaving':''}" data-key="${d.id}" data-dlg="${d.id}" role="dialog" aria-modal="true" aria-label="${title}"><div data-approved-view="${kind}" data-approved-id="${d.id}" style="width:min(${kind==='cost'?420:900}px,calc(100vw - 24px));max-height:calc(100dvh - 32px);overflow:auto;border-radius:16px"></div></div>`;}
+  function approvedSheet(d,kind,title){return `<div class="m3-dialog m3-ui ${d.leaving?'m3-leaving':''}" data-key="${d.id}" data-dlg="${d.id}" role="dialog" aria-modal="true" aria-label="${title}"><div data-approved-view="${kind}" data-approved-id="${d.id}" style="width:min(${kind==='cost'?560:880}px,calc(100vw - 32px));max-height:calc(100dvh - 32px);overflow:auto;border-radius:11px"></div></div>`;}
   const vUsageLedger=d=>approvedSheet(d,'cost','AI 사용량'),vLogCalendar=d=>approvedSheet(d,'cal','날짜로그'),vRelationMap=d=>approvedSheet(d,'map','인물 관계도'),vMemoryDiff=d=>approvedSheet(d,'diff','정리 전후 비교');
   function approvedDiff(ui,d){
     approvedIcons(ui);ui.querySelector('.hd-ic').innerHTML=approvedIcon('history');
@@ -13739,7 +13759,7 @@ diff:`<div class="m3-shell">
       const part=r[d.draft.tab],visible=part.rows.filter(x=>d.draft.mode!=='after'||x.kind!=='del'),limit=d.draft.limit||30,L={add:'추가',chg:'변경',del:'삭제'};
       const body=x=>x.kind==='add'?(d.draft.mode==='diff'?`<ins>${esc(x.after)}</ins>`:esc(x.after)):x.kind==='del'?esc(x.before):(d.draft.mode==='diff'?wdiff(x.before,x.after):esc(x.after));
       box.innerHTML=`<div class="df-top"><b>${esc(reason(e))} · ${when(e.at)}</b><div class="seg" data-tab>${[['state','현재상태',r.state.rows.length],['log','날짜로그',r.log.rows.length]].map(([v,l,n])=>`<button type="button" data-v="${v}" aria-pressed="${d.draft.tab===v}">${l} <small>${n}</small></button>`).join('')}</div><span class="grow"></span><div class="seg" data-mode>${[['diff','바뀐 곳 표시'],['after','바뀐 뒤만']].map(([v,l])=>`<button type="button" data-v="${v}" aria-pressed="${d.draft.mode===v}">${l}</button>`).join('')}</div></div>`
-        +(visible.slice(0,limit).map((x,n)=>`<details class="dcard ${x.kind}" style="--i:${Math.min(n,5)}" data-diff-row="${n}"${Math.max((x.before||'').length,(x.after||'').length)<=1200?' open':''}><summary class="dh"><b>${esc(x.title)}</b><span class="tagx">${L[x.kind]}</span></summary><div class="dtx">${Math.max((x.before||'').length,(x.after||'').length)<=1200?body(x):''}</div></details>`).join('')||'<p class="empty">표시할 변경 후 내용이 없어요.</p>')+(visible.length>limit?'<button type="button" class="seg" data-more>변경 카드 더 보기</button>':'')
+        +(visible.slice(0,limit).map((x,n)=>`<details class="dcard ${x.kind}" style="--i:${Math.min(n,5)}" data-diff-row="${n}"${Math.max((x.before||'').length,(x.after||'').length)<=1200?' open':''}><summary class="dh"><b>${esc(x.title)}</b><span class="tagx">${L[x.kind]}</span></summary><div class="dtx">${Math.max((x.before||'').length,(x.after||'').length)<=1200?body(x):''}</div></details>`).join('')||'<p class="empty">표시할 변경 후 내용이 없어요.</p>')+(visible.length>limit?'<button type="button" class="btn more" data-more>변경 카드 더 보기</button>':'')
         +(part.same?`<div class="same">바뀌지 않은 ${d.draft.tab==='state'?'섹션':'카드'} ${part.same}개는 숨김</div>`:'')
         +`<div class="scope">${approvedIcon('info')}<span>${k===0?'이 기록 직전 모습과 지금을 비교해요.':'이 기록 직전 모습과 다음 기록 직전 모습을 비교해요.'} 정리 성공 여부를 뜻하지 않으며, 그 사이 직접 고친 내용도 함께 보여요. 복구 자료에는 현재상태·날짜로그만 있어서 인지·자료집·호칭은 비교하지 않아요. 방마다 최근 10회까지 남아요. 추가 API 호출 없음.</span></div>`;
       box.querySelectorAll('[data-diff-row]').forEach(el=>{el.ontoggle=()=>{if(el.open&&!el.dataset.loaded){el.querySelector('.dtx').innerHTML=body(visible[Number(el.dataset.diffRow)]);el.dataset.loaded='1';}};});
@@ -13755,7 +13775,7 @@ diff:`<div class="m3-shell">
       const shadow=host.attachShadow({mode:'open'}),style=document.createElement('style');style.textContent=APPROVED_STYLE;shadow.append(style);
       const ui=document.createElement('div');ui.className='m3-ui'+(document.body.getAttribute('data-theme')==='dark'||(!document.body.hasAttribute('data-theme')&&matchMedia('(prefers-color-scheme: dark)').matches)?' dark':'');ui.dataset.kind=host.dataset.approvedView;
       ui.innerHTML=APPROVED_TEMPLATES[ui.dataset.kind];shadow.append(ui);
-      const close=()=>closeSheet(d);ui.querySelectorAll('.m3-head [aria-label="닫기"]').forEach(b=>b.onclick=close);
+      const close=()=>closeSheet(d);ui.querySelectorAll('[data-close]').forEach(b=>b.onclick=close);
       ({cost:approvedCost,map:approvedMap,cal:approvedCal,diff:approvedDiff})[ui.dataset.kind](ui,d,close);
     });
   }
