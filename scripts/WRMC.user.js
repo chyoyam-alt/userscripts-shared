@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽 Wish RP Manager Core
 // @namespace    local.rp.context.manager
-// @version      1.3.31
+// @version      1.3.32
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @description  Crack RP용 컨텍스트 주입·인지·자동 장기기억·자료집·전체 재구축을 하나로 관리합니다.
@@ -46,7 +46,7 @@
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '1.3.31';
+  const SCRIPT_VERSION = '1.3.32';
   const RUNTIME_KEY = '__WISH_RP_MANAGER_V1__';
   const RELOAD_GUARD_KEY = `WISH_RP_clean_reload_${SCRIPT_VERSION}`;
   const previousRuntime = window[RUNTIME_KEY];
@@ -3638,6 +3638,12 @@ const deltaNotices=[];
     if(unstartedRooms.has(room)){if(!force)return false;await saveRoom(room);if(state.currentRoom!==room)return false;}
     if(!state.db){schedule(room,1500,force);return false;}
     if(running.has(room.chatId))return running.get(room.chatId);
+    // A fixed runtime bug must not leave automation permanently paused. Keep history,
+    // cursors and all other failures intact; clear only this exact pre-request failure.
+    if(room.unified?.lastError==="Cannot access 'settings' before initialization"){
+      room.unified.lastError='';room.unified.failedKind='';room.unified.retry=null;
+      checked.delete(room);await saveRoom(room);if(state.currentRoom!==room)return false;
+    }
     if(room.unified&&room.proseCheckMigration!==1){
       room.proseCheckMigration=1;
       if(isUnifiedSourceBlock(room.unified.lastError)||/요청 중 기준 대화가 수정·삭제|근거가 신규 RP|인용을 확인하지 못|실제 문장을 원문에서/.test(String(room.unified.lastError||''))){room.unified.lastError='';room.unified.failedKind='';room.unified.retry=null;}
@@ -3690,12 +3696,12 @@ const deltaNotices=[];
         // Bounds fail visibly; they never silently clip history or launch hidden split/repair calls.
         const requestSystem=req.guide+'\n[응답 스키마]\n'+JSON.stringify(req.schema);
         WishMemorySafety.wire(requestSystem,req.prompt);
-        const settings=loadAiSettings();if(!isAiProviderReady(settings))throw Error('보조 AI 연결 설정이 필요합니다.');
+        const providerSettings=loadAiSettings();if(!isAiProviderReady(providerSettings))throw Error('보조 AI 연결 설정이 필요합니다.');
         quietCheck=false;unifiedStage=p.memory&&p.observe?'기억·인물 통합 정리 요청 중':p.memory?'현재상태·사건·자료 정리 요청 중':'인지·호칭·말투 정리 요청 중';active.add(room.chatId);renderModalIfIdle();
         notify(p.memory&&p.observe?'기억·인물 정리 · 통합 1회 요청':'묶음 정리 · 1회 요청','success',3000);
         // JSON MIME + explicit contract avoids schema-rejection fallback making a second call.
         if(req.stateDelta)await WishEconomy.backup(room);
-        const result=await callAiProvider(settings,requestSystem,req.prompt,{taskKind:'extract',responseMimeType:'application/json',operationLabel:unifiedStage});
+        const result=await callAiProvider(providerSettings,requestSystem,req.prompt,{taskKind:'extract',responseMimeType:'application/json',operationLabel:unifiedStage});
         unifiedStage='통합 정리 응답 해석 중';renderModalIfIdle();const data=WLOG.parseJson(result.text,'기억·인물 통합 정리',result.diagnostic);
         unifiedStage='통합 결과 형식·참조 확인 중';renderModalIfIdle();const staged=stage(room,cog,packs,p,req,data);staged.room.unified.retry=null;
         const latestHistory=await fetchAllRoomMessages(apiChatIdOf(room)),latest=stableFrame([...latestHistory].reverse());
@@ -6436,7 +6442,7 @@ const WishImportPeople=(()=>{
           if(attempt)await sleep(Math.min(300,left()));
           const checked=await apiRequest('GET',`https://crack-api.wrtn.ai/crack-gen/v3/chats/${chatId}/messages/${messageId}`,undefined,{timeoutMs:Math.min(6000,left())});
           observed=messageTextOf(checked?.data||checked||{});
-          if(normalizeLineBreaks(observed)===normalizeLineBreaks(nextText))return true;
+          if(normalizeLineBreaks(observed)===normalizeLineBreaks(nextText))return {verified:true,serverChars:observed.length,text:observed};
         }
         errors.push(`${label}: 성공 응답 뒤 서버 본문 미반영`);
       } catch (e) {
@@ -10440,8 +10446,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     let verification;
     if(normalizeLineBreaks(text)===normalizeLineBreaks(expected))verification={verified:true,serverChars:text.length};
     else{
-      await patchMessage(rid,p.messageId,expected,text);
-      verification=await verifyInjectedCarrier(room,{...p,originalText:original},expected,2);
+      verification=await patchMessage(rid,p.messageId,expected,text);
     }
     if(!verification.verified)throw new Error('저장 주입본을 다시 적용했지만 서버 본문과 일치하지 않습니다.');
     p.originalText=original;p.originalChars=original.length;p.carrierChars=expected.length;p.verified=true;p.verifiedAt=Date.now();p.serverChars=verification.serverChars;
@@ -10466,19 +10471,6 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     return { found: false, original: currentText, currentText };
   }
 
-  async function verifyCarrierClean(room, messageId, expectedText, attempts = 3) {
-    for (let i = 0; i < attempts; i++) {
-      if (i) await sleep([250, 600][Math.min(i - 1, 1)]);
-      const current = await fetchMessage(apiChatIdOf(room), messageId);
-      if (!current) return { clean: true, reason: 'message_missing' };
-      const text = messageTextOf(current);
-      if (!stripOurContextBlock(text).found && normalizeLineBreaks(text) === normalizeLineBreaks(expectedText)) {
-        return { clean: true, reason: 'verified' };
-      }
-    }
-    return { clean: false, reason: 'verify_failed' };
-  }
-
   async function restoreCarrierOnly(room, p) {
     const info = await carrierOriginalFromServer(room, p);
     if (!info.currentText) return { restored: false, reason: 'message_missing' };
@@ -10486,8 +10478,6 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     const restoreText = info.original;
     if (restoreText == null) throw new Error('복원할 최신 AI 원문을 찾지 못했습니다.');
     await patchMessage(apiChatIdOf(room), p.messageId, restoreText,info.currentText);
-    const verification = await verifyCarrierClean(room, p.messageId, restoreText);
-    if (!verification.clean) throw new Error('AI 원문 복원 후 서버 재검증에 실패했습니다. 복구 정보는 유지됩니다.');
     return { restored: true, reason: 'ok' };
   }
 
@@ -11141,10 +11131,11 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     else if(p.previousCarrierCleanup?.messageId)next.previousCarrierCleanup=structuredClone(p.previousCarrierCleanup);
     else delete next.previousCarrierCleanup;
     control?.assertActive?.();
+    let patchVerification=null;
     if(raw!==injected){
       savePendingBackup(room.chatId,next);room.pending=next;await saveRoom(room);
       try{
-        await patchMessage(apiChatIdOf(room),newId,injected);
+        patchVerification=await patchMessage(apiChatIdOf(room),newId,injected);
       }catch(error){
         const fallbackLimit=carrierFallbackLimit(room);
         if(!isServerPatch500(error)||injected.length<=fallbackLimit)throw error;
@@ -11156,10 +11147,10 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
         next={...next,contextBlock:block,injectedChars:block.length,carrierChars:injected.length,carrierArmedAt:Date.now(),
           selection:{method:`${selection.method}+server-backoff`,limit:selection.limit,fullTotal:selection.fullTotal,omitted:selection.omitted,error:selection.error,keys:active.map(pendingItemIdentity),firstPatchError:String(error?.message||error)}};
         savePendingBackup(room.chatId,next);room.pending=next;await saveRoom(room);
-        await patchMessage(apiChatIdOf(room),newId,injected,raw);
+        patchVerification=await patchMessage(apiChatIdOf(room),newId,injected,raw);
       }
     }
-    const verification=raw===injected?{verified:true,serverChars:raw.length}:await verifyInjectedCarrier(room,next,injected);
+    const verification=raw===injected?{verified:true,serverChars:raw.length}:patchVerification;
     if(!verification.verified)throw new Error('이전 AI 주입을 서버에서 확인하지 못했습니다. 복구 정보는 보존했습니다.');
     next.verified=true;next.verifiedAt=Date.now();next.serverChars=verification.serverChars;delete next.lastSyncError;delete next.lastSyncErrorCode;delete next.lastSyncErrorAt;room.pending=next;
     // 새 carrier가 이미 검증됐으므로 이후 이전 carrier 정리가 실패해도 매턴 주입은 유지됩니다.
