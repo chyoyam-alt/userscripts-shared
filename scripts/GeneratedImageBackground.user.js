@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🖼️ CSP - Generated Image Background Blur (배경 이미지&테마)
 // @namespace    crack-scene-painter-background-borderless
-// @version      4.0.6.2
+// @version      4.0.7.3
 // @description  다크/라이트와 소설형/채팅형을 자동 구분해 조합별 배경·테마 설정을 적용하고, 라이트 전용 테마·입력창·라디오존데 색과 HANGAR·Cozy 다크를 함께 최적화합니다.
 // @match        https://crack.wrtn.ai/*
 // @require      https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js
@@ -50,7 +50,7 @@
   }
 
   const SCRIPT_NAME = 'CSP Borderless Background Blur';
-  const VERSION = '4.0.6.2';
+  const VERSION = '4.0.7.3';
   const SGB_MUTATION_BATCH_MS = 32;
 
   /**
@@ -225,6 +225,37 @@
     italicBg: '#d8d4c4',
     strongBg: '#ffe98c',
     codeAccent: '#1f6b1f'
+  });
+
+  /* HALO: 빛테 글라스. 다크=Rose Pine 계열 / 라이트=새벽 라벤더. 장식색은 생각(c1)·대사(c2) 색을 따른다. */
+  const HALO_DARK_THEME_PATCH = Object.freeze({
+    textColor: '#e0def4',
+    emColor: '#908caa',
+    strongColor: '#f4f2ff',
+    italicTextColor: '#aaa6c4',
+    strongBgTextColor: '#f4f2ff',
+    dialogueBg: '#ebbcba',
+    dialogueTextColor: '#f0c9c7',
+    thoughtBg: '#c4a7e7',
+    thoughtTextColor: '#d3bff0',
+    italicBg: '#908caa',
+    strongBg: '#c4a7e7',
+    codeAccent: '#c4a7e7'
+  });
+
+  const HALO_LIGHT_THEME_PATCH = Object.freeze({
+    textColor: '#4a4668',
+    emColor: '#797593',
+    strongColor: '#2a2640',
+    italicTextColor: '#6b6784',
+    strongBgTextColor: '#2a2640',
+    dialogueBg: '#b4637a',
+    dialogueTextColor: '#9a4c62',
+    thoughtBg: '#907aa9',
+    thoughtTextColor: '#6f5a8c',
+    italicBg: '#bebacc',
+    strongBg: '#d6aabe',
+    codeAccent: '#907aa9'
   });
 
   function getDefaultBackgroundSettings() {
@@ -688,14 +719,14 @@
   /* Haunt: 다크=심령 브라운관 / 라이트=퇴색한 감시 모니터. */
   const HAUNT_LIGHT_THEME_PATCH = Object.freeze({
     textColor: '#2a2e30',
-    emColor: '#596366',
-    strongColor: '#16191b',
-    italicTextColor: '#525b5e',
-    strongBgTextColor: '#16191b',
+    emColor: '#444f52',
+    strongColor: '#6c2823',
+    italicTextColor: '#3f4b4e',
+    strongBgTextColor: '#6c2823',
     dialogueBg: '#a83e34',
-    dialogueTextColor: '#6c2823',
+    dialogueTextColor: '#62211d',
     thoughtBg: '#7d8b89',
-    thoughtTextColor: '#4a5755',
+    thoughtTextColor: '#344240',
     italicBg: '#7d8786',
     strongBg: '#a83e34',
     codeAccent: '#657b78',
@@ -1448,7 +1479,7 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
     });
     return count;
   }
-  const UI_STYLE_VALUES = new Set(['normal', 'borderless', 'glass', 'pixel', 'sticker', 'candy', 'cozy', 'codepad', 'najeon', 'starjar', 'newsprint', 'jazzbar', 'cloud', 'rubric', 'vitrail', 'solarium', 'trench', 'hoemun', 'hangar', 'dogtag', 'cyber', 'haunt', 'aoi', 'dossier', 'rift', 'photolab', 'scrapbook', 'floppy', 'reliquary', 'retroweb', 'grimoire', 'vesper', 'imessage', 'arcana']);
+  const UI_STYLE_VALUES = new Set(['normal', 'borderless', 'glass', 'pixel', 'sticker', 'candy', 'cozy', 'codepad', 'najeon', 'starjar', 'newsprint', 'jazzbar', 'cloud', 'rubric', 'vitrail', 'solarium', 'trench', 'hoemun', 'hangar', 'dogtag', 'cyber', 'haunt', 'aoi', 'dossier', 'rift', 'photolab', 'scrapbook', 'floppy', 'reliquary', 'retroweb', 'grimoire', 'vesper', 'imessage', 'arcana', 'halo']);
 
   function normalizeUiStyle(value, fallback = 'borderless') {
     const raw = String(value || '').trim().toLowerCase();
@@ -1491,6 +1522,7 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
       {value:'vesper',label:'VESPER',desc:'잿빛 성당'},
       {value:'imessage',label:'iMessage',desc:'AI 회색·왼쪽 · 사용자 파랑·오른쪽'},
       {value:'arcana',label:'ARCANA',desc:'달의 아르카나 · 타로 글라스'}
+      ,{value:'halo',label:'HALO',desc:'빛테 글라스'}
     ];
   }
 
@@ -1539,6 +1571,7 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
       floppy: { ...FLOPPY_DARK_THEME_PATCH },
       reliquary: { ...RELIQUARY_DARK_THEME_PATCH },
       retroweb: { ...RETROWEB_DARK_THEME_PATCH }
+      ,halo: { ...HALO_DARK_THEME_PATCH }
     };
     const preset = (label, colors, patch, lightPatch) => ({
       label,
@@ -1738,6 +1771,10 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
         preset('기본', ['#ede7da','#dac18c','#8e7faf'], {"textColor":"#ede7da","emColor":"#aaa5b9","strongColor":"#f1d59d","italicTextColor":"#aaa5b9","strongBgTextColor":"#f9e6bd","dialogueBg":"#b89b62","dialogueTextColor":"#f0dcb0","thoughtBg":"#8e7faf","thoughtTextColor":"#cdc4e4","italicBg":"#8b7b9f","strongBg":"#c3a266","codeAccent":"#9683bb"}, {"textColor":"#2f2922","emColor":"#665b51","strongColor":"#65470f","italicTextColor":"#6e6258","strongBgTextColor":"#4a3000","dialogueBg":"#ead9b5","dialogueTextColor":"#4a3108","thoughtBg":"#d6cae6","thoughtTextColor":"#493a59","italicBg":"#e3d9ef","strongBg":"#efd39a","codeAccent":"#e7ddc4"}),
         preset('MONO', ['#f4f4f4','#ffffff','#a8a8a8'], {"textColor":"#f2f2f2","emColor":"#a8a8a8","strongColor":"#ffffff","italicTextColor":"#b5b5b5","strongBgTextColor":"#ffffff","dialogueBg":"#f4f4f4","dialogueTextColor":"#ffffff","thoughtBg":"#9c9c9c","thoughtTextColor":"#c9c9c9","italicBg":"#858585","strongBg":"#f4f4f4","codeAccent":"#cfcfcf"}, {"textColor":"#171717","emColor":"#666666","strongColor":"#000000","italicTextColor":"#666666","strongBgTextColor":"#000000","dialogueBg":"#111111","dialogueTextColor":"#111111","thoughtBg":"#666666","thoughtTextColor":"#444444","italicBg":"#aaaaaa","strongBg":"#111111","codeAccent":"#333333"})
       ];
+      case 'halo':
+        return [
+          base('기본', ['#e0def4', '#c4a7e7', '#ebbcba'])
+        ];
       case 'imessage': return [preset('기본', ['#0a84ff','#3a3a3c','#f2f2f7'], IMESSAGE_DARK_THEME_PATCH, IMESSAGE_LIGHT_THEME_PATCH)];
       case 'retroweb':
         return [
@@ -13350,6 +13387,22 @@ function createSettingsModal() {
         background-image:none!important;
       }
 
+      /* Haunt light CRT: apply the light ink palette to body and inline highlights. */
+      html.${CLS_ACTIVE}[data-sgb-ui-style="haunt"][data-sgb-theme="light"][data-sgb-theme-colors="on"]{
+        --sgb-readable-text:${HAUNT_LIGHT_THEME_PATCH.textColor}!important;
+        --sgb-muted-text:${HAUNT_LIGHT_THEME_PATCH.emColor}!important;
+        --sgb-strong-text:${HAUNT_LIGHT_THEME_PATCH.strongColor}!important;
+        --sgb-italic-text:${HAUNT_LIGHT_THEME_PATCH.italicTextColor}!important;
+        --sgb-strong-highlight-text:${HAUNT_LIGHT_THEME_PATCH.strongBgTextColor}!important;
+        --sgb-dialogue-rgb:${hexToRgbTriplet(HAUNT_LIGHT_THEME_PATCH.dialogueBg)}!important;
+        --sgb-dialogue-text:${HAUNT_LIGHT_THEME_PATCH.dialogueTextColor}!important;
+        --sgb-thought-rgb:${hexToRgbTriplet(HAUNT_LIGHT_THEME_PATCH.thoughtBg)}!important;
+        --sgb-thought-text:${HAUNT_LIGHT_THEME_PATCH.thoughtTextColor}!important;
+        --sgb-italic-rgb:${hexToRgbTriplet(HAUNT_LIGHT_THEME_PATCH.italicBg)}!important;
+        --sgb-strongbg-rgb:${hexToRgbTriplet(HAUNT_LIGHT_THEME_PATCH.strongBg)}!important;
+        --sgb-code-rgb:${hexToRgbTriplet(HAUNT_LIGHT_THEME_PATCH.codeAccent)}!important;
+      }
+
       html.${CLS_ACTIVE}[data-sgb-ui-style="haunt"][data-sgb-theme="light"] [data-sgb-bubble="chat"]{
         color:var(--sgb-readable-text,#2a2e30)!important;
         background:linear-gradient(176deg,rgba(214,220,220,calc(var(--sgb-theme-surface-alpha,.86) * 1.11628)),rgba(200,208,208,calc(var(--sgb-theme-surface-alpha,.86) * 1.12791)))!important;
@@ -17247,6 +17300,283 @@ html.${CLS_ACTIVE}[data-sgb-ui-style="arcana"][data-sgb-theme="light"][data-sgb-
         box-shadow:none!important;
       }
 
+      /* ═══ HALO — 빛테 글라스 ═══ */
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"]{
+        --hl-a:var(--sgb-theme-surface-alpha,.86);
+        --hl-c1:var(--sgb-thought-rgb,196,167,231);
+        --hl-c2:var(--sgb-dialogue-rgb,235,188,186);
+        --hl-sa:rgba(35,33,51,calc(var(--hl-a) * .93));
+        --hl-sb:rgba(25,23,37,calc(var(--hl-a) * .93));
+        --hl-edge:rgba(224,222,244,.08);
+        --hl-hi:rgba(255,255,255,.06);
+        --hl-g:.14;
+        --hl-code:rgba(16,15,26,.55);
+        --hl-send-ink:#1e1c2c;
+        --hl-shadow:0 24px 48px -22px rgba(0,0,0,.7),0 2px 8px rgba(0,0,0,.2);
+        --hl-glint:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 0C12.8 8 16 11.2 24 12C16 12.8 12.8 16 12 24C11.2 16 8 12.8 0 12C8 11.2 11.2 8 12 0Z' fill='black'/></svg>");
+        --sgb-novel-sep-box-height:22px;
+        --sgb-novel-sep-content:"";
+        --sgb-novel-sep-bg:none;
+        --sgb-novel-sep-shadow:none;
+        --sgb-novel-sep-text-shadow:none;
+        --sgb-novel-sep-margin:12px clamp(12px,2.4vw,28px) 16px;
+      }
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"][data-sgb-theme="light"]{
+        --hl-sa:rgba(251,250,253,var(--hl-a));
+        --hl-sb:rgba(243,241,248,var(--hl-a));
+        --hl-edge:rgba(87,82,121,.11);
+        --hl-hi:rgba(255,255,255,.95);
+        --hl-g:.10;
+        --hl-code:rgba(87,82,121,.05);
+        --hl-send-ink:#fff;
+        --hl-shadow:0 22px 42px -24px rgba(70,60,110,.38),0 2px 6px rgba(70,60,110,.08);
+      }
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"][data-sgb-theme="light"][data-sgb-theme-colors="on"]{
+        --sgb-readable-text:${HALO_LIGHT_THEME_PATCH.textColor}!important;
+        --sgb-muted-text:${HALO_LIGHT_THEME_PATCH.emColor}!important;
+        --sgb-strong-text:${HALO_LIGHT_THEME_PATCH.strongColor}!important;
+        --sgb-italic-text:${HALO_LIGHT_THEME_PATCH.italicTextColor}!important;
+        --sgb-strong-highlight-text:${HALO_LIGHT_THEME_PATCH.strongBgTextColor}!important;
+        --sgb-dialogue-rgb:${hexToRgbTriplet(HALO_LIGHT_THEME_PATCH.dialogueBg)}!important;
+        --sgb-dialogue-text:${HALO_LIGHT_THEME_PATCH.dialogueTextColor}!important;
+        --sgb-thought-rgb:${hexToRgbTriplet(HALO_LIGHT_THEME_PATCH.thoughtBg)}!important;
+        --sgb-thought-text:${HALO_LIGHT_THEME_PATCH.thoughtTextColor}!important;
+        --sgb-italic-rgb:${hexToRgbTriplet(HALO_LIGHT_THEME_PATCH.italicBg)}!important;
+        --sgb-strongbg-rgb:${hexToRgbTriplet(HALO_LIGHT_THEME_PATCH.strongBg)}!important;
+        --sgb-code-rgb:${hexToRgbTriplet(HALO_LIGHT_THEME_PATCH.codeAccent)}!important;
+      }
+
+      /* 말풍선 · 수정창 */
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"][data-sgb-theme-colors="on"] [data-sgb-bubble="chat"] .wrtn-markdown{
+        filter:none!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"] [data-sgb-bubble="chat"],
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"] main [data-sgb-edit-bubble]{
+        position:relative!important;
+        isolation:isolate!important;
+        overflow:visible!important;
+        border:1px solid var(--hl-edge)!important;
+        border-radius:22px!important;
+        color:var(--sgb-readable-text)!important;
+        background:radial-gradient(110% 70% at 0% 0%,rgba(var(--hl-c1),var(--hl-g)),transparent 60%),linear-gradient(180deg,var(--hl-sa),var(--hl-sb))!important;
+        box-shadow:var(--hl-shadow),inset 0 1px 0 var(--hl-hi)!important;
+        backdrop-filter:blur(var(--sgb-glass-blur,14px))!important;
+        -webkit-backdrop-filter:blur(var(--sgb-glass-blur,14px))!important;
+        text-shadow:none!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"] [data-sgb-bubble="chat"]{
+        padding:28px 28px 26px!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"] [data-sgb-bubble="chat"]::before{
+        content:none!important;
+        display:none!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"] [data-sgb-bubble="chat"]::after{
+        content:""!important;
+        display:block!important;
+        position:absolute!important;
+        left:30px!important;right:30px!important;top:-1px!important;
+        width:auto!important;height:1px!important;
+        z-index:3!important;
+        pointer-events:none!important;
+        border:0!important;border-radius:0!important;
+        background:linear-gradient(90deg,transparent,rgb(var(--hl-c1)) 28%,rgb(var(--hl-c2)) 72%,transparent)!important;
+        box-shadow:0 0 10px 1px rgba(var(--hl-c1),.45),0 0 22px 2px rgba(var(--hl-c2),.18)!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"] [data-sgb-bubble="chat"] .wrtn-markdown{
+        position:relative!important;
+        z-index:1!important;
+      }
+
+      /* 추천답변 */
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"] [data-sgb-suggestion-button]{
+        position:relative!important;
+        display:inline-flex!important;
+        align-items:center!important;
+        gap:8px!important;
+        border:1px solid var(--hl-edge)!important;
+        border-radius:999px!important;
+        color:var(--sgb-readable-text)!important;
+        background:radial-gradient(110% 70% at 0% 0%,rgba(var(--hl-c1),var(--hl-g)),transparent 60%),linear-gradient(180deg,var(--hl-sa),var(--hl-sb))!important;
+        box-shadow:0 10px 24px -16px rgba(0,0,0,.5)!important;
+        backdrop-filter:blur(var(--sgb-glass-blur,14px))!important;
+        -webkit-backdrop-filter:blur(var(--sgb-glass-blur,14px))!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"] [data-sgb-suggestion-button]::before{
+        content:""!important;
+        flex:none!important;
+        width:9px!important;height:9px!important;
+        background:linear-gradient(135deg,rgb(var(--hl-c1)),rgb(var(--hl-c2)))!important;
+        -webkit-mask:var(--hl-glint) center/contain no-repeat!important;
+        mask:var(--hl-glint) center/contain no-repeat!important;
+        pointer-events:none!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"] [data-sgb-suggestion-button] .wrtn-markdown em{
+        color:var(--sgb-muted-text)!important;
+      }
+
+      /* 입력창 */
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"] [data-sgb-input-box]{
+        position:relative!important;
+        overflow:visible!important;
+        border:1px solid var(--hl-edge)!important;
+        border-radius:24px!important;
+        background:radial-gradient(110% 70% at 0% 0%,rgba(var(--hl-c1),var(--hl-g)),transparent 60%),linear-gradient(180deg,var(--hl-sa),var(--hl-sb))!important;
+        box-shadow:var(--hl-shadow)!important;
+        backdrop-filter:blur(var(--sgb-glass-blur,14px))!important;
+        -webkit-backdrop-filter:blur(var(--sgb-glass-blur,14px))!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"] [data-sgb-input-box]::before{
+        content:none!important;
+        display:none!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"] [data-sgb-input-box]::after{
+        content:""!important;
+        display:block!important;
+        position:absolute!important;
+        left:32px!important;right:32px!important;top:-1px!important;
+        height:1px!important;
+        pointer-events:none!important;
+        z-index:2!important;
+        background:linear-gradient(90deg,transparent,rgb(var(--hl-c1)) 30%,rgb(var(--hl-c2)) 70%,transparent)!important;
+        box-shadow:0 0 8px rgba(var(--hl-c1),.45)!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"] [data-sgb-input-box] .is-editor-empty:first-child:before{
+        color:var(--sgb-muted-text)!important;
+        opacity:.75!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"] [data-sgb-input-box] .send{
+        color:var(--hl-send-ink)!important;
+        background:linear-gradient(135deg,rgb(var(--hl-c1)),rgb(var(--hl-c2)))!important;
+      }
+
+      /* 코드블록 — 둥근 무테 + 두 색 헤더 */
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"][data-sgb-code-bg="on"] main [data-sgb-codeblock]{
+        overflow:hidden!important;
+        border:0!important;
+        border-radius:18px!important;
+        background:var(--hl-code)!important;
+        box-shadow:inset 0 0 0 1px rgba(255,255,255,.04)!important;
+        backdrop-filter:none!important;
+        -webkit-backdrop-filter:none!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"][data-sgb-code-bg="on"] main [data-sgb-codeblock-head]{
+        border:0!important;
+        border-radius:0!important;
+        color:var(--sgb-muted-text)!important;
+        background:linear-gradient(90deg,rgba(var(--hl-c1),.16),rgba(var(--hl-c2),.12))!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"][data-sgb-code-bg="on"] main [data-sgb-codeblock-body]{
+        border:0!important;
+        border-radius:0!important;
+        background:var(--hl-code)!important;
+      }
+
+      /* 라디오존데 */
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"] #igx-live-popup[data-sgb-radiosonde-skin] #igx-live-head,
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"] #igx-live-popup[data-sgb-radiosonde-skin] .igx-btn,
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"] #igx-live-settings{
+        color:var(--sgb-readable-text)!important;
+        border:1px solid var(--hl-edge)!important;
+        border-radius:999px!important;
+        background:linear-gradient(180deg,var(--hl-sa),var(--hl-sb))!important;
+        box-shadow:none!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"] #igx-live-popup[data-sgb-radiosonde-skin] .igx-btn:hover{
+        background:rgba(var(--hl-c1),.16)!important;
+      }
+
+      /* 소설형 구분선 */
+      html.${CLS_ACTIVE}[data-sgb-ui-style="halo"] main .flex-col-reverse > [data-message-group-id][data-sgb-novel-group]:not(:last-child)::before{
+        content:""!important;
+        height:22px!important;
+        background:linear-gradient(90deg,rgb(var(--hl-c1)),rgb(var(--hl-c2)))!important;
+        -webkit-mask:var(--hl-glint) center/18px 18px no-repeat,radial-gradient(circle,#000 0 2px,transparent 2.5px) calc(50% - 26px) center/6px 6px no-repeat,radial-gradient(circle,#000 0 2px,transparent 2.5px) calc(50% + 26px) center/6px 6px no-repeat,linear-gradient(90deg,transparent,#000) left center/calc(50% - 38px) 1px no-repeat,linear-gradient(270deg,transparent,#000) right center/calc(50% - 38px) 1px no-repeat!important;
+        mask:var(--hl-glint) center/18px 18px no-repeat,radial-gradient(circle,#000 0 2px,transparent 2.5px) calc(50% - 26px) center/6px 6px no-repeat,radial-gradient(circle,#000 0 2px,transparent 2.5px) calc(50% + 26px) center/6px 6px no-repeat,linear-gradient(90deg,transparent,#000) left center/calc(50% - 38px) 1px no-repeat,linear-gradient(270deg,transparent,#000) right center/calc(50% - 38px) 1px no-repeat!important;
+        filter:drop-shadow(0 0 4px rgba(var(--hl-c1),.6))!important;
+        box-shadow:none!important;
+        text-shadow:none!important;
+      }
+
+      /* 마크다운 */
+      html.${CLS_ACTIVE}[data-sgb-markdown-decor="on"][data-sgb-ui-style="halo"]{
+        --sgb-md-accent:rgba(var(--hl-c1),.72);
+        --sgb-md-accent-soft:rgba(var(--hl-c1),.08);
+        --sgb-md-line:rgba(var(--hl-c1),.22);
+        --sgb-md-quote-line:rgba(var(--hl-c1),.6);
+        --sgb-md-code-bg:rgba(var(--hl-c1),.14);
+        --sgb-md-code-text:var(--sgb-strong-text);
+        --sgb-md-list-marker:"";
+        --sgb-md-heading-prefix:"";
+        --sgb-md-heading-symbol-color:rgb(var(--hl-c1));
+      }
+      html.${CLS_ACTIVE}[data-sgb-markdown-decor="on"][data-sgb-ui-style="halo"] main [data-sgb-message-group] .wrtn-markdown :is(h1,h2,h3,h4,h5,h6){
+        display:flex!important;
+        align-items:center!important;
+        gap:.5em!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-markdown-decor="on"][data-sgb-ui-style="halo"] main [data-sgb-message-group] .wrtn-markdown :is(h1,h2,h3,h4,h5,h6)::before{
+        content:""!important;
+        display:inline-block!important;
+        flex:none!important;
+        width:.72em!important;height:.72em!important;
+        background:linear-gradient(135deg,rgb(var(--hl-c1)),rgb(var(--hl-c2)))!important;
+        -webkit-mask:var(--hl-glint) center/contain no-repeat!important;
+        mask:var(--hl-glint) center/contain no-repeat!important;
+        filter:drop-shadow(0 0 4px rgba(var(--hl-c1),.7))!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-markdown-decor="on"][data-sgb-ui-style="halo"] main [data-sgb-message-group] .wrtn-markdown ul{
+        list-style:none!important;
+        padding-left:.2em!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-markdown-decor="on"][data-sgb-ui-style="halo"] main [data-sgb-message-group] .wrtn-markdown ul>li{
+        position:relative!important;
+        list-style:none!important;
+        padding-left:1.35em!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-markdown-decor="on"][data-sgb-ui-style="halo"] main [data-sgb-message-group] .wrtn-markdown ul>li::marker{
+        content:""!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-markdown-decor="on"][data-sgb-ui-style="halo"] main [data-sgb-message-group] .wrtn-markdown ul>li::before{
+        content:""!important;
+        position:absolute!important;
+        left:.25em!important;top:.66em!important;
+        width:5px!important;height:5px!important;
+        border-radius:50%!important;
+        background:rgb(var(--hl-c1))!important;
+        box-shadow:0 0 0 2px rgba(var(--hl-c1),.18),0 0 7px rgba(var(--hl-c1),.7)!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-markdown-decor="on"][data-sgb-ui-style="halo"] main [data-sgb-message-group] .wrtn-markdown ul>li:has(input[type="checkbox"])::before{
+        content:none!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-markdown-decor="on"][data-sgb-ui-style="halo"] main [data-sgb-message-group] .wrtn-markdown ul>li:has(input[type="checkbox"]){
+        padding-left:.2em!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-markdown-decor="on"][data-sgb-ui-style="halo"] main [data-sgb-message-group] .wrtn-markdown hr{
+        height:16px!important;
+        min-height:16px!important;
+        margin:1.15em 0!important;
+        border:0!important;
+        background:linear-gradient(90deg,rgb(var(--hl-c1)),rgb(var(--hl-c2)))!important;
+        -webkit-mask:var(--hl-glint) center/14px 14px no-repeat,linear-gradient(90deg,transparent,#000) left center/calc(50% - 16px) 1px no-repeat,linear-gradient(270deg,transparent,#000) right center/calc(50% - 16px) 1px no-repeat!important;
+        mask:var(--hl-glint) center/14px 14px no-repeat,linear-gradient(90deg,transparent,#000) left center/calc(50% - 16px) 1px no-repeat,linear-gradient(270deg,transparent,#000) right center/calc(50% - 16px) 1px no-repeat!important;
+        filter:drop-shadow(0 0 4px rgba(var(--hl-c1),.6))!important;
+      }
+      html.${CLS_ACTIVE}[data-sgb-markdown-decor="on"][data-sgb-ui-style="halo"] main [data-sgb-message-group] .wrtn-markdown :is(p,li,blockquote,h1,h2,h3,h4,h5,h6,td,th) code{
+        border:1px solid rgba(var(--hl-c1),.22)!important;
+        border-radius:5px!important;
+      }
+
+      @media(max-width:620px){
+        html.${CLS_ACTIVE}[data-sgb-ui-style="halo"] [data-sgb-bubble="chat"]{
+          padding:24px 20px 22px!important;
+          border-radius:20px!important;
+        }
+        html.${CLS_ACTIVE}[data-sgb-ui-style="halo"] [data-sgb-bubble="chat"]::after{
+          left:22px!important;right:22px!important;
+        }
+      }
+
       /* Local 4.0.6.2: AOI glass optics. Native settings remain authoritative. */
 /* AOI keeps its existing summer window, prism symbols and recommended/custom text palette. */
 html.sgb-bg-active[data-sgb-ui-style="aoi"] {
@@ -17298,6 +17628,46 @@ html.sgb-bg-active[data-sgb-ui-style][data-sgb-text-shadow="on"][data-sgb-ui-sty
 html.sgb-bg-active[data-sgb-ui-style][data-sgb-text-shadow="on"][data-sgb-ui-style="aoi"] main [data-sgb-message-group] .wrtn-markdown [data-sgb-codeblock-body] * {
   text-shadow:none!important;
 }
+
+      /* Light code surfaces need their own dark ink: Shiki token spans can retain
+         a light text-fill-color even after the code block body changes color. */
+      html.${CLS_ACTIVE}[data-sgb-theme="light"]:is(
+        [data-sgb-ui-style="najeon"],
+        [data-sgb-ui-style="starjar"]
+      ) main [data-sgb-codeblock-body],
+      html.${CLS_ACTIVE}[data-sgb-theme="light"]:is(
+        [data-sgb-ui-style="najeon"],
+        [data-sgb-ui-style="starjar"]
+      ) main [data-sgb-codeblock-body] *,
+      html.${CLS_ACTIVE}[data-sgb-theme="light"][data-sgb-code-bg="on"]:is(
+        [data-sgb-ui-style="halo"],
+        [data-sgb-ui-style="jazzbar"],
+        [data-sgb-ui-style="cloud"],
+        [data-sgb-ui-style="vitrail"],
+        [data-sgb-ui-style="solarium"],
+        [data-sgb-ui-style="trench"],
+        [data-sgb-ui-style="hoemun"],
+        [data-sgb-ui-style="aoi"],
+        [data-sgb-ui-style="rubric"],
+        [data-sgb-ui-style="reliquary"]
+      ) main [data-sgb-codeblock-body],
+      html.${CLS_ACTIVE}[data-sgb-theme="light"][data-sgb-code-bg="on"]:is(
+        [data-sgb-ui-style="halo"],
+        [data-sgb-ui-style="jazzbar"],
+        [data-sgb-ui-style="cloud"],
+        [data-sgb-ui-style="vitrail"],
+        [data-sgb-ui-style="solarium"],
+        [data-sgb-ui-style="trench"],
+        [data-sgb-ui-style="hoemun"],
+        [data-sgb-ui-style="aoi"],
+        [data-sgb-ui-style="rubric"],
+        [data-sgb-ui-style="reliquary"]
+      ) main [data-sgb-codeblock-body] *{
+        color:#25232d!important;
+        -webkit-text-fill-color:#25232d!important;
+        text-shadow:none!important;
+      }
+
 
 
 `;
