@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.5.7
+// @version      4.5.11
 // @description  허브 SVG 복원, 모델 맨 왼쪽 배치 및 전환 버튼 간격 수정. 미니사이드바 다크/라이트·소설/채팅 전환. 코드블록 자동 줄바꿈, 라이트 테마 코드·보조 글자 대비 수정, 테마 판별 통일, DOM·캐시·라디오존데 반복 처리 최적화. 모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       Assistant
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/crack-mobile-utility.user.js
@@ -30,7 +30,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.5.7';
+    const VERSION = '4.5.11';
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
     const CMU_RUNTIME_KEY = '__CRACK_MOBILE_UTILITY_RUNTIME__';
     const runtimeRoot = document.documentElement;
@@ -381,6 +381,8 @@
         hotStart: 1900,
         editor: null,
         editorObserver: null,
+        placementObserver: null,
+        layoutDirty: true,
         editorHandlers: null,
         updateFrame: 0,
         delayedTimer: 0,
@@ -3239,6 +3241,9 @@
     `);
     function applyState() {
         const html = document.documentElement;
+        const setRootAttribute = (name, value) => {
+            if (html.getAttribute(name) !== value) html.setAttribute(name, value);
+        };
         const active = shouldRun();
         // 유저노트가 떠 있는 동안에는 CMU의 페이지 레이아웃/합성 레이어를
         // 통째로 휴면시켜 iOS 선택 손잡이가 순정 좌표계만 사용하게 한다.
@@ -3257,7 +3262,7 @@
         const themeChatBorderlessOnly = themeActive && cmuThemeShouldUseChatBorderlessOnly();
         const themeFxActive = themeActive;
         html.classList.toggle('cmu-theme-active', themeActive);
-        html.setAttribute('data-cmu-external-theme', externalThemeProvider || 'none');
+        setRootAttribute('data-cmu-external-theme', externalThemeProvider || 'none');
         if (!externalThemeLocked) {
             html.classList.toggle('sgb-bg-room', themeActive);
             html.classList.toggle('sgb-bg-active', themeActive);
@@ -3271,28 +3276,28 @@
         html.classList.toggle('cmu-hide-stat-bar', layoutActive && isChatRoomPath() && isMobileLike() && !!settings.hideStatBar);
         if (!userNoteOpen)
             scheduleCmuStatBarMark();
-        html.setAttribute('data-cmu-theme', cmuTheme);
-        html.setAttribute('data-cmu-ui-style', 'borderless');
+        setRootAttribute('data-cmu-theme', cmuTheme);
+        setRootAttribute('data-cmu-ui-style', 'borderless');
         html.removeAttribute('data-cmu-selected-ui-style');
-        html.setAttribute('data-cmu-chat-borderless-only', themeChatBorderlessOnly ? '1' : '0');
-        html.setAttribute('data-cmu-native-ui-mode', cmuThemeUiModeForSettings() || 'unknown');
-        html.setAttribute('data-cmu-theme-dialogue', themeFxActive && settings.themeDialogue !== false ? 'on' : 'off');
-        html.setAttribute('data-cmu-theme-thought', themeFxActive && settings.themeThought !== false ? 'on' : 'off');
-        html.setAttribute('data-cmu-theme-italic', themeFxActive && settings.themeItalic !== false ? 'on' : 'off');
-        html.setAttribute('data-cmu-theme-strong', themeFxActive && settings.themeStrong !== false ? 'on' : 'off');
-        html.setAttribute('data-cmu-theme-code', themeFxActive && settings.themeCode !== false ? 'on' : 'off');
-        html.setAttribute('data-cmu-theme-markdown', themeFxActive && settings.themeMarkdown !== false ? 'on' : 'off');
+        setRootAttribute('data-cmu-chat-borderless-only', themeChatBorderlessOnly ? '1' : '0');
+        setRootAttribute('data-cmu-native-ui-mode', cmuThemeUiModeForSettings() || 'unknown');
+        setRootAttribute('data-cmu-theme-dialogue', themeFxActive && settings.themeDialogue !== false ? 'on' : 'off');
+        setRootAttribute('data-cmu-theme-thought', themeFxActive && settings.themeThought !== false ? 'on' : 'off');
+        setRootAttribute('data-cmu-theme-italic', themeFxActive && settings.themeItalic !== false ? 'on' : 'off');
+        setRootAttribute('data-cmu-theme-strong', themeFxActive && settings.themeStrong !== false ? 'on' : 'off');
+        setRootAttribute('data-cmu-theme-code', themeFxActive && settings.themeCode !== false ? 'on' : 'off');
+        setRootAttribute('data-cmu-theme-markdown', themeFxActive && settings.themeMarkdown !== false ? 'on' : 'off');
         if (!externalThemeLocked) {
-            html.setAttribute('data-sgb-theme', cmuTheme);
-            html.setAttribute('data-sgb-ui-style', 'borderless');
-            html.setAttribute('data-sgb-theme-colors', 'on');
-            html.setAttribute('data-sgb-dialogue-bg', themeFxActive && settings.themeDialogue !== false ? 'on' : 'off');
-            html.setAttribute('data-sgb-thought-bg', themeFxActive && settings.themeThought !== false ? 'on' : 'off');
-            html.setAttribute('data-sgb-code-bg', themeFxActive && settings.themeCode !== false ? 'on' : 'off');
-            html.setAttribute('data-sgb-italic-bg', themeFxActive && settings.themeItalic !== false ? 'on' : 'off');
-            html.setAttribute('data-sgb-strong-bg', themeFxActive && settings.themeStrong !== false ? 'on' : 'off');
-            html.setAttribute('data-sgb-text-shadow', themeActive ? 'on' : 'off');
-            html.setAttribute('data-sgb-text-shadow-tone', cmuTheme);
+            setRootAttribute('data-sgb-theme', cmuTheme);
+            setRootAttribute('data-sgb-ui-style', 'borderless');
+            setRootAttribute('data-sgb-theme-colors', 'on');
+            setRootAttribute('data-sgb-dialogue-bg', themeFxActive && settings.themeDialogue !== false ? 'on' : 'off');
+            setRootAttribute('data-sgb-thought-bg', themeFxActive && settings.themeThought !== false ? 'on' : 'off');
+            setRootAttribute('data-sgb-code-bg', themeFxActive && settings.themeCode !== false ? 'on' : 'off');
+            setRootAttribute('data-sgb-italic-bg', themeFxActive && settings.themeItalic !== false ? 'on' : 'off');
+            setRootAttribute('data-sgb-strong-bg', themeFxActive && settings.themeStrong !== false ? 'on' : 'off');
+            setRootAttribute('data-sgb-text-shadow', themeActive ? 'on' : 'off');
+            setRootAttribute('data-sgb-text-shadow-tone', cmuTheme);
         }
         if (externalThemeLocked) {
             if (!cmuExternalThemeCleanupDone) {
@@ -3727,6 +3732,14 @@
             dialog.dataset.cmuChatListHeightFixed = '1';
         }
     }
+    let cmuEdgeMenuSyncFrame = 0;
+    function scheduleCmuEdgeMenuSyncFrame() {
+        if (cmuEdgeMenuSyncFrame || document.hidden) return;
+        cmuEdgeMenuSyncFrame = requestAnimationFrame(() => {
+            cmuEdgeMenuSyncFrame = 0;
+            syncCmuEdgeMenuOpenState();
+        });
+    }
     function scheduleMobileChatListPopoverLayoutSettle() {
         if (scheduleMobileChatListPopoverLayoutSettle._busy)
             return;
@@ -3734,7 +3747,7 @@
         const steps = [0, 16, 48, 120, 260, 520];
         steps.forEach((ms, i) => setTimeout(() => {
             forceMobileChatListPopoverLayout();
-            syncCmuEdgeMenuOpenState();
+            scheduleCmuEdgeMenuSyncFrame();
             if (i === steps.length - 1)
                 scheduleMobileChatListPopoverLayoutSettle._busy = false;
         }, ms));
@@ -4641,6 +4654,8 @@
         document.documentElement.dataset.cmuComposerExpandBound = '1';
     }
     function cmuInputCounterRestoreHost() {
+        CMU_INPUT_COUNTER.placementObserver?.disconnect();
+        CMU_INPUT_COUNTER.placementObserver = null;
         const host = CMU_INPUT_COUNTER.host;
         const saved = CMU_INPUT_COUNTER.hostPosition;
         const savedPadding = CMU_INPUT_COUNTER.hostPaddingTop;
@@ -4684,6 +4699,9 @@
             editor.removeEventListener('paste', handlers.delayed, true);
         }
         CMU_INPUT_COUNTER.editorObserver?.disconnect?.();
+        CMU_INPUT_COUNTER.placementObserver?.disconnect();
+        CMU_INPUT_COUNTER.placementObserver = null;
+        CMU_INPUT_COUNTER.layoutDirty = true;
         CMU_INPUT_COUNTER.editor = null;
         CMU_INPUT_COUNTER.editorObserver = null;
         CMU_INPUT_COUNTER.editorHandlers = null;
@@ -4783,10 +4801,18 @@
     function cmuInputCounterSetHost(host) {
         if (!(host instanceof HTMLElement))
             return;
-        if (CMU_INPUT_COUNTER.host === host)
+        if (CMU_INPUT_COUNTER.host === host && CMU_INPUT_COUNTER.placementObserver)
             return;
         cmuInputCounterRestoreHost();
         CMU_INPUT_COUNTER.host = host;
+        CMU_INPUT_COUNTER.placementObserver?.disconnect();
+        CMU_INPUT_COUNTER.placementObserver = new MutationObserver(records => {
+            if (records.some(record => !record.target.closest?.('#' + ID.inputCounterWrap))) scheduleCmuInputCounterSync();
+        });
+        CMU_INPUT_COUNTER.placementObserver.observe(host, {
+            childList: true, subtree: true, attributes: true,
+            attributeFilter: ['class', 'style', 'hidden', 'disabled'],
+        });
         host.setAttribute('data-cmu-input-counter-host', '1');
         try {
             const css = getComputedStyle(host);
@@ -4938,7 +4964,7 @@
         cmuInputCounterUnbindEditor();
         CMU_INPUT_COUNTER.editor = editor;
         CMU_INPUT_COUNTER.resizeObserver?.observe(editor);
-        CMU_INPUT_COUNTER.editorObserver = cmuComposerSubscribe(editor, scheduleCmuInputCounterSync);
+        CMU_INPUT_COUNTER.editorObserver = cmuComposerSubscribe(editor, () => scheduleCmuInputCounterSync(false));
     }
     function renderCmuInputCounter() {
         CMU_INPUT_COUNTER.updateFrame = 0;
@@ -4954,7 +4980,11 @@
             return;
         }
         bindCmuInputCounterEditor(editor);
-        const countEl = ensureCmuInputCounterPlacement(editor);
+        let countEl = CMU_INPUT_COUNTER.renderedElement;
+        if (CMU_INPUT_COUNTER.layoutDirty || !countEl?.isConnected || !CMU_INPUT_COUNTER.host?.isConnected) {
+            CMU_INPUT_COUNTER.layoutDirty = false;
+            countEl = ensureCmuInputCounterPlacement(editor);
+        }
         if (!(countEl instanceof HTMLElement))
             return;
         const count = cmuInputCounterLength(cmuInputCounterText(editor));
@@ -4978,7 +5008,8 @@
         CMU_INPUT_COUNTER.renderedElement = countEl;
         CMU_INPUT_COUNTER.renderedTheme = detectCmuTheme();
     }
-    function scheduleCmuInputCounterSync() {
+    function scheduleCmuInputCounterSync(layout = true) {
+        if (layout !== false) CMU_INPUT_COUNTER.layoutDirty = true;
         if (CMU_INPUT_COUNTER.disposed || CMU_INPUT_COUNTER.updateFrame || cmuUserNoteGuardActive())
             return;
         CMU_INPUT_COUNTER.updateFrame = requestAnimationFrame(renderCmuInputCounter);
@@ -5747,6 +5778,47 @@
             cmuLogCaptureStartSelection();
         }
     }
+    function lcCloneCaptureContent(root) {
+        const clone = root.cloneNode(true);
+        // Read the live source before sanitizing styles. Do not measure individual lines.
+        const sources = [root, ...root.querySelectorAll('*')];
+        const copies = [clone, ...clone.querySelectorAll('*')];
+        const preserving = new Set(['pre', 'pre-wrap', 'pre-line', 'break-spaces']);
+        sources.forEach((source, index) => {
+            if (!(source instanceof HTMLElement)) return;
+            const copy = copies[index];
+            const css = getComputedStyle(source);
+            if (preserving.has(css.whiteSpace)) copy.setAttribute('data-cmu-lc-whitespace', source.closest('pre') ? 'pre-wrap' : css.whiteSpace);
+            // Inline tags can be visual blocks in the source (e.g. styled spans).
+            if (source.matches('span, strong, em, b, i') && css.display === 'block')
+                copy.setAttribute('data-cmu-lc-display', 'block');
+        });
+        return clone;
+    }
+    function lcCaptureBlockNodes(root) {
+        const blocks = [];
+        let inline = null;
+        const flush = () => {
+            if (!inline) return;
+            if (inline.textContent.trim() || inline.querySelector('br, img')) blocks.push(inline);
+            inline = null;
+        };
+        // Keep semantic roots such as a paragraph, list or code block intact.
+        if (root.matches('p, pre, blockquote, ul, ol, table, h1, h2, h3, h4, h5, h6')) return [root];
+        for (const node of root.childNodes) {
+            const isBlock = node instanceof HTMLElement && node.matches('p, div, pre, blockquote, ul, ol, table, h1, h2, h3, h4, h5, h6, hr, [data-cmu-lc-display="block"]');
+            if (isBlock) { flush(); blocks.push(node.cloneNode(true)); continue; }
+            if (node.nodeType !== Node.TEXT_NODE && !(node instanceof HTMLElement)) continue;
+            if (!inline) {
+                inline = document.createElement('p');
+                if (root.style.whiteSpace) inline.style.whiteSpace = root.style.whiteSpace;
+            }
+            inline.appendChild(node.cloneNode(true));
+        }
+        flush();
+        return blocks;
+    }
+
     function lcSanitizeClone(root) {
         if (!(root instanceof HTMLElement))
             return root;
@@ -5774,6 +5846,11 @@
         });
         root.removeAttribute('style');
         root.removeAttribute('class');
+        for (const el of [root, ...root.querySelectorAll('[data-cmu-lc-whitespace], [data-cmu-lc-display]')]) {
+            const whitespace = el.getAttribute('data-cmu-lc-whitespace');
+            if (['pre', 'pre-wrap', 'pre-line', 'break-spaces'].includes(whitespace)) el.style.whiteSpace = whitespace;
+            if (el.getAttribute('data-cmu-lc-display') === 'block') el.style.display = 'block';
+        }
         return root;
     }
     function lcParseTextRules(raw = []) {
@@ -5837,10 +5914,11 @@
         if (!node)
             return null;
         if (node.nodeType === Node.TEXT_NODE) {
-            const txt = String(node.textContent || '').replace(/\s+/g, ' ').trim();
+            const txt = String(node.textContent || '').replace(/\r\n?/g, '\n');
             if (!txt)
                 return null;
             const p = document.createElement('p');
+            p.style.whiteSpace = 'pre-wrap';
             p.textContent = txt;
             return p;
         }
@@ -5907,10 +5985,10 @@
         if (!(root instanceof HTMLElement))
             return null;
         const role = isUserGroupByDom(group) ? 'user' : 'assistant';
-        const clone = lcSanitizeClone(root.cloneNode(true));
+        const clone = lcSanitizeClone(lcCloneCaptureContent(root));
         lcAppendMissingMessageImages(group, clone);
         lcApplyTextRules(clone);
-        const rawNodes = Array.from(clone.childNodes || []).map(lcNormalizeBlockNode).filter(Boolean);
+        const rawNodes = lcCaptureBlockNodes(clone);
         const nodes = rawNodes.length ? rawNodes : [clone];
         const blocks = nodes.map(node => {
             const wrap = document.createElement('div');
@@ -7869,7 +7947,7 @@
         const steps = CMU_EDGE_SYNC_STEPS;
         steps.forEach((ms) => {
             const timer = setTimeout(() => {
-                syncCmuEdgeMenuOpenState();
+                scheduleCmuEdgeMenuSyncFrame();
                 if (ms === steps[steps.length - 1])
                     cmuEdgeMenuStateTimers = [];
             }, ms);
@@ -12866,6 +12944,7 @@
         return `${brand.charAt(0).toUpperCase()}${version || ''}${descriptorInitials}`.slice(0, 8) || 'M';
     }
     function isRsModelSlug(value) {
+    if (Array.isArray(igxV2Models) && igxV2Models.includes(value)) return true;
         const slug = String(value || '').trim().toLowerCase();
         if (!/^[a-z0-9][a-z0-9._-]*$/i.test(slug)) return false;
         if (EXCLUDED_MODELS.has(slug) || NON_MODEL_SLUGS.has(slug)) return false;
@@ -13528,88 +13607,140 @@
         }
       }
 
-      let igxV2Models = null;
-      let igxV2ModelsAt = 0;
+      // Official IGX v2 contract, with cancellable userscript transport.
+  var igxV2Models = null;
+  let igxModelListPromise = null;
+  const igxMetricCache = new Map();
+  const igxMetricInflight = new Map();
+  const igxMetricFailures = new Map();
+  const igxPendingRequests = [];
+  const igxActiveAborts = new Set();
+  let igxRunningRequests = 0;
 
-      async function fetchIgxV2Snapshot() {
-        if (!igxV2Models || Date.now() - igxV2ModelsAt >= 5 * 60 * 1000) {
-          const payload = await gmGetJson(IGX_BASE_URL + '/api/v2/models');
-          if (payload?.success !== true || !Array.isArray(payload.data)) throw new Error('invalid v2 models');
-          const slugs = [...new Set(payload.data.filter(looksLikeModelSlug))];
-          if (slugs.length < 2) throw new Error('insufficient v2 models');
-          igxV2Models = slugs;
-          igxV2ModelsAt = Date.now();
-        }
-        const results = await Promise.allSettled(igxV2Models.map(async slug => {
-          const payload = await gmGetJson(IGX_BASE_URL + '/api/v2/simple/' + encodeURIComponent(slug));
-          if (payload?.success !== true) throw new Error('v2 simple failed');
-          const record = metricRecordFromObject(payload.data, slug);
-          if (!record) throw new Error('invalid v2 simple');
-          return [slug, record];
-        }));
-        // 부분 실패 시 기존 전체 스냅샷 폴백을 사용하여 모델 목록 누락을 방지한다.
-        if (results.some(result => result.status !== 'fulfilled')) throw new Error('incomplete v2 snapshot');
-        return new Map(results.map(result => result.value));
-      }
-
-      async function fetchIgxSnapshot({ force = false } = {}) {
-        const now = Date.now();
-        if (!force && igxSnapshotCache?.size && now - igxSnapshotCacheAt < 15000) {
-          return igxSnapshotCache;
-        }
-
+  function igxAbortError() {
+    const error = new Error('IGX request cancelled');
+    error.name = 'AbortError';
+    return error;
+  }
+  function igxCanRequest() {
+    return !document.hidden && shouldRun() && settings.radiosonde && isChatRoomPath();
+  }
+  function cancelIgxRequests() {
+    for (const abort of [...igxActiveAborts]) abort();
+    for (const job of igxPendingRequests.splice(0)) job.reject(igxAbortError());
+  }
+  function pumpIgxRequests() {
+    if (!igxCanRequest()) {
+      cancelIgxRequests();
+      return;
+    }
+    while (igxRunningRequests < 4 && igxPendingRequests.length) {
+      const job = igxPendingRequests.shift();
+      igxRunningRequests++;
+      Promise.resolve().then(() => {
+        if (!igxCanRequest()) throw igxAbortError();
+        return job.run();
+      }).then(job.resolve, job.reject).finally(() => {
+        igxRunningRequests--;
+        pumpIgxRequests();
+      });
+    }
+  }
+  function igxRequestJson(endpoint) {
+    return new Promise((resolve, reject) => {
+      igxPendingRequests.push({ resolve, reject, run: () => new Promise((done, fail) => {
+        let request, timer, settled = false;
+        const finish = (error, value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          igxActiveAborts.delete(abort);
+          if (error) fail(error); else done(value);
+        };
+        const abort = () => {
+          finish(igxAbortError());
+          try { request?.abort(); } catch (_) {}
+        };
+        igxActiveAborts.add(abort);
+        timer = setTimeout(() => {
+          finish(new Error('IGX request timeout'));
+          try { request?.abort(); } catch (_) {}
+        }, 18000);
         try {
-          const entries = await fetchIgxV2Snapshot();
-          igxSnapshotCache = entries;
-          igxSnapshotCacheAt = Date.now();
-          return entries;
-        } catch (_) {}
-
-        if (igxWorkingBulkRoute) {
-          try {
-            const entries = await tryBulkRoute(igxWorkingBulkRoute);
-            const finalized = await finalizeIgxSnapshot(entries);
-            igxSnapshotCache = finalized;
-            igxSnapshotCacheAt = Date.now();
-            return finalized;
-          } catch (_) {
-            igxWorkingBulkRoute = null;
-          }
-        }
-
-        const catalog = await loadIgxRouteCatalog();
-        for (const route of catalog.bulk.slice(0, 10)) {
-          try {
-            const entries = await tryBulkRoute(route);
-            igxWorkingBulkRoute = route;
-            const finalized = await finalizeIgxSnapshot(entries);
-            igxSnapshotCache = finalized;
-            igxSnapshotCacheAt = Date.now();
-            return finalized;
-          } catch (_) {}
-        }
-
-        // 새 API 경로가 또 바뀐 순간에도 대시보드 자체가 살아 있으면 현재값을 계속 보여준다.
-        try {
-          const entries = await fetchDashboardSnapshot();
-          const finalized = await finalizeIgxSnapshot(entries);
-          igxSnapshotCache = finalized;
-          igxSnapshotCacheAt = Date.now();
-          return finalized;
-        } catch (_) {}
-
-        // 최후 호환: 구형 statistics가 아직 살아 있으면 사용.
-        const entries = await fetchLegacyStatisticsSnapshot();
-        const finalized = await finalizeIgxSnapshot(entries);
-        igxSnapshotCache = finalized;
-        igxSnapshotCacheAt = Date.now();
-        return finalized;
+          request = GM_xmlhttpRequest({
+            method: 'GET', url: IGX_BASE_URL + '/api/v2/' + endpoint,
+            timeout: 18000, headers: { Accept: 'application/json' },
+            onload: response => {
+              try {
+                if (response.status < 200 || response.status >= 300) throw new Error('IGX HTTP ' + response.status);
+                const payload = JSON.parse(response.responseText);
+                if (payload?.success !== true) throw new Error(payload?.message || 'IGX request failed');
+                finish(null, payload.data);
+              } catch (error) { finish(error); }
+            },
+            onerror: () => finish(new Error('IGX network error')),
+            ontimeout: () => finish(new Error('IGX request timeout')),
+            onabort: () => finish(igxAbortError()),
+          });
+        } catch (error) { finish(error); }
+      }) });
+      pumpIgxRequests();
+    });
+  }
+  async function getIgxOfficialModels() {
+    if (igxV2Models) return igxV2Models;
+    // Keep even a failed attempt for this page lifetime: no periodic catalog fetches.
+    if (!igxModelListPromise) igxModelListPromise = igxRequestJson('models').then(data => {
+      if (!Array.isArray(data)) throw new Error('Invalid IGX model list');
+      const slugs = [...new Set(data.filter(value => typeof value === 'string' &&
+        /^[a-z0-9][a-z0-9._-]*$/i.test(value) && !EXCLUDED_MODELS.has(value.toLowerCase())))];
+      if (!slugs.length) throw new Error('Empty IGX model list');
+      igxV2Models = slugs;
+      return slugs;
+    });
+    return igxModelListPromise;
+  }
+  function fetchIgxOfficialModel(slug, { force = false } = {}) {
+    if (igxMetricInflight.has(slug)) return igxMetricInflight.get(slug);
+    const cached = igxMetricCache.get(slug);
+    if (!force && cached && Date.now() - cached.at < 15000) return Promise.resolve(cached.record);
+    const failure = igxMetricFailures.get(slug);
+    if (failure && Date.now() < failure.retryAt) return Promise.reject(new Error('IGX retry cooldown'));
+    const task = igxRequestJson('simple/' + encodeURIComponent(slug)).then(data => {
+      const record = metricRecordFromObject(data, slug);
+      if (!record) throw new Error('Invalid IGX simple statistics');
+      igxMetricCache.set(slug, { at: Date.now(), record });
+      igxMetricFailures.delete(slug);
+      return record;
+    }).catch(error => {
+      if (error.name !== 'AbortError') {
+        const count = Math.min(4, (failure?.count || 0) + 1);
+        igxMetricFailures.set(slug, { count, retryAt: Date.now() + Math.min(300000, 30000 * 2 ** (count - 1)) });
       }
+      throw error;
+    }).finally(() => igxMetricInflight.delete(slug));
+    igxMetricInflight.set(slug, task);
+    return task;
+  }
+  async function fetchIgxSnapshot({ force = false, slugs = [] } = {}) {
+    const requested = [...new Set(slugs)];
+    const results = await Promise.allSettled(requested.map(slug => fetchIgxOfficialModel(slug, { force })));
+    const entries = new Map();
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled') entries.set(requested[index], result.value);
+    });
+    // Missing records keep their previous UI value. Never fan out into legacy endpoint probing.
+    return entries;
+  }
 
-      function modelsFromSnapshot(entries) {
+    cmuListen(document, 'visibilitychange', () => { if (document.hidden) cancelIgxRequests(); });
+    cmuListen(window, 'pagehide', cancelIgxRequests);
+    CMU_RESOURCES.cleanups.push(cancelIgxRequests);
+
+function modelsFromSnapshot(entries) {
         if (!(entries instanceof Map) || !entries.size) return [];
         return ensureUniqueShorts(
-          [...entries.keys()]
+          [...new Set([...(igxV2Models || []), ...entries.keys()])]
             .filter(slug => looksLikeModelSlug(slug))
             .map(makeModelMeta)
         );
@@ -13644,34 +13775,17 @@
 
       // bulk snapshot이 실패했을 때만 쓰는 모델별 최후 폴백.
       async function fetchIgxModelWithRetry(slug) {
-        try {
-          return await fetchIgxModelFromDiscoveredRoute(slug);
-        } catch (_) {}
+    return fetchIgxOfficialModel(slug);
+  }
 
-        try {
-          const payload = await gmGetJson(LEGACY_API_BASE + encodeURIComponent(slug));
-          const entries = collectIgxMetricEntries(payload, slug);
-          const record = entries.get(slug) || [...entries.values()][0];
-          if (record) return record;
-          throw new Error("legacy simple returned no metrics");
-        } catch (_) {
-          await sleep(1200);
-          const payload = await gmGetJson(LEGACY_API_BASE + encodeURIComponent(slug));
-          const entries = collectIgxMetricEntries(payload, slug);
-          const record = entries.get(slug) || [...entries.values()][0];
-          if (record) return record;
-          throw new Error("legacy simple returned no metrics");
-        }
-      }
-
-    async function discoverRsModels(force = false) {
+  async function discoverRsModels(force = false) {
         if (RS.discoveryPromise) return RS.discoveryPromise;
         RS.discoveryPromise = (async () => {
             const previous = JSON.stringify(RS.models);
             try {
-                const snapshot = await fetchIgxSnapshot({ force: !!force });
-                const discovered = modelsFromSnapshot(snapshot);
-                if (discovered.length < 2) throw new Error('insufficient model list');
+                const slugs = await getIgxOfficialModels();
+                const discovered = ensureUniqueShorts(slugs.map(makeModelMeta));
+                if (discovered.length < 1) throw new Error('insufficient model list');
                 RS.models = [...YAME_MODELS, ...discovered];
             }
             catch (_) {
@@ -13749,6 +13863,7 @@
     async function refreshRadiosonde({ manual = false } = {}) {
         if (!shouldRun() || !settings.radiosonde || !isChatRoomPath()) return;
         if (RS.busy) {
+            RS.pendingRefresh = true;
             if (manual) {
                 RS.pendingRefresh = true;
                 renderRsLine('갱신중…', true);
@@ -13762,8 +13877,6 @@
 
             // 첫 실행에서는 참고 확프와 동일하게 실제 스냅샷으로 모델 목록부터 확정한다
             if (!RS.discoveryAt) await discoverRsModels(true);
-            else if (Date.now() - RS.discoveryAt >= 5 * 60 * 1000 && !RS.discoveryPromise)
-                void discoverRsModels(true).catch(() => {});
 
             if (!shouldRun() || !settings.radiosonde || !isChatRoomPath()) return;
             const models = getRsVisibleModels();
@@ -13774,7 +13887,7 @@
                 ? fetchYameStatus().then(value => ({ status: 'fulfilled', value }), reason => ({ status: 'rejected', reason }))
                 : Promise.resolve(null);
             const igxTask = igxModels.length
-                ? fetchIgxSnapshot({ force: manual }).then(value => ({ status: 'fulfilled', value }), reason => ({ status: 'rejected', reason }))
+                ? fetchIgxSnapshot({ force: manual, slugs: igxModels.map(model => model.apiId || model.slug) }).then(value => ({ status: 'fulfilled', value }), reason => ({ status: 'rejected', reason }))
                 : Promise.resolve(null);
 
             const [igxResult, yameResult] = await Promise.all([igxTask, yameTask]);
@@ -13787,17 +13900,7 @@
                 }
             }
 
-            // 스냅샷에서 빠진 모델만 참고 확프의 모델별 최후 폴백을 사용
-            const missingIgx = igxModels.filter(model => !igxBySlug.has(model.slug));
-            if (missingIgx.length) {
-                const fallbackResults = await Promise.allSettled(
-                    missingIgx.map(model => fetchIgxModelWithRetry(model.apiId || model.slug))
-                );
-                fallbackResults.forEach((result, index) => {
-                    if (result.status === 'fulfilled') igxBySlug.set(missingIgx[index].slug, result.value);
-                });
-            }
-
+            // Failed models retain the previous value and use the shared retry cooldown.
             for (const model of igxModels) {
                 const record = igxBySlug.get(model.slug);
                 if (!record) {
@@ -13855,6 +13958,7 @@
 
     function restartRsAutoTimer() {
         if (!shouldRun() || !settings.radiosonde || !isChatRoomPath()) {
+            cancelIgxRequests();
             clearInterval(rsTimer);
             rsTimer = 0;
             return;
@@ -18220,6 +18324,7 @@
         }
         BADGE.cacheKey = '';
         resetBadgeCacheIfNeeded();
+        cancelIgxRequests();
         RS.discovered = false;
         CMI.uiModeAt = 0;
         CMI.uiMode = '';

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         📡 Crack Radiosonde (라디오존데)
 // @namespace    igx-radiosonde-live
-// @version      4.3.4
+// @version      4.3.8
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/Radiosonde.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/Radiosonde.user.js
 // @description  크랙(wrtn) 입력창에 Fable 5와 최신 IGX 라디오존데 모델 점수를 표시합니다.
@@ -170,6 +170,7 @@
   }
 
   function looksLikeModelSlug(value) {
+    if (Array.isArray(igxV2Models) && igxV2Models.includes(value)) return true;
     const slug = String(value || "").trim().toLowerCase();
     if (!slugLooksValid(slug)) return false;
     if (EXCLUDED_MODELS.has(slug) || NON_MODEL_SLUGS.has(slug)) return false;
@@ -703,6 +704,7 @@
       localStorage.setItem(STORE_KEY_VISIBILITY, JSON.stringify(visibility));
       if (typeof onVisibilityChanged === "function") onVisibilityChanged();
       renderBarline();
+      if (check.checked) void refreshAll();
     });
 
     label.append(check, labelText);
@@ -784,6 +786,7 @@
         localStorage.setItem(STORE_KEY_VISIBILITY, JSON.stringify(visibility));
         buildModelUI();
         renderBarline();
+        if (enabled) void refreshAll();
       });
 
       heading.append(groupCheck, groupText);
@@ -1711,88 +1714,139 @@
     }
   }
 
-  let igxV2Models = null;
-  let igxV2ModelsAt = 0;
+  // Official IGX v2 contract, with cancellable userscript transport.
+  var igxV2Models = null;
+  let igxModelListPromise = null;
+  const igxMetricCache = new Map();
+  const igxMetricInflight = new Map();
+  const igxMetricFailures = new Map();
+  const igxPendingRequests = [];
+  const igxActiveAborts = new Set();
+  let igxRunningRequests = 0;
 
-  async function fetchIgxV2Snapshot() {
-    if (!igxV2Models || Date.now() - igxV2ModelsAt >= 5 * 60 * 1000) {
-      const payload = await gmGetJson(IGX_BASE_URL + '/api/v2/models');
-      if (payload?.success !== true || !Array.isArray(payload.data)) throw new Error('invalid v2 models');
-      const slugs = [...new Set(payload.data.filter(looksLikeModelSlug))];
-      if (slugs.length < 2) throw new Error('insufficient v2 models');
+  function igxAbortError() {
+    const error = new Error('IGX request cancelled');
+    error.name = 'AbortError';
+    return error;
+  }
+  function igxCanRequest() {
+    return !document.hidden && isIgxChatRoomPage();
+  }
+  function cancelIgxRequests() {
+    for (const abort of [...igxActiveAborts]) abort();
+    for (const job of igxPendingRequests.splice(0)) job.reject(igxAbortError());
+  }
+  function pumpIgxRequests() {
+    if (!igxCanRequest()) {
+      cancelIgxRequests();
+      return;
+    }
+    while (igxRunningRequests < 4 && igxPendingRequests.length) {
+      const job = igxPendingRequests.shift();
+      igxRunningRequests++;
+      Promise.resolve().then(() => {
+        if (!igxCanRequest()) throw igxAbortError();
+        return job.run();
+      }).then(job.resolve, job.reject).finally(() => {
+        igxRunningRequests--;
+        pumpIgxRequests();
+      });
+    }
+  }
+  function igxRequestJson(endpoint) {
+    return new Promise((resolve, reject) => {
+      igxPendingRequests.push({ resolve, reject, run: () => new Promise((done, fail) => {
+        let request, timer, settled = false;
+        const finish = (error, value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          igxActiveAborts.delete(abort);
+          if (error) fail(error); else done(value);
+        };
+        const abort = () => {
+          finish(igxAbortError());
+          try { request?.abort(); } catch (_) {}
+        };
+        igxActiveAborts.add(abort);
+        timer = setTimeout(() => {
+          finish(new Error('IGX request timeout'));
+          try { request?.abort(); } catch (_) {}
+        }, 18000);
+        try {
+          request = GM_xmlhttpRequest({
+            method: 'GET', url: IGX_BASE_URL + '/api/v2/' + endpoint,
+            timeout: 18000, headers: { Accept: 'application/json' },
+            onload: response => {
+              try {
+                if (response.status < 200 || response.status >= 300) throw new Error('IGX HTTP ' + response.status);
+                const payload = JSON.parse(response.responseText);
+                if (payload?.success !== true) throw new Error(payload?.message || 'IGX request failed');
+                finish(null, payload.data);
+              } catch (error) { finish(error); }
+            },
+            onerror: () => finish(new Error('IGX network error')),
+            ontimeout: () => finish(new Error('IGX request timeout')),
+            onabort: () => finish(igxAbortError()),
+          });
+        } catch (error) { finish(error); }
+      }) });
+      pumpIgxRequests();
+    });
+  }
+  async function getIgxOfficialModels() {
+    if (igxV2Models) return igxV2Models;
+    // Keep even a failed attempt for this page lifetime: no periodic catalog fetches.
+    if (!igxModelListPromise) igxModelListPromise = igxRequestJson('models').then(data => {
+      if (!Array.isArray(data)) throw new Error('Invalid IGX model list');
+      const slugs = [...new Set(data.filter(value => typeof value === 'string' &&
+        /^[a-z0-9][a-z0-9._-]*$/i.test(value) && !EXCLUDED_MODELS.has(value.toLowerCase())))];
+      if (!slugs.length) throw new Error('Empty IGX model list');
       igxV2Models = slugs;
-      igxV2ModelsAt = Date.now();
-    }
-    const results = await Promise.allSettled(igxV2Models.map(async slug => {
-      const payload = await gmGetJson(IGX_BASE_URL + '/api/v2/simple/' + encodeURIComponent(slug));
-      if (payload?.success !== true) throw new Error('v2 simple failed');
-      const record = metricRecordFromObject(payload.data, slug);
-      if (!record) throw new Error('invalid v2 simple');
-      return [slug, record];
-    }));
-    // 부분 실패 시 기존 전체 스냅샷 폴백을 사용하여 모델 목록 누락을 방지한다.
-    if (results.some(result => result.status !== 'fulfilled')) throw new Error('incomplete v2 snapshot');
-    return new Map(results.map(result => result.value));
+      return slugs;
+    });
+    return igxModelListPromise;
   }
-
-  async function fetchIgxSnapshot({ force = false } = {}) {
-    const now = Date.now();
-    if (!force && igxSnapshotCache?.size && now - igxSnapshotCacheAt < 15000) {
-      return igxSnapshotCache;
-    }
-
-    try {
-      const entries = await fetchIgxV2Snapshot();
-      igxSnapshotCache = entries;
-      igxSnapshotCacheAt = Date.now();
-      return entries;
-    } catch (_) {}
-
-    if (igxWorkingBulkRoute) {
-      try {
-        const entries = await tryBulkRoute(igxWorkingBulkRoute);
-        const finalized = await finalizeIgxSnapshot(entries);
-        igxSnapshotCache = finalized;
-        igxSnapshotCacheAt = Date.now();
-        return finalized;
-      } catch (_) {
-        igxWorkingBulkRoute = null;
+  function fetchIgxOfficialModel(slug, { force = false } = {}) {
+    if (igxMetricInflight.has(slug)) return igxMetricInflight.get(slug);
+    const cached = igxMetricCache.get(slug);
+    if (!force && cached && Date.now() - cached.at < 15000) return Promise.resolve(cached.record);
+    const failure = igxMetricFailures.get(slug);
+    if (failure && Date.now() < failure.retryAt) return Promise.reject(new Error('IGX retry cooldown'));
+    const task = igxRequestJson('simple/' + encodeURIComponent(slug)).then(data => {
+      const record = metricRecordFromObject(data, slug);
+      if (!record) throw new Error('Invalid IGX simple statistics');
+      igxMetricCache.set(slug, { at: Date.now(), record });
+      igxMetricFailures.delete(slug);
+      return record;
+    }).catch(error => {
+      if (error.name !== 'AbortError') {
+        const count = Math.min(4, (failure?.count || 0) + 1);
+        igxMetricFailures.set(slug, { count, retryAt: Date.now() + Math.min(300000, 30000 * 2 ** (count - 1)) });
       }
-    }
-
-    const catalog = await loadIgxRouteCatalog();
-    for (const route of catalog.bulk.slice(0, 10)) {
-      try {
-        const entries = await tryBulkRoute(route);
-        igxWorkingBulkRoute = route;
-        const finalized = await finalizeIgxSnapshot(entries);
-        igxSnapshotCache = finalized;
-        igxSnapshotCacheAt = Date.now();
-        return finalized;
-      } catch (_) {}
-    }
-
-    // 새 API 경로가 또 바뀐 순간에도 대시보드 자체가 살아 있으면 현재값을 계속 보여준다.
-    try {
-      const entries = await fetchDashboardSnapshot();
-      const finalized = await finalizeIgxSnapshot(entries);
-      igxSnapshotCache = finalized;
-      igxSnapshotCacheAt = Date.now();
-      return finalized;
-    } catch (_) {}
-
-    // 최후 호환: 구형 statistics가 아직 살아 있으면 사용.
-    const entries = await fetchLegacyStatisticsSnapshot();
-    const finalized = await finalizeIgxSnapshot(entries);
-    igxSnapshotCache = finalized;
-    igxSnapshotCacheAt = Date.now();
-    return finalized;
+      throw error;
+    }).finally(() => igxMetricInflight.delete(slug));
+    igxMetricInflight.set(slug, task);
+    return task;
+  }
+  async function fetchIgxSnapshot({ force = false, slugs = [] } = {}) {
+    const requested = [...new Set(slugs)];
+    const results = await Promise.allSettled(requested.map(slug => fetchIgxOfficialModel(slug, { force })));
+    const entries = new Map();
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled') entries.set(requested[index], result.value);
+    });
+    // Missing records keep their previous UI value. Never fan out into legacy endpoint probing.
+    return entries;
   }
 
-  function modelsFromSnapshot(entries) {
+  document.addEventListener('visibilitychange', () => { if (document.hidden) cancelIgxRequests(); });
+  window.addEventListener('pagehide', cancelIgxRequests);
+
+function modelsFromSnapshot(entries) {
     if (!(entries instanceof Map) || !entries.size) return [];
     return ensureUniqueShorts(
-      [...entries.keys()]
+      [...new Set([...(igxV2Models || []), ...entries.keys()])]
         .filter(slug => looksLikeModelSlug(slug))
         .map(makeModelMeta)
     );
@@ -1802,9 +1856,9 @@
     if (!isIgxChatRoomPage()) return false;
 
     try {
-      const snapshot = await fetchIgxSnapshot({ force: true });
-      const discovered = modelsFromSnapshot(snapshot);
-      if (discovered.length < 2) throw new Error("insufficient model list");
+      const slugs = await getIgxOfficialModels();
+      const discovered = ensureUniqueShorts(slugs.map(makeModelMeta));
+      if (discovered.length < 1) throw new Error("insufficient model list");
 
       saveModelCache(discovered);
       return applyModels(discovered);
@@ -1844,24 +1898,7 @@
 
   // bulk snapshot이 실패했을 때만 쓰는 모델별 최후 폴백.
   async function fetchIgxModelWithRetry(slug) {
-    try {
-      return await fetchIgxModelFromDiscoveredRoute(slug);
-    } catch (_) {}
-
-    try {
-      const payload = await gmGetJson(LEGACY_API_BASE + encodeURIComponent(slug));
-      const entries = collectIgxMetricEntries(payload, slug);
-      const record = entries.get(slug) || [...entries.values()][0];
-      if (record) return record;
-      throw new Error("legacy simple returned no metrics");
-    } catch (_) {
-      await sleep(1200);
-      const payload = await gmGetJson(LEGACY_API_BASE + encodeURIComponent(slug));
-      const entries = collectIgxMetricEntries(payload, slug);
-      const record = entries.get(slug) || [...entries.values()][0];
-      if (record) return record;
-      throw new Error("legacy simple returned no metrics");
-    }
+    return fetchIgxOfficialModel(slug);
   }
 
   async function fetchYameStatusWithRetry() {
@@ -1921,6 +1958,7 @@
 
   let lastSuccessAt = 0;
   let refreshBusy = false;
+  let refreshPending = false;
 
   function renderBarline() {
     const fragment = document.createDocumentFragment();
@@ -1968,17 +2006,23 @@
     barline.replaceChildren(fragment);
   }
 
-  async function refreshAll() {
+  async function refreshAll({ manual = false } = {}) {
     if (!isIgxChatRoomPage()) {
       detachPopupOutsideChat();
       return;
     }
-    if (refreshBusy) return;
+    if (refreshBusy) { refreshPending = true; return; }
     refreshBusy = true;
     btnRefresh.disabled = true;
     btnRefresh.style.opacity = ".35";
 
-    const modelsSnapshot = [...MODELS];
+    // Apply the page-lifetime catalog; no periodic model-list requests.
+    try {
+      const slugs = await getIgxOfficialModels();
+      const discovered = ensureUniqueShorts(slugs.map(makeModelMeta));
+      if (applyModels(discovered)) saveModelCache(discovered);
+    } catch (_) { /* Keep the current models during a catalog outage. */ }
+    const modelsSnapshot = MODELS.filter(model => visibility[model.slug] !== false);
     const yameModels = modelsSnapshot.filter(model => model.source === "yame");
     const igxModels = modelsSnapshot.filter(model => model.source !== "yame");
 
@@ -1990,7 +2034,7 @@
           )
         : Promise.resolve(null);
       const igxTask = igxModels.length
-        ? fetchIgxSnapshot().then(
+        ? fetchIgxSnapshot({ force: manual, slugs: igxModels.map(model => model.apiId || model.slug) }).then(
             value => ({ status: "fulfilled", value }),
             reason => ({ status: "rejected", reason }),
           )
@@ -2095,6 +2139,7 @@
       refreshBusy = false;
       btnRefresh.disabled = false;
       btnRefresh.style.opacity = "";
+      if (refreshPending) { refreshPending = false; setTimeout(() => refreshAll(), 0); }
     }
   }
 
@@ -2290,7 +2335,7 @@
 
   btnRefresh.addEventListener("click", (event) => {
     event.stopPropagation();
-    refreshAll();
+    refreshAll({ manual: true });
   });
 
   document.addEventListener("pointerdown", (event) => {
