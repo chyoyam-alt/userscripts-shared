@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         📡 Crack Radiosonde (라디오존데)
 // @namespace    igx-radiosonde-live
-// @version      4.3.9
+// @version      4.3.10
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/Radiosonde.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/Radiosonde.user.js
 // @description  크랙(wrtn) 입력창에 Fable 5와 최신 IGX 라디오존데 모델 점수를 표시합니다.
@@ -1753,47 +1753,116 @@
       });
     }
   }
-  function igxRequestJson(endpoint, { rawText = false, withHeaders = false } = {}) {
+  function igxRequestJson(endpoint, { rawText = false, withHeaders = false, url = '', envelope = true } = {}) {
+    const target = url || (rawText ? IGX_BASE_URL + '/' : IGX_BASE_URL + '/api/v2/' + endpoint);
+    // Catalog headers need extension access. Statistics use the SDK's browser-fetch path first.
+    const nativeFirst = !rawText && !withHeaders;
     return new Promise((resolve, reject) => {
       igxPendingRequests.push({ resolve, reject, run: () => new Promise((done, fail) => {
-        let request, timer, settled = false;
+        let settled = false, stage = 0, phaseTimer, hardTimer, request, controller;
+        const closeStage = () => {
+          stage++;
+          clearTimeout(phaseTimer);
+          try { controller?.abort(); } catch (_) {}
+          try { request?.abort?.(); } catch (_) {}
+          controller = request = null;
+        };
         const finish = (error, value) => {
           if (settled) return;
           settled = true;
-          clearTimeout(timer);
+          clearTimeout(hardTimer);
           igxActiveAborts.delete(abort);
+          closeStage();
           if (error) fail(error); else done(value);
         };
-        const abort = () => {
-          finish(igxAbortError());
-          try { request?.abort(); } catch (_) {}
+        const abort = () => finish(igxAbortError());
+        const parse = response => {
+          const status = Number(response.status) || 0;
+          if (status && (status < 200 || status >= 300)) throw new Error('HTTP ' + status);
+          if (rawText) {
+            if (!response.responseText) throw new Error('Empty response');
+            return response.responseText;
+          }
+          const payload = JSON.parse(response.responseText);
+          if (envelope && payload?.success !== true) throw new Error(payload?.message || 'IGX request failed');
+          const data = envelope ? payload.data : payload;
+          return withHeaders ? { data, headers: response.responseHeaders || '' } : data;
+        };
+        const start = (useFetch, canFallback) => {
+          if (settled) return;
+          if (!igxCanRequest()) { abort(); return; }
+          closeStage();
+          const token = stage;
+          const current = () => !settled && token === stage;
+          const failure = error => {
+            if (!current()) return;
+            if (!igxCanRequest()) { abort(); return; }
+            if (canFallback) start(!useFetch, false);
+            else finish(error instanceof Error ? error : new Error('Network request failed'));
+          };
+          const loaded = response => {
+            if (!current()) return;
+            try { finish(null, parse(response)); } catch (error) { failure(error); }
+          };
+          if (canFallback) phaseTimer = setTimeout(() => failure(new Error('Request transport timeout')), 8000);
+          try {
+            if (useFetch) {
+              if (typeof fetch !== 'function' || typeof AbortController !== 'function') throw new Error('Browser fetch unavailable');
+              controller = new AbortController();
+              fetch(target, { method: 'GET', credentials: 'omit', cache: 'no-store', signal: controller.signal,
+                headers: { Accept: rawText ? 'text/html' : 'application/json' } }).then(async response => {
+                const responseText = await response.text();
+                let responseHeaders = '';
+                response.headers.forEach((value, name) => { responseHeaders += name + ': ' + value + '\r\n'; });
+                loaded({ status: response.status, responseText, responseHeaders });
+              }).catch(failure);
+            } else {
+              if (typeof GM_xmlhttpRequest !== 'function') throw new Error('Extension request unavailable');
+              request = GM_xmlhttpRequest({ method: 'GET', url: target, timeout: 18000,
+                headers: { Accept: rawText ? 'text/html' : 'application/json' }, onload: loaded,
+                onerror: () => failure(new Error('Extension network error')),
+                ontimeout: () => failure(new Error('Extension request timeout')),
+                onabort: () => failure(new Error('Extension request aborted')),
+              });
+              // Support managers that additionally return a Promise; duplicate callbacks are ignored.
+              if (request && typeof request.then === 'function') request.then(response => {
+                if (response && typeof response.responseText === 'string') loaded(response);
+              }, failure);
+            }
+          } catch (error) { failure(error); }
         };
         igxActiveAborts.add(abort);
-        timer = setTimeout(() => {
-          finish(new Error('IGX request timeout'));
-          try { request?.abort(); } catch (_) {}
-        }, 18000);
-        try {
-          request = GM_xmlhttpRequest({
-            method: 'GET', url: rawText ? IGX_BASE_URL + '/' : IGX_BASE_URL + '/api/v2/' + endpoint,
-            timeout: 18000, headers: { Accept: rawText ? 'text/html' : 'application/json' },
-            onload: response => {
-              try {
-                if (response.status < 200 || response.status >= 300) throw new Error('IGX HTTP ' + response.status);
-                if (rawText) { finish(null, response.responseText); return; }
-                const payload = JSON.parse(response.responseText);
-                if (payload?.success !== true) throw new Error(payload?.message || 'IGX request failed');
-                finish(null, withHeaders ? { data: payload.data, headers: response.responseHeaders || '' } : payload.data);
-              } catch (error) { finish(error); }
-            },
-            onerror: () => finish(new Error('IGX network error')),
-            ontimeout: () => finish(new Error('IGX request timeout')),
-            onabort: () => finish(igxAbortError()),
-          });
-        } catch (error) { finish(error); }
+        hardTimer = setTimeout(() => finish(new Error('Request timeout')), 18000);
+        start(nativeFirst, true);
       }) });
       pumpIgxRequests();
     });
+  }
+  let igxDashboardMetrics = null;
+  let igxDashboardMetricsAt = 0;
+  let igxDashboardMetricsPromise = null;
+  let igxDashboardRetryAt = 0;
+  function rememberIgxDashboardMetrics(html) {
+    const entries = dashboardEntriesFromHtml(html);
+    if (!entries.size) throw new Error('No dashboard statistics');
+    igxDashboardMetrics = entries;
+    igxDashboardMetricsAt = Date.now();
+    return entries;
+  }
+  function recentIgxDashboardMetrics() {
+    return igxDashboardMetrics && Date.now() - igxDashboardMetricsAt < 5 * 60 * 1000
+      ? igxDashboardMetrics : new Map();
+  }
+  function recoverIgxDashboardMetrics() {
+    const recent = recentIgxDashboardMetrics();
+    if (recent.size) return Promise.resolve(recent);
+    if (igxDashboardMetricsPromise) return igxDashboardMetricsPromise;
+    if (Date.now() < igxDashboardRetryAt || !igxCanRequest()) return Promise.resolve(new Map());
+    igxDashboardRetryAt = Date.now() + 5 * 60 * 1000;
+    igxDashboardMetricsPromise = igxRequestJson(null, { rawText: true })
+      .then(rememberIgxDashboardMetrics).catch(() => new Map())
+      .finally(() => { igxDashboardMetricsPromise = null; });
+    return igxDashboardMetricsPromise;
   }
   function igxModelSlugs(data) {
     if (!Array.isArray(data)) throw new Error('Invalid IGX model list');
@@ -1836,6 +1905,7 @@
         try {
           const html = await igxRequestJson(null, { rawText: true });
           slugs = igxDashboardModelSlugs(html);
+          try { rememberIgxDashboardMetrics(html); } catch (_) { /* Catalog remains usable. */ }
         } catch (error) {
           if (error.name === 'AbortError' || !slugs) throw error;
           // Keep a usable API catalog if the optional dashboard request fails.
@@ -1868,14 +1938,39 @@
     igxMetricInflight.set(slug, task);
     return task;
   }
-  async function fetchIgxSnapshot({ force = false, slugs = [] } = {}) {
+  async function fetchIgxSnapshot({ force = false, slugs = [], onRecord } = {}) {
     const requested = [...new Set(slugs)];
-    const results = await Promise.allSettled(requested.map(slug => fetchIgxOfficialModel(slug, { force })));
+    // Reuse statistics already downloaded for catalog recovery without another request.
+    if (igxCanRequest() && onRecord) {
+      const dashboard = recentIgxDashboardMetrics();
+      for (const slug of requested) {
+        const record = dashboard.get(slug);
+        if (record && !igxMetricCache.has(slug)) onRecord(slug, record);
+      }
+    }
+    const results = await Promise.allSettled(requested.map(async slug => {
+      const record = await fetchIgxOfficialModel(slug, { force });
+      if (igxCanRequest() && onRecord) onRecord(slug, record);
+      return record;
+    }));
     const entries = new Map();
     results.forEach((result, index) => {
       if (result.status === 'fulfilled') entries.set(requested[index], result.value);
     });
-    // Missing records keep their previous UI value. Never fan out into legacy endpoint probing.
+    // A shared, bounded dashboard fallback also covers extension-specific API failures.
+    if (entries.size < requested.length && igxCanRequest()) {
+      const dashboard = await recoverIgxDashboardMetrics();
+      for (const slug of requested) {
+        if (entries.has(slug)) continue;
+        const record = dashboard.get(slug);
+        const latest = igxMetricCache.get(slug);
+        if (record && (!latest || igxDashboardMetricsAt >= latest.at)) {
+          entries.set(slug, record);
+          if (igxCanRequest() && onRecord) onRecord(slug, record);
+        }
+      }
+    }
+    // Never rebuild the catalog or probe legacy routes during a statistics refresh.
     return entries;
   }
 
@@ -1941,15 +2036,8 @@ function modelsFromSnapshot(entries) {
   }
 
   async function fetchYameStatusWithRetry() {
-    const url = `${YAME_STATUS_URL}?t=${Date.now()}`;
-    try {
-      return await gmGetJson(url, 20000);
-    } catch (_) {
-      await sleep(1200);
-      return await gmGetJson(`${YAME_STATUS_URL}?t=${Date.now()}`, 20000);
-    }
+    return igxRequestJson(null, { url: YAME_STATUS_URL + '?t=' + Date.now(), envelope: false });
   }
-
   function normalizeYamePayload(payload) {
     const normalized = new Map();
     if (!payload || !Array.isArray(payload.models)) return normalized;
@@ -2068,12 +2156,29 @@ function modelsFromSnapshot(entries) {
     try {
       const yameTask = yameModels.length
         ? fetchYameStatusWithRetry().then(
-            value => ({ status: "fulfilled", value }),
+            value => {
+              if (igxCanRequest()) {
+                const records = normalizeYamePayload(value);
+                for (const model of yameModels) {
+                  const data = records.get(model.apiId)?.data;
+                  if (data) last.set(model.slug, { status: normalizeStatus(data.status), score: fmt0(data.score) ?? '—',
+                    lat: latencySeconds(data.latency) ?? '—', scoreBand: normalizeYameScoreBand(data.scoreBand, data.score, data.failureCount > 0) });
+                }
+                renderBarline();
+              }
+              return { status: "fulfilled", value };
+            },
             reason => ({ status: "rejected", reason }),
           )
         : Promise.resolve(null);
       const igxTask = igxModels.length
-        ? fetchIgxSnapshot({ force: manual, slugs: igxModels.map(model => model.apiId || model.slug) }).then(
+        ? fetchIgxSnapshot({ force: manual, slugs: igxModels.map(model => model.apiId || model.slug),
+              onRecord: (slug, record) => {
+                const model = igxModels.find(model => (model.apiId || model.slug) === slug);
+                if (model) { last.set(model.slug, { status: normalizeStatus(record.status), score: fmt0(record.score) ?? '—',
+                    lat: latencySeconds(record.latency) ?? '—', scoreBand: '' });
+                  renderBarline(); }
+              } }).then(
             value => ({ status: "fulfilled", value }),
             reason => ({ status: "rejected", reason }),
           )
