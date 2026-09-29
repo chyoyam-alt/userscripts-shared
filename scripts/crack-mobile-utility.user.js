@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.5.11
+// @version      4.5.12
 // @description  허브 SVG 복원, 모델 맨 왼쪽 배치 및 전환 버튼 간격 수정. 미니사이드바 다크/라이트·소설/채팅 전환. 코드블록 자동 줄바꿈, 라이트 테마 코드·보조 글자 대비 수정, 테마 판별 통일, DOM·캐시·라디오존데 반복 처리 최적화. 모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       Assistant
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/crack-mobile-utility.user.js
@@ -30,7 +30,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.5.11';
+    const VERSION = '4.5.12';
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
     const CMU_RUNTIME_KEY = '__CRACK_MOBILE_UTILITY_RUNTIME__';
     const runtimeRoot = document.documentElement;
@@ -13646,7 +13646,7 @@
       });
     }
   }
-  function igxRequestJson(endpoint) {
+  function igxRequestJson(endpoint, { rawText = false, withHeaders = false } = {}) {
     return new Promise((resolve, reject) => {
       igxPendingRequests.push({ resolve, reject, run: () => new Promise((done, fail) => {
         let request, timer, settled = false;
@@ -13668,14 +13668,15 @@
         }, 18000);
         try {
           request = GM_xmlhttpRequest({
-            method: 'GET', url: IGX_BASE_URL + '/api/v2/' + endpoint,
-            timeout: 18000, headers: { Accept: 'application/json' },
+            method: 'GET', url: rawText ? IGX_BASE_URL + '/' : IGX_BASE_URL + '/api/v2/' + endpoint,
+            timeout: 18000, headers: { Accept: rawText ? 'text/html' : 'application/json' },
             onload: response => {
               try {
                 if (response.status < 200 || response.status >= 300) throw new Error('IGX HTTP ' + response.status);
+                if (rawText) { finish(null, response.responseText); return; }
                 const payload = JSON.parse(response.responseText);
                 if (payload?.success !== true) throw new Error(payload?.message || 'IGX request failed');
-                finish(null, payload.data);
+                finish(null, withHeaders ? { data: payload.data, headers: response.responseHeaders || '' } : payload.data);
               } catch (error) { finish(error); }
             },
             onerror: () => finish(new Error('IGX network error')),
@@ -13687,17 +13688,55 @@
       pumpIgxRequests();
     });
   }
+  function igxModelSlugs(data) {
+    if (!Array.isArray(data)) throw new Error('Invalid IGX model list');
+    const slugs = [...new Set(data.filter(value => typeof value === 'string' &&
+      /^[a-z0-9][a-z0-9._-]*$/i.test(value) && !EXCLUDED_MODELS.has(value.toLowerCase())))];
+    if (!slugs.length) throw new Error('Empty IGX model list');
+    return slugs;
+  }
+  function igxCatalogIsStale(headers) {
+    // The CDN can serve an old catalog despite max-age=15 and no-cache requests.
+    const stamp = /^cdn-cachedat:\s*(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})\s*$/im.exec(headers);
+    if (stamp) {
+      const [, month, day, year, hour, minute, second] = stamp.map(Number);
+      return Date.now() - Date.UTC(year, month - 1, day, hour, minute, second) > 5 * 60 * 1000;
+    }
+    const age = /^age:\s*(\d+)\s*$/im.exec(headers);
+    return !!age && Number(age[1]) > 300;
+  }
+  function igxDashboardModelSlugs(html) {
+    // Read only the serialized model IDs; never evaluate dashboard JavaScript.
+    const match = /\bmodels["']?\s*:\s*(\[[a-z0-9._",\s-]{1,32768}\])/i.exec(html);
+    if (!match) throw new Error('Missing IGX dashboard model list');
+    return igxModelSlugs(JSON.parse(match[1]));
+  }
   async function getIgxOfficialModels() {
     if (igxV2Models) return igxV2Models;
-    // Keep even a failed attempt for this page lifetime: no periodic catalog fetches.
-    if (!igxModelListPromise) igxModelListPromise = igxRequestJson('models').then(data => {
-      if (!Array.isArray(data)) throw new Error('Invalid IGX model list');
-      const slugs = [...new Set(data.filter(value => typeof value === 'string' &&
-        /^[a-z0-9][a-z0-9._-]*$/i.test(value) && !EXCLUDED_MODELS.has(value.toLowerCase())))];
-      if (!slugs.length) throw new Error('Empty IGX model list');
+    // One discovery per page, including its stale-CDN fallback. No polling of catalogs.
+    if (!igxModelListPromise) igxModelListPromise = (async () => {
+      let slugs;
+      let needsDashboard = false;
+      try {
+        const response = await igxRequestJson('models', { withHeaders: true });
+        slugs = igxModelSlugs(response.data);
+        needsDashboard = igxCatalogIsStale(response.headers);
+      } catch (error) {
+        if (error.name === 'AbortError') throw error;
+        needsDashboard = true;
+      }
+      if (needsDashboard) {
+        try {
+          const html = await igxRequestJson(null, { rawText: true });
+          slugs = igxDashboardModelSlugs(html);
+        } catch (error) {
+          if (error.name === 'AbortError' || !slugs) throw error;
+          // Keep a usable API catalog if the optional dashboard request fails.
+        }
+      }
       igxV2Models = slugs;
       return slugs;
-    });
+    })();
     return igxModelListPromise;
   }
   function fetchIgxOfficialModel(slug, { force = false } = {}) {

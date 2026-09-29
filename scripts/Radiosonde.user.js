@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         📡 Crack Radiosonde (라디오존데)
 // @namespace    igx-radiosonde-live
-// @version      4.3.8
+// @version      4.3.9
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/Radiosonde.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/Radiosonde.user.js
 // @description  크랙(wrtn) 입력창에 Fable 5와 최신 IGX 라디오존데 모델 점수를 표시합니다.
@@ -1753,7 +1753,7 @@
       });
     }
   }
-  function igxRequestJson(endpoint) {
+  function igxRequestJson(endpoint, { rawText = false, withHeaders = false } = {}) {
     return new Promise((resolve, reject) => {
       igxPendingRequests.push({ resolve, reject, run: () => new Promise((done, fail) => {
         let request, timer, settled = false;
@@ -1775,14 +1775,15 @@
         }, 18000);
         try {
           request = GM_xmlhttpRequest({
-            method: 'GET', url: IGX_BASE_URL + '/api/v2/' + endpoint,
-            timeout: 18000, headers: { Accept: 'application/json' },
+            method: 'GET', url: rawText ? IGX_BASE_URL + '/' : IGX_BASE_URL + '/api/v2/' + endpoint,
+            timeout: 18000, headers: { Accept: rawText ? 'text/html' : 'application/json' },
             onload: response => {
               try {
                 if (response.status < 200 || response.status >= 300) throw new Error('IGX HTTP ' + response.status);
+                if (rawText) { finish(null, response.responseText); return; }
                 const payload = JSON.parse(response.responseText);
                 if (payload?.success !== true) throw new Error(payload?.message || 'IGX request failed');
-                finish(null, payload.data);
+                finish(null, withHeaders ? { data: payload.data, headers: response.responseHeaders || '' } : payload.data);
               } catch (error) { finish(error); }
             },
             onerror: () => finish(new Error('IGX network error')),
@@ -1794,17 +1795,55 @@
       pumpIgxRequests();
     });
   }
+  function igxModelSlugs(data) {
+    if (!Array.isArray(data)) throw new Error('Invalid IGX model list');
+    const slugs = [...new Set(data.filter(value => typeof value === 'string' &&
+      /^[a-z0-9][a-z0-9._-]*$/i.test(value) && !EXCLUDED_MODELS.has(value.toLowerCase())))];
+    if (!slugs.length) throw new Error('Empty IGX model list');
+    return slugs;
+  }
+  function igxCatalogIsStale(headers) {
+    // The CDN can serve an old catalog despite max-age=15 and no-cache requests.
+    const stamp = /^cdn-cachedat:\s*(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})\s*$/im.exec(headers);
+    if (stamp) {
+      const [, month, day, year, hour, minute, second] = stamp.map(Number);
+      return Date.now() - Date.UTC(year, month - 1, day, hour, minute, second) > 5 * 60 * 1000;
+    }
+    const age = /^age:\s*(\d+)\s*$/im.exec(headers);
+    return !!age && Number(age[1]) > 300;
+  }
+  function igxDashboardModelSlugs(html) {
+    // Read only the serialized model IDs; never evaluate dashboard JavaScript.
+    const match = /\bmodels["']?\s*:\s*(\[[a-z0-9._",\s-]{1,32768}\])/i.exec(html);
+    if (!match) throw new Error('Missing IGX dashboard model list');
+    return igxModelSlugs(JSON.parse(match[1]));
+  }
   async function getIgxOfficialModels() {
     if (igxV2Models) return igxV2Models;
-    // Keep even a failed attempt for this page lifetime: no periodic catalog fetches.
-    if (!igxModelListPromise) igxModelListPromise = igxRequestJson('models').then(data => {
-      if (!Array.isArray(data)) throw new Error('Invalid IGX model list');
-      const slugs = [...new Set(data.filter(value => typeof value === 'string' &&
-        /^[a-z0-9][a-z0-9._-]*$/i.test(value) && !EXCLUDED_MODELS.has(value.toLowerCase())))];
-      if (!slugs.length) throw new Error('Empty IGX model list');
+    // One discovery per page, including its stale-CDN fallback. No polling of catalogs.
+    if (!igxModelListPromise) igxModelListPromise = (async () => {
+      let slugs;
+      let needsDashboard = false;
+      try {
+        const response = await igxRequestJson('models', { withHeaders: true });
+        slugs = igxModelSlugs(response.data);
+        needsDashboard = igxCatalogIsStale(response.headers);
+      } catch (error) {
+        if (error.name === 'AbortError') throw error;
+        needsDashboard = true;
+      }
+      if (needsDashboard) {
+        try {
+          const html = await igxRequestJson(null, { rawText: true });
+          slugs = igxDashboardModelSlugs(html);
+        } catch (error) {
+          if (error.name === 'AbortError' || !slugs) throw error;
+          // Keep a usable API catalog if the optional dashboard request fails.
+        }
+      }
       igxV2Models = slugs;
       return slugs;
-    });
+    })();
     return igxModelListPromise;
   }
   function fetchIgxOfficialModel(slug, { force = false } = {}) {
