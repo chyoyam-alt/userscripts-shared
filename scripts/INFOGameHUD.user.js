@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         👾 Crack INFO Game HUD (미니 RPG HUD)
 // @namespace    crack-info-game-hud-clean
-// @version      3.5.10
+// @version      3.6.0
 // @description  크랙 채팅 최신 답변을 게임식 로그·관계도·HUD 코멘트로 정리하고, PET/마스코트·토큰 사용량·암호화 클라우드 인계·펫 다이어리를 지원합니다.
 // @author       뤼부이
-// @updateURL    https://github.com/chyoyam-alt/userscripts-shared/raw/refs/heads/main/scripts/INFOGameHUD.user.js
-// @downloadURL  https://github.com/chyoyam-alt/userscripts-shared/raw/refs/heads/main/scripts/INFOGameHUD.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/INFOGameHUD.user.js
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/INFOGameHUD.user.js
 // @match        https://crack.wrtn.ai/*
 // @run-at       document-idle
 // @grant        GM_xmlhttpRequest
@@ -29,7 +29,7 @@
   if (window.__CIGH_CLEAN_V240_RELEASE_LOADED__) return;
   window.__CIGH_CLEAN_V240_RELEASE_LOADED__ = true;
 
-  const VERSION = '3.5.10';
+  const VERSION = '3.6.0';
   const FAB_ID = 'cigh-clean-fab';
   const PANEL_ID = 'cigh-clean-panel';
   const POPUP_ID = 'cigh-clean-popup';
@@ -7415,12 +7415,14 @@
     const id = String(chatId || '').trim();
     if (!id) return null;
     const state = readCrackRecordState();
+    const localDeleteEpoch = rbLocalDataDeleteEpoch;
     let createdAt = Number(state.roomCreatedAt?.[id] || 0);
     let detail = null;
 
     if (!createdAt || options.force) {
       try {
         const json = await crackApiGet(`${CRACK_API_BASE}/crack-gen/v3/chats/${encodeURIComponent(id)}`);
+        if (localDeleteEpoch !== rbLocalDataDeleteEpoch) return null;
         detail = json?.data || json || {};
         const t = new Date(detail?.createdAt || detail?.created_at || '').getTime();
         if (Number.isFinite(t) && t > 0) {
@@ -7453,10 +7455,12 @@
   }
 
   async function checkCurrentCrackEnding(chatId = currentCrackChatId()) {
+    const localDeleteEpoch = rbLocalDataDeleteEpoch;
     const id = String(chatId || '').trim();
     if (!id) return false;
     try {
       const json = await crackApiGet(`${CRACK_CONTENTS_API_BASE}/character-chat/v3/chats/${encodeURIComponent(id)}/messages?limit=20`);
+      if (localDeleteEpoch !== rbLocalDataDeleteEpoch) return false;
       const rows = Array.isArray(json?.data?.messages) ? json.data.messages
         : Array.isArray(json?.data) ? json.data
           : Array.isArray(json?.messages) ? json.messages : [];
@@ -7479,6 +7483,7 @@
   async function syncCrackRecord(options = {}) {
     if (crackRecordSyncPromise) return crackRecordSyncPromise;
     const forceFull = !!options.forceFull;
+    const localDeleteEpoch = rbLocalDataDeleteEpoch;
     crackRecordSyncing = true;
 
     crackRecordSyncPromise = (async () => {
@@ -7542,21 +7547,25 @@
         state.lastSyncError = '';
 
         await refreshCrackBalance(state);
+        if (localDeleteEpoch !== rbLocalDataDeleteEpoch) return readCrackRecordState();
         writeCrackRecordState(state);
         syncCrackAchievementsFromRecord(state, true);
 
         const chatId = currentCrackChatId();
         if (chatId) {
           await ensureCrackRoomMeta(chatId);
+          if (localDeleteEpoch !== rbLocalDataDeleteEpoch) return readCrackRecordState();
           await checkCurrentCrackEnding(chatId);
         }
 
+        if (localDeleteEpoch !== rbLocalDataDeleteEpoch) return readCrackRecordState();
         state = readCrackRecordState();
         state.lastSyncAt = Date.now();
         state.lastSyncError = '';
         writeCrackRecordState(state);
         return state;
       } catch (err) {
+        if (localDeleteEpoch !== rbLocalDataDeleteEpoch) return readCrackRecordState();
         state = previousState;
         state.lastSyncError = String(err?.message || err || 'SYNC_ERROR');
         state.lastSyncAt = Date.now();
@@ -9049,21 +9058,12 @@
   }
 
   function findCrackHeaderTitleButton() {
-    const button = document.querySelector('main span.line-clamp-1')?.closest('button') || null;
-    if (!(button instanceof HTMLElement)) return null;
-
-    const header = button.parentElement;
+    // 0930: scope to the episode header, never the global navigation or chat text.
+    const header = document.querySelector('main [class~="group/header"]');
     if (!(header instanceof HTMLElement)) return null;
-
-    const headerRect = header.getBoundingClientRect?.();
-    const fallbackHeight = Number(header.offsetHeight || header.clientHeight || button.offsetHeight || 0);
-    const measuredHeight = Number(headerRect?.height || 0);
-    const checkHeight = measuredHeight > 0 ? measuredHeight : fallbackHeight;
-
-    // Crack episode top bar is normally h-12. If it is visibly measurable and outside that range,
-    // do not anchor to random line-clamp text elsewhere.
-    if (checkHeight > 0 && (checkHeight < 40 || checkHeight > 56)) return null;
-
+    const title = header.querySelector('span.line-clamp-1')?.closest('button');
+    const button = title || Array.from(header.children).find(el => el.matches('button:not([aria-haspopup]):not([id^="cigh-"]):not(#hcd-hdr-btn)'));
+    if (!(button instanceof HTMLElement) || !header.contains(button) || isOwnNode(button)) return null;
     return button;
   }
 
@@ -9072,9 +9072,9 @@
   }
 
   function findCrackInputHost() {
-    const input = document.querySelector('.__chat_input_textarea');
+    const input = document.querySelector('main .__chat_input_textarea[contenteditable="true"]');
     if (!(input instanceof HTMLElement)) return null;
-    return input.closest('div.pointer-events-auto') || input;
+    return input.closest('div.pointer-events-auto') || input.closest('[data-sgb-input-box], div.rounded-lg.border') || input;
   }
 
   function rectsIntersect(a, b) {
@@ -9086,6 +9086,11 @@
 
     const inputHost = findCrackInputHost();
     if (!(inputHost instanceof HTMLElement)) return false;
+
+    if (!shouldShowTickerBox()) {
+      setTickerBoxVisible(ticker, false);
+      return true;
+    }
 
     const rect = inputHost.getBoundingClientRect?.();
     if (!rect || rect.width <= 0 || rect.height <= 0) return false;
@@ -9228,13 +9233,16 @@
     const titleButton = findCrackHeaderTitleButton();
     if (!(titleButton instanceof HTMLElement)) return null;
 
+    const previousDockFab = document.getElementById(DOCK_FAB_ID);
     const dockFab = ensureDockButtonInHeader(titleButton);
     if (!(dockFab instanceof HTMLElement)) return null;
+    let themeNeeded = dockFab !== previousDockFab;
 
     let ticker = document.getElementById(TICKER_ID);
     if (!ticker) {
       ticker = document.createElement('div');
       ticker.id = TICKER_ID;
+      themeNeeded = true;
       ticker.innerHTML = '<div class="cigh-clean-ticker-viewport"><div class="cigh-clean-ticker-line"></div></div>';
       ticker.addEventListener('click', event => {
         event.preventDefault();
@@ -9245,7 +9253,7 @@
       document.body.appendChild(ticker);
     }
 
-    applyThemeMode();
+    if (themeNeeded) applyThemeMode();
     return { dockFab, ticker, titleButton };
   }
 
@@ -9481,11 +9489,16 @@
 
   function markCodeBlocksInClone(clone) {
     clone.querySelectorAll('pre').forEach(pre => {
+      if (!clone.contains(pre)) return;
+      const wrapper = pre.closest('.wrtn-codeblock, [data-sgb-codeblock]');
       const codeEl = pre.querySelector('code') || pre;
       const cls = String(codeEl.className || pre.className || '');
       const lang = cls.match(/language-([a-z0-9_-]+)/i)?.[1] || '';
-      const text = codeEl.innerText || codeEl.textContent || pre.innerText || pre.textContent || '';
-      pre.replaceWith(document.createTextNode(`\n\`\`\`${lang}\n${text}\n\`\`\`\n`));
+      const text = codeEl.textContent || '';
+      // Native wrappers also have .not-wrtn-markdown; replace the wrapper so
+      // the subsequent UI cleanup preserves INFO and excludes copy/language controls.
+      const target = wrapper && clone.contains(wrapper) ? wrapper : pre;
+      target.replaceWith(document.createTextNode('\n' + '```' + lang + '\n' + text + '\n' + '```' + '\n'));
     });
   }
 
@@ -9546,23 +9559,37 @@
     if (!isEpisodePath()) return [];
     const scope = findCrackMessageScope();
     if (!(scope instanceof HTMLElement)) return [];
-    let groups = scope.matches?.('[data-message-group-id]') ? [scope] : Array.from(scope.querySelectorAll('[data-message-group-id]'));
-    // 실제 리스트의 flex 방향을 따른다. 화면 밖 최신 답변도 읽을 수 있다.
-    const first = groups[0];
-    let reversed = false;
-    for (let parent = first?.parentElement; parent; parent = parent.parentElement) {
-      if (getComputedStyle(parent).flexDirection === 'column-reverse') { reversed = true; break; }
-      if (parent === scope) break;
-    }
-    if (reversed) groups.reverse();
+    const first = scope.matches('[data-message-group-id]') ? scope : scope.querySelector('[data-message-group-id]');
+    if (!first) return [];
     const entries = [];
-    for (let i = groups.length - 1; i >= 0 && entries.length < 4; i--) {
-      const group = groups[i];
-      if (isOwnNode(group) || group.closest('[role="dialog"], #igx-live-popup')) continue;
+    const collect = group => {
+      if (!(group instanceof HTMLElement) || !group.matches('[data-message-group-id]') || isOwnNode(group)
+        || group.closest('[role="dialog"], #igx-live-popup')) return;
       const markdown = group.querySelector('.wrtn-markdown:not(.not-wrtn-markdown)');
-      if (!(markdown instanceof HTMLElement) || isOwnNode(markdown)) continue;
+      if (!(markdown instanceof HTMLElement) || isOwnNode(markdown)) return;
+      const userRow = group.querySelector('.border-y');
+      const isUser = group.firstElementChild?.classList.contains('items-end')
+        || !!(userRow && !userRow.closest('.wrtn-markdown'));
+      // A newly submitted user message is context, never the latest AI response.
+      if (options.assistantTarget && !entries.length && isUser) return;
       const text = getCleanMarkdownText(markdown, { includeCodeBlocks: !!options.includeCodeBlocks });
       if (text.length >= 2) entries.push({ group, markdown, text });
+    };
+    const list = first.parentElement;
+    if (list?.classList.contains('flex-col-reverse') && scope.contains(list)) {
+      // Native list: newest is the first direct child. Stop after four usable
+      // groups, without scanning the older history or ungrouped streaming rows.
+      for (let group = list.firstElementChild; group && entries.length < 4; group = group.nextElementSibling) collect(group);
+    } else {
+      // Older/custom layouts retain the previous flex-direction fallback.
+      let reversed = false;
+      for (let parent = first.parentElement; parent; parent = parent.parentElement) {
+        if (getComputedStyle(parent).flexDirection === 'column-reverse') { reversed = true; break; }
+        if (parent === scope) break;
+      }
+      const groups = scope.matches('[data-message-group-id]') ? [scope] : Array.from(scope.querySelectorAll('[data-message-group-id]'));
+      if (reversed) groups.reverse();
+      for (let i = groups.length - 1; i >= 0 && entries.length < 4; i--) collect(groups[i]);
     }
     return entries.reverse();
   }
@@ -9604,7 +9631,7 @@
   }
 
   function findLatestContext() {
-    const entries = getLatestCrackLogEntries({ includeCodeBlocks: true });
+    const entries = getLatestCrackLogEntries({ includeCodeBlocks: true, assistantTarget: true });
     const picked = entries[entries.length - 1];
     if (!picked) return null;
 
@@ -10526,22 +10553,33 @@ ${String(brokenJson || '').slice(0, 14000)}`;
     return true;
   }
 
+  let generateDoneCursorInitialized = false;
+  let generateDonePreviousLayer = null;
+
   function startGenerateDonePoll() {
     const eventWindow = getGenerateDoneWindow();
-    let previousLayer = eventWindow.dataLayer;
-    eventWindow.__cighDataLayerSeenLen = Array.isArray(previousLayer) ? previousLayer.length : 0;
+    // Keep the cursor across visibility pauses; otherwise completion events
+    // received while hidden are discarded on resume.
+    if (!generateDoneCursorInitialized) {
+      generateDoneCursorInitialized = true;
+      generateDonePreviousLayer = eventWindow.dataLayer;
+      eventWindow.__cighDataLayerSeenLen = Array.isArray(generateDonePreviousLayer) ? generateDonePreviousLayer.length : 0;
+    }
     clearInterval(eventWindow.__cighGenerateDonePollTimer);
-    eventWindow.__cighGenerateDonePollTimer = setInterval(() => {
+    const poll = () => {
       try {
         const layer = eventWindow.dataLayer;
         if (!Array.isArray(layer)) return;
         let seen = Number(eventWindow.__cighDataLayerSeenLen || 0);
-        if (layer !== previousLayer || layer.length < seen) seen = 0;
-        previousLayer = layer;
-        for (let i = seen; i < layer.length; i++) handleGenerateDoneEntry(layer[i]);
-        eventWindow.__cighDataLayerSeenLen = layer.length;
+        if (layer !== generateDonePreviousLayer || layer.length < seen) seen = 0;
+        generateDonePreviousLayer = layer;
+        const end = layer.length;
+        for (let i = seen; i < end; i++) handleGenerateDoneEntry(layer[i]);
+        eventWindow.__cighDataLayerSeenLen = end;
       } catch (error) { console.debug('[CIGH] completion poll', error); }
-    }, 400);
+    };
+    poll();
+    eventWindow.__cighGenerateDonePollTimer = setInterval(poll, 400);
   }
 
   function onGenerateDoneSignal(entry) {
@@ -16057,8 +16095,7 @@ ${String(brokenJson || '').slice(0, 14000)}`;
   }
 
   function onRoomChanged() {
-    const hudRouteAllowed = syncHudUiForRoute();
-    if (hudRouteAllowed) syncDockUiForRoute();
+    syncDockUiForRoute();
 
     const nextKey = roomKey();
     const prevKey = lastSeenRoomKey;
@@ -20152,7 +20189,10 @@ ${String(brokenJson || '').slice(0, 14000)}`;
     window.addEventListener('pagehide', () => { flushPendingRoomLogs();writeLastSeenAt(Date.now()); }, { passive: true });
 
     window.addEventListener('storage', event => {
-      if (!event.key || event.key === STORE_KEY) __cighStoreCache = null;
+      if (!event.key || event.key === STORE_KEY) {
+        __cighStoreCache = null;
+        rbSyncLocalDataRemoval(event);
+      }
       if (!event.key || event.key === CUSTOM_DECO_STORE) {
         customDecoCache = null;
         customDecoImageCache.clear();
@@ -20634,7 +20674,7 @@ function injectStyle() {
   rbLegacy_injectStyle();
   document.getElementById('cigh-rebuild-style')?.remove();
   const style = document.createElement('style');
-  style.id = 'cigh-rebuild-style'; style.textContent = RB_STYLE;
+  style.id = 'cigh-rebuild-style'; style.textContent = RB_STYLE + RB_LOCAL_DATA_STYLE;
   document.head.appendChild(style);
 }
 
@@ -20667,6 +20707,199 @@ function rbConfirm({title,text,detail='',accept='초기화',onAccept,onCancel}){
   rbTrapFocus(layer,()=>finish(false));host.appendChild(layer);layer.querySelector('[data-rb-answer="no"]').focus();
 }
 
+// Room deletion uses the existing settings palette and confirmation dialog.
+const RB_LOCAL_DATA_STYLE = `
+#cigh-clean-settings .cigh-rb-data-summary{border:1px solid var(--cigh-border);border-radius:4px;background:var(--cigh-bg-2);padding:8px;margin-bottom:8px;color:var(--cigh-accent);font-size:10px}
+#cigh-clean-settings input.cigh-rb-data-check{appearance:auto!important;width:13px!important;height:13px!important;min-width:13px!important;min-height:13px!important;flex:none;margin:0;padding:0;accent-color:var(--cigh-accent);cursor:pointer}
+#cigh-clean-settings .cigh-rb-data-tools{display:flex;flex-wrap:wrap;gap:4px;margin:7px 0;align-items:center}
+#cigh-clean-settings .cigh-rb-data-tools button{min-height:27px}
+#cigh-clean-settings .cigh-rb-data-rooms{display:grid;gap:4px;margin:6px 0 10px}
+#cigh-clean-settings .cigh-rb-data-room{display:flex;align-items:flex-start;gap:7px;border:1px solid var(--cigh-border-faint);border-radius:4px;background:var(--cigh-bg-2);padding:8px 7px;cursor:pointer}
+#cigh-clean-settings .cigh-rb-data-room:has(:checked){border-color:var(--cigh-accent-soft);background:var(--cigh-accent-softer)}
+#cigh-clean-settings .cigh-rb-data-room input{margin-top:3px}
+#cigh-clean-settings .cigh-rb-data-room-copy{flex:1;min-width:0;color:var(--cigh-text);font-size:10px;overflow-wrap:anywhere}
+#cigh-clean-settings .cigh-rb-data-room-copy b{display:block;font-size:11px}
+#cigh-clean-settings .cigh-rb-data-room-copy small{display:block;font-size:9px;color:var(--cigh-text-faint);line-height:1.6}
+#cigh-clean-settings .cigh-rb-data-current{color:var(--cigh-accent);font-size:9px;margin-left:4px;white-space:nowrap}
+#cigh-clean-settings .cigh-rb-data-actions{position:sticky;bottom:-10px;display:flex;flex-wrap:wrap;align-items:center;gap:5px;padding:7px 0;background:var(--cigh-bg);border-top:1px solid var(--cigh-border)}
+#cigh-clean-settings .cigh-rb-data-actions span{flex:1;min-width:80px;font-size:9px;color:var(--cigh-text-soft)}
+#cigh-clean-settings .cigh-rb-data-actions .red{border-color:var(--cigh-danger);color:var(--cigh-danger)}
+#cigh-clean-settings [data-rb-data-notice]{font-size:10px;color:var(--cigh-accent);overflow-wrap:anywhere;margin:6px 0}
+#cigh-clean-settings [data-rb-data-page] button:disabled{opacity:.4;cursor:default}
+#cigh-clean-settings [data-rb-data-page] [hidden]{display:none!important}
+`;
+let rbLocalDataDeleteEpoch = 0;
+function rbLocalRoomEntries(store = readStore()) {
+  return Object.entries(store).filter(([key, room]) =>
+    !key.startsWith('_') && room && typeof room === 'object' && !Array.isArray(room));
+}
+function rbLocalDataSize(value) {
+  const bytes = JSON.stringify(value).length * 2;
+  return bytes >= 1048576 ? (bytes / 1048576).toFixed(2) + ' MB' : (bytes / 1024).toFixed(1) + ' KB';
+}
+function rbLocalRoomLabel(key, room) {
+  return String(room.roomLabel || (key === roomKey() ? getCurrentRoomDisplayName() : '') || '이름 미기록');
+}
+function rbLocalChatId(key) {
+  const pathId = currentCrackChatId(key);
+  return pathId || (key.includes(':') ? key.slice(key.indexOf(':') + 1) : '');
+}
+function rbRemoveRoomRecordRefs(raw, keys) {
+  const state = JSON.parse(raw);
+  if (!state || typeof state !== 'object' || Array.isArray(state)) throw new Error('로컬 RECORD 저장 형식을 확인해 주세요.');
+  const ids = new Set(keys.map(rbLocalChatId).filter(Boolean));
+  let changed = false;
+  if (state.roomCreatedAt && typeof state.roomCreatedAt === 'object') {
+    for (const id of ids) if (Object.hasOwn(state.roomCreatedAt, id)) { delete state.roomCreatedAt[id]; changed = true; }
+  }
+  for (const [field, matches] of [['endingChats', value => ids.has(String(value))], ['pendingActions', value => ids.has(String(value?.chatId || ''))]]) {
+    if (!Array.isArray(state[field])) continue;
+    const filtered = state[field].filter(value => !matches(value));
+    if (filtered.length !== state[field].length) { state[field] = filtered; changed = true; }
+  }
+  if (ids.has(String(state.rerollRunChatId || ''))) { state.rerollRunChatId = ''; state.rerollRun = 0; changed = true; }
+  return changed ? JSON.stringify(state) : raw;
+}
+function rbRefreshDeletedCurrentRoom() {
+  cighAnalysisEpoch++;
+  clearTransientUi();
+  footerLastText = '';
+  shopNotice = '';
+  pendingPetCelebrate = null;
+  const room = getRoom();
+  currentData = room.data ? stripRoomUserFromData(room.data, getRoomUserName(room)) : null;
+  loadRoomLogLines(room);
+  renderContent();
+  refreshPetSurfaces(getPet(room), { resetVisual: true });
+  clearTimeout(crackRecordViewSyncTimer);
+  clearTimeout(crackRecordEventSyncTimer);
+  clearTimeout(crackRecordEventSyncTimer2);
+}
+function rbApplyLocalDataDelete(keys, expected) {
+  if (analyzeBusy || cloudBusy || shopBusy || crackRecordSyncing) throw new Error('분석·동기화·아이템 작업이 끝난 뒤 다시 삭제해 주세요.');
+  const store = readStore(), rooms = new Map(rbLocalRoomEntries(store));
+  const selected = [...new Set(keys)];
+  if (!selected.length) throw new Error('삭제할 채팅방을 선택해 주세요.');
+  for (const key of selected) {
+    if (!rooms.has(key) || !expected.has(key) || JSON.stringify(rooms.get(key)) !== expected.get(key)) {
+      throw new Error('확인 중 방 데이터가 바뀌었어요. 목록을 새로고침하고 다시 선택해 주세요.');
+    }
+  }
+  const nextStore = { ...store };
+  selected.forEach(key => { delete nextStore[key]; });
+  const recordBefore = localStorage.getItem(CRACK_RECORD_STORE);
+  // Preserve all unrelated entries exactly; do not compact other rooms here.
+  const nextJson = JSON.stringify(nextStore);
+  const recordNext = recordBefore ? rbRemoveRoomRecordRefs(recordBefore, selected) : recordBefore;
+  let recordWritten = false;
+  try {
+    if (recordNext !== recordBefore) { localStorage.setItem(CRACK_RECORD_STORE, recordNext); recordWritten = true; }
+    localStorage.setItem(STORE_KEY, nextJson);
+  } catch (error) {
+    if (recordWritten) {
+      try { localStorage.setItem(CRACK_RECORD_STORE, recordBefore); }
+      catch (rollbackError) { throw new Error('방 데이터는 유지됐지만 RECORD 복원에 실패했어요. 저장공간을 확인해 주세요.'); }
+    }
+    throw new Error(`삭제를 저장하지 못했어요. 기존 방 데이터는 유지돼요. ${error.message || error}`);
+  }
+  cighStoreRaw = nextJson;
+  __cighStoreCache = nextStore;
+  rbLocalDataDeleteEpoch++;
+  selected.forEach(key => pendingRoomLogs.delete(key));
+  if (selected.includes(roomKey())) rbRefreshDeletedCurrentRoom();
+  else if (activeTab === 'achv') renderContent();
+  setFooter(`방 데이터 삭제 · ${selected.length}개 방`);
+  // No pushLog or loadRoomData: neither should re-create the deleted room.
+  return selected.length;
+}
+function rbSyncLocalDataRemoval(event) {
+  if (event.key !== STORE_KEY || !event.oldValue) return;
+  try {
+    const before = JSON.parse(event.oldValue), after = JSON.parse(event.newValue || '{}');
+    const removed = key => Object.hasOwn(before, key) && !Object.hasOwn(after, key);
+    if (!rbLocalRoomEntries(before).some(([key]) => removed(key))) return;
+    rbLocalDataDeleteEpoch++;
+    for (const key of pendingRoomLogs.keys()) if (removed(key)) pendingRoomLogs.delete(key);
+    if (removed(roomKey())) { rbRefreshDeletedCurrentRoom(); setFooter('다른 탭의 방 삭제 반영'); }
+    document.querySelector('[data-rb-data-page]')?.rbRefresh?.();
+  } catch (error) { console.warn('[Crack INFO Game HUD] local data sync:', error); }
+}
+function rbMountLocalDataPage(page) {
+  page.setAttribute('data-rb-data-page', '');
+  page.innerHTML = `<div class="cigh-clean-sh">LOCAL DATA</div>
+    <div class="cigh-rb-data-summary" data-rb-data-summary></div>
+    <p class="cigh-rb-help">삭제할 방을 고르세요. 선택한 방의 로그·코멘트·다이어리·INFO·펫·USER·분석 기록과 방 정보가 모두 삭제돼요.</p>
+    <input type="search" data-rb-data-search placeholder="방 이름 또는 ID 검색" aria-label="저장된 채팅방 검색">
+    <div class="cigh-rb-data-tools"><button type="button" class="cigh-clean-set-btn" data-rb-data-all>검색 결과 선택</button><button type="button" class="cigh-clean-set-btn" data-rb-data-none>선택 해제</button><button type="button" class="cigh-clean-set-btn" data-rb-data-refresh>${rbIcon('refresh', 11)} 새로고침</button></div>
+    <div class="cigh-rb-data-rooms" data-rb-data-rooms></div>
+    <p class="cigh-rb-help">공용 코인·업적·마이룸·API 키·설정은 유지돼요. 크랙 원본 채팅과 클라우드 백업에는 영향이 없어요.</p>
+    <p role="status" aria-live="polite" data-rb-data-notice></p>
+    <div class="cigh-rb-data-actions"><span data-rb-data-selection></span><button type="button" class="cigh-clean-set-btn red" data-rb-data-delete disabled>${rbIcon('trash', 11)} 선택한 방 삭제</button></div>`;
+  const selected = new Set();
+  let rows = [], errorText = '';
+  const search = page.querySelector('[data-rb-data-search]'), list = page.querySelector('[data-rb-data-rooms]');
+  const notice = page.querySelector('[data-rb-data-notice]'), deleteButton = page.querySelector('[data-rb-data-delete]');
+  const visibleRows = () => rows.filter(row => `${row.label} ${row.key}`.toLowerCase().includes(search.value.trim().toLowerCase()));
+  function updateSelection() {
+    page.querySelector('[data-rb-data-selection]').textContent = `${selected.size}개 방 선택 · 방 데이터 전체 삭제`;
+    deleteButton.disabled = !!errorText || !selected.size;
+  }
+  function renderRows() {
+    const shown = visibleRows();
+    list.innerHTML = errorText ? `<p class="cigh-rb-help">${esc(errorText)}</p>` : shown.length ? shown.map(row => {
+      const room = row.room, count = name => Array.isArray(room[name]) ? room[name].length : 0;
+      const at = Number(room.lastAnalyzedAt || 0), date = at > 0 ? new Date(at).toLocaleDateString('ko-KR') : '분석 전';
+      return `<label class="cigh-rb-data-room"><input type="checkbox" class="cigh-rb-data-check" data-rb-data-room="${esc(row.key)}" ${selected.has(row.key) ? 'checked' : ''}><span class="cigh-rb-data-room-copy"><b>${esc(row.label)}${row.key === roomKey() ? '<em class="cigh-rb-data-current">현재 방</em>' : ''}</b><small>${esc(row.key)}</small><small>로그 ${count('logLines')} · 코멘트 ${count('commentLog')} · 일기 ${count('diary')} · 펫 Lv.${Math.max(1, Number(room.pet?.level) || 1)}</small><small>최근 ${esc(date)} · 약 ${rbLocalDataSize(room)}</small></span></label>`;
+    }).join('') : `<p class="cigh-rb-help">${rows.length ? '검색 결과가 없어요.' : '저장된 채팅방이 없어요.'}</p>`;
+    page.querySelector('[data-rb-data-all]').disabled = !shown.length;
+    updateSelection();
+  }
+  function refresh() {
+    try {
+      rows = rbLocalRoomEntries().map(([key, room]) => ({ key, room, label: rbLocalRoomLabel(key, room) }))
+        .sort((a, b) => Number(b.key === roomKey()) - Number(a.key === roomKey()) || Number(b.room.lastAnalyzedAt || 0) - Number(a.room.lastAnalyzedAt || 0));
+      errorText = '';
+      const available = new Set(rows.map(row => row.key));
+      for (const key of selected) if (!available.has(key)) selected.delete(key);
+      page.querySelector('[data-rb-data-summary]').textContent = `저장된 방 ${rows.length}개 · 방 데이터 약 ${rbLocalDataSize(Object.fromEntries(rows.map(row => [row.key, row.room])))}`;
+    } catch (error) {
+      rows = []; selected.clear(); errorText = error.message || '저장 데이터를 읽지 못했어요.';
+      page.querySelector('[data-rb-data-summary]').textContent = '저장 데이터 확인 필요';
+    }
+    renderRows();
+  }
+  page.rbRefresh = refresh;
+  search.addEventListener('input', renderRows);
+  page.addEventListener('change', event => {
+    const input = event.target;
+    if (!input.matches('[data-rb-data-room]')) return;
+    if (input.checked) selected.add(input.dataset.rbDataRoom); else selected.delete(input.dataset.rbDataRoom);
+    notice.textContent = ''; updateSelection();
+  });
+  page.addEventListener('click', event => {
+    if (event.target.closest('[data-rb-data-all]')) { visibleRows().forEach(row => selected.add(row.key)); renderRows(); }
+    if (event.target.closest('[data-rb-data-none]')) { selected.clear(); renderRows(); }
+    if (event.target.closest('[data-rb-data-refresh]')) { notice.textContent = ''; refresh(); }
+    if (!event.target.closest('[data-rb-data-delete]') || deleteButton.disabled) return;
+    if (analyzeBusy || cloudBusy || shopBusy || crackRecordSyncing) { notice.textContent = '분석·동기화·아이템 작업이 끝난 뒤 다시 삭제해 주세요.'; return; }
+    if (!flushPendingRoomLogs()) { notice.textContent = '대기 중인 로그 저장에 실패했어요. 저장공간을 확인해 주세요.'; return; }
+    refresh();
+    const keys = [...selected];
+    if (!keys.length) return;
+    const targets = rows.filter(row => selected.has(row.key));
+    const expected = new Map(targets.map(row => [row.key, JSON.stringify(row.room)]));
+    rbConfirm({ title: 'DELETE ROOM DATA', text: `선택한 ${keys.length}개 방의 데이터를 삭제할까요?`, accept: '방 데이터 삭제',
+      detail: `<p>${targets.slice(0, 6).map(row => esc(row.label) + ' · ' + esc(row.key)).join('<br>')}${targets.length > 6 ? `<br>외 ${targets.length - 6}개 방` : ''}</p><p>로그·코멘트·다이어리·INFO·펫·USER·분석 기록과 방 정보를 모두 삭제해요.</p><p>삭제는 되돌릴 수 없어요. 같은 방을 다시 사용하면 새 데이터가 생겨요.</p>`,
+      onAccept: () => {
+        try { const count = rbApplyLocalDataDelete(keys, expected); selected.clear(); refresh(); notice.textContent = `${count}개 방 · 방 데이터 삭제 완료`; }
+        catch (error) { refresh(); notice.textContent = error.message || '삭제하지 못했어요.'; }
+      },
+    });
+  });
+  refresh();
+}
+
+
 // One persistent form is the draft. Pages only hide/reveal groups; no missing inputs
 // can be saved as defaults. The original validation/setter pipeline stays in charge.
 function openSettings(){
@@ -20684,8 +20917,9 @@ function openSettings(){
   const backButton=backRow.querySelector('[data-rb-back]');
   const pages={};
   const menu=document.createElement('div');menu.dataset.rbPage='menu';body.appendChild(menu);
-  const pageDefs=[['ai','AI 연결','spark',['api','model']],['view','표시·연출','screen',['ui','fx']],['log','로그 문체','scroll',['log-style']],['cloud','클라우드 백업','cloud',['cloud']],['usage','사용량','chart',['usage']]];
+  const pageDefs=[['ai','AI 연결','spark',['api','model']],['view','표시·연출','screen',['ui','fx']],['log','로그 문체','scroll',['log-style']],['cloud','클라우드 백업','cloud',['cloud']],['usage','사용량','chart',['usage']],['local','로컬 데이터 관리','trash',[]]];
   for(const [id,title,icon,groups] of pageDefs){const page=document.createElement('div');page.dataset.rbPage=id;page.hidden=true;groups.forEach(g=>{if(sourceSections[g])page.appendChild(sourceSections[g]);});pages[id]=page;body.appendChild(page);}
+  rbMountLocalDataPage(pages.local);
   box.replaceChildren();
   box.appendChild(body);
   const footer=document.createElement('div');footer.className='cigh-rb-savebar';
@@ -20697,7 +20931,7 @@ function openSettings(){
   if(autoRow)pages.ai.appendChild(autoRow);
   const preview=pages.view.querySelector('[data-action="preview"]')?.parentElement;
   if(preview)pages.ai.appendChild(preview);
-  box.querySelectorAll('input[type="checkbox"]').forEach(i=>{i.classList.add('cigh-rb-switch');i.setAttribute('role','switch');});
+  box.querySelectorAll('input[type="checkbox"]:not(.cigh-rb-data-check)').forEach(i=>{i.classList.add('cigh-rb-switch');i.setAttribute('role','switch');});
   // Retain native select controls for provider/model validation, and add accessible
   // segmented buttons as synchronized views rather than replacing input values.
   function segments(select,labels){
@@ -20764,7 +20998,7 @@ function openSettings(){
   if(nameRow){nameRow.classList.add('cigh-rb-pet-name');nameRow.querySelector('span')?.classList.add('cigh-clean-sh');menu.querySelector('.cigh-rb-quick').after(nameRow);}
   pages.view.querySelector('[data-fold-body="ui"] .cigh-clean-settings-help')?.replaceChildren(document.createTextNode('HUD 글자 크기를 바꿉니다. 게임 데이터나 펫 성장 상태에는 영향을 주지 않습니다.'));
   function menuSummary(){
-    const summary={ai:getSelectedProviderModel(),view:`${getUiFontSizeLabel()} · ${isDockModeEnabled()?'도킹':'플로팅'}`,log:getStylePrompt()===DEFAULT_STYLE_PROMPT?'기본 RPG':'사용자 문체',cloud:getCloudLink().code?'코드 연결됨':'미연결',usage:'토큰 · 추정 비용'};
+    const summary={ai:getSelectedProviderModel(),view:`${getUiFontSizeLabel()} · ${isDockModeEnabled()?'도킹':'플로팅'}`,log:getStylePrompt()===DEFAULT_STYLE_PROMPT?'기본 RPG':'사용자 문체',cloud:getCloudLink().code?'코드 연결됨':'미연결',usage:'토큰 · 추정 비용',local:'저장된 방 삭제'};
     Object.entries(summary).forEach(([k,v])=>{menu.querySelector(`[data-rb-summary="${k}"]`).textContent=v;menu.querySelector(`[data-rb-summary="${k}"]`).title=v;});
     const getters={auto:isAutoAnalyzeEnabled,sfx:isSfxEnabled,comment:isCommentPopupEnabled,mascot:isMascotEnabled};quickDefs.forEach(([id])=>menu.querySelector(`[data-rb-quick="${id}"]`).checked=getters[id]());
   }
@@ -20777,8 +21011,8 @@ function openSettings(){
   function refreshSettingsState(){
     const count=changed().length;
     const pageTitle=pageDefs.find(x=>x[0]===pageId)?.[1]||'SETTINGS';
-    const readOnlyPage=['cloud','usage'].includes(pageId);
-    footer.querySelector('[role="status"]').textContent=count?`● 변경 ${count}개`:pageId==='menu'?'SETTINGS':`${pageTitle} · 저장됨`;
+    const readOnlyPage=['cloud','usage','local'].includes(pageId);
+    footer.querySelector('[role="status"]').textContent=count?`● 변경 ${count}개`:pageId==='menu'?'SETTINGS':pageId==='local'?'로컬 데이터 · 선택 후 삭제':`${pageTitle} · 저장됨`;
     save.disabled=!count;save.hidden=!count||readOnlyPage;
     footer.querySelector('[data-rb-revert]').hidden=!count||readOnlyPage;
     status.textContent=provider.value==='deepseek'?(hasDeepSeekKey()?'● DeepSeek 키 저장됨':'○ DeepSeek 키 필요'):provider.value==='firebase'?(hasFirebaseConfig()?'● Firebase Config 저장됨':'○ Firebase Config 필요'):(hasGeminiKey()?'● Gemini 키 저장됨':'○ Gemini 키 필요');
@@ -20787,13 +21021,14 @@ function openSettings(){
   function navigate(id){
     pageId=id;backRow.hidden=id==='menu';Object.values(pages).forEach(p=>p.hidden=p.dataset.rbPage!==id);menu.hidden=id!=='menu';body.scrollTop=0;
     update();
+    if(id==='local')pages.local.rbRefresh?.();
     if(id==='usage')refreshUsageSettingsSection(box);
     if(id==='cloud')updateCloudSettingsStatus(box);
   }
   function close(){box.remove();returnFocus?.isConnected&&returnFocus.focus({preventScroll:true});}
   function requestClose(){
     if(cloudBusy){setFooter('클라우드 작업이 끝난 뒤 닫아 주세요.');return;}
-    if(changed().length)rbConfirm({title:'UNSAVED SETTINGS',text:'저장하지 않은 변경을 버릴까요?',accept:'변경 버리기',detail:'<p>상세 설정의 미저장 입력만 취소해요. 빠른 설정과 이미 실행한 키 삭제·문체 관리·클라우드 작업은 유지돼요.</p>',onAccept:close});else close();
+    if(changed().length)rbConfirm({title:'UNSAVED SETTINGS',text:'저장하지 않은 변경을 버릴까요?',accept:'변경 버리기',detail:'<p>상세 설정의 미저장 입력만 취소해요. 빠른 설정과 이미 실행한 키 삭제·문체 관리·클라우드 작업·로컬 데이터 삭제는 유지돼요.</p>',onAccept:close});else close();
   }
   box.rbRequestClose=requestClose;box.rbCloseSaved=close;
   panel.appendChild(box);applyThemeMode();
