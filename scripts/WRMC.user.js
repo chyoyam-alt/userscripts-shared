@@ -13719,6 +13719,17 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     };
   }
 
+  // 전송 직전 서버 확인이 필요한 방인지 판단합니다. 주입 중 · 외부 재전송/이전 생성 대기 중 ·
+  // 실제로 돌 수 있는 자동 정리(방 설정 ON + 보조 AI 연결)가 있으면 기존 준비 절차를 그대로 거칩니다.
+  // 판단이 실패하면 안전하게 기존 절차를 사용합니다.
+  function sendNeedsPreparation(room,rid){
+    try{
+      if(!room||String(apiChatIdOf(room))!==rid)return true;
+      if(room.pending||generationGates.has(rid)||ExternalReplay.pending(rid))return true;
+      const auto=U3.view(room);
+      return auto.enabled!==false&&(auto.memoryEnabled!==false||auto.observeEnabled!==false)&&isAiProviderReady(loadAiSettings());
+    }catch(e){console.warn('[Wish] 전송 준비 필요 여부 확인 실패 · 기존 절차 사용',e);return true;}
+  }
   const previousSend = W.WebSocket.prototype.send;
   const sendPreparationQueues=new Map();
   W.WebSocket.prototype.send = function (data) {
@@ -13726,6 +13737,16 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     const parsed=parseFrame(data),rid=String(parsed?.payload?.chatId||'');
     if(rid&&parsed?.event==='reroll'&&rid!==currentChat())WishHistory.invalidate(rid);
     if(!parsed||!['send','reroll'].includes(parsed.event)||!rid||rid!==currentChat())return previousSend.call(this,data);
+    if(!sendNeedsPreparation(state.currentRoom,rid)){
+      // 이 방에서 Core가 전송 직전에 할 일이 없으면 서버 확인·대기 없이 바로 보냅니다(로컬 기록만 갱신).
+      const text=parsed.payload?.message??parsed.payload?.content??parsed.payload?.text,room=state.currentRoom;
+      if(typeof text==='string'){contextInput.set(rid,text.slice(-12000));state.recallDraftByApiChatId.set(rid,text.slice(-12000));}
+      WishDisplayDrain.cancel(rid);
+      const result=previousSend.call(this,data);
+      if(parsed.event==='reroll')WishHistory.invalidate(rid);
+      if(unstartedRooms.has(room))void saveRoom(room).catch(e=>console.warn('[Wish] 첫 전송 방 저장 실패',e));
+      return result;
+    }
     const socket=this,currentRoom=state.currentRoom,sendRoute=state.routeEpoch,sendRestore=localRestoreEpoch;let replay=null,sendAttempted=false,overrideUsedAt=null;
     const previous=sendPreparationQueues.get(rid)||Promise.resolve();
     const task=previous.catch(()=>{}).then(async()=>{
