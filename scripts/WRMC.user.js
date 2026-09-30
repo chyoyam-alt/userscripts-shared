@@ -353,6 +353,7 @@
 [출력 규칙]
 - JSON 객체 하나만 출력합니다. \`\`\`json 코드 블록 하나에 넣고, 코드 블록 앞뒤에 설명·인사·요약·질문을 쓰지 않습니다.
 - 스키마의 키 이름·자료형·허용값을 그대로 씁니다. 스키마에 없는 키를 만들지 않고, 필수 키는 바꿀 내용이 없어도 빈 배열이나 빈 값으로 채웁니다.
+- [작업 코드]가 있으면 JSON 최상위에 "wish_job" 키로 그 코드를 그대로 넣습니다. 스키마에 없는 키 중 이것만 예외입니다.
 - 기존 자료의 id·ref·키·날짜 표기는 입력에 적힌 그대로 복사합니다. 새 항목은 지침이 정한 표시(예: NEW_PERSON_1)만 씁니다.
 - 근거·인용·대사 필드는 [입력 자료]의 원문을 한 글자도 바꾸지 않고 복사합니다. 줄이기·요약·맞춤법 수정·번역·따옴표 바꾸기를 하지 않습니다.
 - 입력에 없는 사실·이름·날짜·관계를 만들지 않습니다. 바꿀 것이 없으면 지침과 스키마가 허용하는 가장 작은 결과를 냅니다.
@@ -1932,10 +1933,11 @@ const WLOG=(()=>{
     const schema = options.responseJsonSchema ? '\n\n[응답 스키마]\n' + JSON.stringify(options.responseJsonSchema) : '';
     return String(getGuideText('manualRelay') || '').trim()
       + '\n\n[작업 이름]\n' + String(options.operationLabel || '보조 AI 요청')
+      + (options.jobCode ? '\n\n[작업 코드]\n' + options.jobCode : '')
       + '\n\n[작업 지침]\n' + String(systemPrompt || '').trim() + schema + '\n[/작업 지침]'
       + '\n\n[입력 자료]\n' + String(userPrompt || '').trim() + '\n[/입력 자료]'
       + '\n\n[출력 확인]\n' + (json
-        ? '위 [작업 지침]과 출력 형식을 지킨 JSON 객체 하나만 ```json 코드 블록 하나로 출력하세요. 코드 블록 밖에는 아무것도 쓰지 않습니다.'
+        ? (options.jobCode ? '답 JSON 최상위에 "wish_job": "' + options.jobCode + '"를 넣고, ' : '') + '위 [작업 지침]과 출력 형식을 지킨 JSON 객체 하나만 ```json 코드 블록 하나로 출력하세요. 코드 블록 밖에는 아무것도 쓰지 않습니다.'
         : '위 [작업 지침]에 맞는 결과만 출력하세요. 설명이나 인사를 덧붙이지 않습니다.');
   }
   // 코드 블록 표시와 앞뒤 안내 문장을 걷어 내고 JSON 본문만 남깁니다. "이어서"로 나뉜 답을 순서대로 붙여 넣어도 이어집니다.
@@ -1976,6 +1978,67 @@ const WLOG=(()=>{
         if (dlgId) { WUICache.pending.delete(dlgId); if (WUI.ui.dlg(dlgId)) WUI.closeSheet(dlgId, true); }
       }
     }, details);
+  }
+
+  // 외부 AI 복붙 작업: [함께 정리]가 요청문을 복사하고, [답 붙여넣기]가 답을 적용합니다. 방마다 하나를 저장해 두므로
+  // 기다리는 동안 창을 띄워 두지 않고, 패널을 닫거나 새로고침하거나 RP를 계속 진행해도 됩니다.
+  const MANUAL_JOB_PREFIX = 'WISH_RP_manual_job_v1:', MANUAL_REQUEST_PREFIX = 'WISH_RP_manual_request_v1:';
+  const manualRequestMemory = new Map();
+  function manualJobKey(room) { return MANUAL_JOB_PREFIX + String(room?.chatId || ''); }
+  function loadManualJob(room) {
+    if (!room?.chatId) return null;
+    try { const job = JSON.parse(localStorage.getItem(manualJobKey(room)) || 'null'); return job && job.v === 1 && job.code ? job : null; } catch (_) { return null; }
+  }
+  function saveManualJob(room, job) { localStorage.setItem(manualJobKey(room), JSON.stringify(job)); }
+  function clearManualJob(room) {
+    if (!room?.chatId) return;
+    try { localStorage.removeItem(manualJobKey(room)); localStorage.removeItem(MANUAL_REQUEST_PREFIX + room.chatId); } catch (_) {}
+    manualRequestMemory.delete(String(room.chatId));
+  }
+  function storeManualRequest(room, code, text) {
+    manualRequestMemory.set(String(room.chatId), { code, text });
+    try { if (text.length <= 400000) localStorage.setItem(MANUAL_REQUEST_PREFIX + room.chatId, JSON.stringify({ code, text })); } catch (_) {}
+  }
+  function loadManualRequest(room, code) {
+    const mem = manualRequestMemory.get(String(room?.chatId || ''));
+    if (mem?.code === code) return mem.text;
+    try { const saved = JSON.parse(localStorage.getItem(MANUAL_REQUEST_PREFIX + room.chatId) || 'null'); return saved?.code === code ? String(saved.text || '') : ''; } catch (_) { return ''; }
+  }
+  function manualJobView(room) {
+    const job = loadManualJob(room); if (!job) return null;
+    const lanes = [job.mem ? '기억 ' + job.mem + '턴' : '', job.obs ? '인물 ' + job.obs + '턴' : ''].filter(Boolean).join('·');
+    return { code: job.code, lanes, at: new Date(job.at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }), chars: job.chars, error: job.lastError || '' };
+  }
+  async function exportManualJob(room, x) {
+    const code = 'WJ-' + String(x.stamp).slice(0, 6).toUpperCase();
+    const label = x.kind === 'all' ? '기억·인물 함께 정리' : x.kind === 'memory' ? '기억 정리' : '인물 정리';
+    const text = buildManualAiRequest(x.system, x.prompt, { operationLabel: label, taskKind: 'extract', responseMimeType: 'application/json', jobCode: code });
+    saveManualJob(room, { v: 1, code, stamp: x.stamp, force: x.kind, memCap: x.memCap, obsCap: x.obsCap, mem: x.mem, obs: x.obs, chars: text.length, at: Date.now(), lastError: '' });
+    storeManualRequest(room, code, text);
+    const ok = await copyPlainText(text);
+    notify(ok ? '요청문을 복사했습니다 (' + text.length.toLocaleString() + '자) · 외부 AI에 붙여 넣고, 답을 복사한 뒤 [답 붙여넣기]를 눌러 주세요.' : '요청문을 만들었습니다 · 확인 탭의 [다시 복사]를 눌러 복사해 주세요.', ok ? 'success' : 'info', 8000);
+    renderModalIfIdle();
+    return ok;
+  }
+  // 붙여 넣은 답을 확인해 기다리던 작업에 적용합니다. 실패해도 작업은 남아 고친 답을 다시 넣을 수 있습니다.
+  async function applyManualAnswer(room, raw) {
+    const job = loadManualJob(room);
+    if (!job) throw new Error('기다리는 외부 AI 작업이 없습니다. [함께 정리]로 요청문부터 복사해 주세요.');
+    const text = normalizeManualAiAnswer(raw);
+    if (!text) throw new Error('붙여 넣은 답이 비어 있습니다. 외부 AI 답의 복사 버튼을 누른 뒤 다시 시도해 주세요.');
+    let data;
+    try { data = JSON.parse(text); } catch (first) {
+      try { data = JSON.parse(repairManualAiJoin(text)); } catch (_) {
+        const at = WLOG.jsonLocation(first);
+        throw new Error('JSON 형식이 아니거나 답이 중간에 끊겼습니다' + (at ? ' · ' + at : '') + '. 끊겼다면 외부 AI에 “이어서”를 보내 나머지까지 받아 주세요.');
+      }
+    }
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('답이 JSON 객체가 아닙니다.');
+    if (Object.hasOwn(data, 'wish_job')) {
+      if (String(data.wish_job).trim().toUpperCase() !== job.code) throw new Error('다른 요청문의 답입니다(답의 작업 코드 ' + String(data.wish_job).slice(0, 20) + ' · 이 방 작업 코드 ' + job.code + '). 이 방에서 복사한 요청문의 답을 넣어 주세요.');
+      delete data.wish_job;
+    }
+    return await U3.run(room, job.force, false, null, { mode: 'import', job, answer: JSON.stringify(data) });
   }
 
   async function callAiProvider(settings, systemPrompt, userPrompt, options={}) {
@@ -4246,13 +4309,13 @@ function applyObserve(cog,speech,data,rp,cutoff,relationshipRows=[],relationship
     if(p.obs.length<Math.max(1,Number(cfg.observeEvery)||1))p.observe=false;
     return true;
   }
-  async function run(room,force='',scheduled=false,carry=null) {
+  async function run(room,force='',scheduled=false,carry=null,manual=null) {
     if(!room||state.currentRoom!==room)return false;
     const scope=force?(force==='retry'?(room.unified?.failedKind||'all'):force):(scheduled&&carry?.scope||''),origin=force?'manual-start':(scope?carry.origin:''),keep={origin,scope};
     if(!scope&&!settings(room).enabled)return false;
     if(unstartedRooms.has(room)){if(!force)return false;await saveRoom(room);if(state.currentRoom!==room)return false;}
     if(!state.db){schedule(room,1500,force,keep);return false;}
-    if(running.has(room.chatId))return running.get(room.chatId);
+    if(running.has(room.chatId)){if(manual)throw Error('다른 정리 작업이 진행 중입니다. 끝난 뒤 다시 눌러 주세요.');return running.get(room.chatId);}
     // A fixed runtime bug must not leave automation permanently paused. Keep history,
     // cursors and all other failures intact; clear only this exact pre-request failure.
     if(room.unified?.lastError==="Cannot access 'settings' before initialization"){
@@ -4295,7 +4358,14 @@ function applyObserve(cog,speech,data,rp,cutoff,relationshipRows=[],relationship
         const pausedScope=scope&&!settings(room).enabled?scope:'';
 const p=plan(list,{...u,settings:settings(room)},force==='retry'||retrying?(u.failedKind||pausedScope):(force||pausedScope),turns({stable:frame.messages.slice(0,frame.messages.length-frame.stable.length)}));
         counts.set(room,{memory:p.mem.length,observe:p.obs.length});
-        const chunked=chunkPlan(p,settings(room));
+        let chunked=chunkPlan(p,settings(room));
+        // 외부 AI 답은 요청문에 들어간 턴까지만 적용합니다. 그 뒤에 진행한 턴은 다음 요청문으로 넘깁니다.
+        if(manual?.mode==='import'){
+          const cap=(on,rows,key)=>{if(!key)return [];const i=on?rows.findIndex(t=>String(t.key)===String(key)):-1;if(i<0){clearManualJob(room);throw Object.assign(Error('요청문에 들어간 대화가 바뀌었습니다(리롤·삭제·다른 정리). [함께 정리]로 새 요청문을 받아 주세요.'),{code:'WISH_MANUAL_STALE'});}return rows.slice(0,i+1);};
+          const mem=cap(p.memory,p.mem,manual.job.memCap),obs=cap(p.observe,p.obs,manual.job.obsCap);
+          if(mem.length<p.mem.length||obs.length<p.obs.length)chunked=true;
+          p.mem=mem;p.obs=obs;p.memory=mem.length>0;p.observe=obs.length>0;
+        }
         if(!force&&!retrying&&u.lastError&&!historyDeferred)return false;
         // Processed source must still exist unchanged on the current path. The latest
         // unconfirmed turn is included because deleting a newer turn can expose it.
@@ -4319,15 +4389,23 @@ const p=plan(list,{...u,settings:settings(room)},force==='retry'||retrying?(u.fa
         // Bounds fail visibly; they never silently clip history or launch hidden split/repair calls.
         const requestSystem=req.guide+'\n[응답 스키마]\n'+JSON.stringify(req.schema);
         try{WishMemorySafety.wire(requestSystem,req.prompt);}catch(e){if(e?.code==='WISH_REQUEST_SIZE')e.message+=' · '+wishRequestSizeMessage(req.requestSizes);throw e;}
+        // 외부 AI 복붙: [함께 정리]는 요청문을 복사해 두고 끝나며, [답 붙여넣기]가 같은 요청인지 확인한 뒤 받은 답으로 이어갑니다.
+        let manualResult=null;
+        if(isManualAiProvider()){
+          const stamp=await manualJobStamp(room,cog,packs,p,kind);
+          if(manual?.mode!=='import'){await exportManualJob(room,{stamp,kind,system:requestSystem,prompt:req.prompt,memCap:p.memory?String(p.mem.at(-1).key):'',obsCap:p.observe?String(p.obs.at(-1).key):'',mem:p.memory?p.mem.length:0,obs:p.observe?p.obs.length:0});return false;}
+          if(stamp!==manual.job.stamp){clearManualJob(room);throw Object.assign(Error('요청문을 만든 뒤 기억·설정이 바뀌어 이 답을 적용할 수 없습니다. [함께 정리]로 새 요청문을 받아 주세요.'),{code:'WISH_MANUAL_STALE'});}
+          manualResult={text:manual.answer,diagnostic:{provider:'manual',model:'외부 AI 복붙',finishReason:''}};
+        }
         const providerSettings=loadAiSettings();if(!isAiProviderReady(providerSettings))throw Error('보조 AI 연결 설정이 필요합니다.');
         quietCheck=false;unifiedStage=p.memory&&p.observe?'기억·인물 통합 정리 요청 중':p.memory?'현재상태·사건·자료 정리 요청 중':'인지·호칭·말투 정리 요청 중';active.add(room.chatId);renderModalIfIdle();
         if(!isManualAiProvider())notify(p.memory&&p.observe?'기억·인물 정리 · 통합 1회 요청':'묶음 정리 · 1회 요청','success',3000);
         // JSON MIME + explicit contract avoids schema-rejection fallback making a second call.
         if(req.stateDelta)await WishEconomy.backup(room);
-        const result=await callAiProvider(providerSettings,requestSystem,req.prompt,{taskKind:'extract',responseMimeType:'application/json',operationLabel:unifiedStage,timeoutMs:UNIFIED_TIMEOUT_MS});
+        const result=manualResult||await callAiProvider(providerSettings,requestSystem,req.prompt,{taskKind:'extract',responseMimeType:'application/json',operationLabel:unifiedStage,timeoutMs:UNIFIED_TIMEOUT_MS});
         unifiedStage='통합 정리 응답 해석 중';renderModalIfIdle();const data=WLOG.parseJson(result.text,'기억·인물 통합 정리',result.diagnostic);
         req.holdContext={bundle:'unified',jobCreatedAt:nowIso(),segmentIndex:null,segmentCount:null};
-        unifiedStage='통합 결과 형식·참조 확인 중';renderModalIfIdle();const staged=stage(room,cog,packs,p,req,data);const heldN=(staged.relationshipHeldAdds?.length||0)+(staged.cognitionHeldAdds?.length||0);if(heldN>WishHeld.HELD_JOB_MAX)(staged.notices||=[]).push('이번 정리에서 보류 제안이 '+heldN+'건 생겼습니다. 모두 저장하며 장부 용량을 넘는 분은 대기열에 보관합니다.');staged.room.unified.retry=null;if(chunked)staged.room.unified.status+=' · 밀린 대화를 나눠 정리 중';
+        unifiedStage='통합 결과 형식·참조 확인 중';renderModalIfIdle();const staged=stage(room,cog,packs,p,req,data);const heldN=(staged.relationshipHeldAdds?.length||0)+(staged.cognitionHeldAdds?.length||0);if(heldN>WishHeld.HELD_JOB_MAX)(staged.notices||=[]).push('이번 정리에서 보류 제안이 '+heldN+'건 생겼습니다. 모두 저장하며 장부 용량을 넘는 분은 대기열에 보관합니다.');staged.room.unified.retry=null;if(chunked)staged.room.unified.status+=isManualAiProvider()?' · 남은 대화는 다음 [함께 정리]로':' · 밀린 대화를 나눠 정리 중';
         const latestHistory=await fetchAllRoomMessages(apiChatIdOf(room)),latest=stableFrame([...latestHistory].reverse());
         if(ExternalReplay.changed(apiChatIdOf(room),replayEpoch))return false;
         const manifest=sourceManifestOf([...frame.stable].reverse());
@@ -4342,13 +4420,13 @@ const p=plan(list,{...u,settings:settings(room)},force==='retry'||retrying?(u.fa
         unifiedStage='기억·인지·자료 저장 중';renderModalIfIdle();await saveMemoryCheckpoint(room,'unified-before-commit');
         const commitCog=await bridge().snapshotRaw(apiChatIdOf(room));
         if(epoch!==localRestoreEpoch||state.currentRoom!==room||settingsAtStart!==JSON.stringify(loadAiSettings())||rawSignature(room,commitCog,packs)!==signature)throw Error('저장 직전 설정·기억·인지가 바뀌어 결과를 적용하지 않았습니다.');
-        if(ExternalReplay.changed(apiChatIdOf(room),replayEpoch))return false;await atomicCommit(room,cog,packs,staged);
+        if(ExternalReplay.changed(apiChatIdOf(room),replayEpoch))return false;await atomicCommit(room,cog,packs,staged);if(manual?.mode==='import')clearManualJob(room);
         // Any context refresh failure is a post-save warning, not a failed AI request.
         let refreshStage='인지 화면 갱신';
         try{await bridge().refresh();refreshStage='저장 후 주입 동기화';if(room.pending)await refreshPendingAfterAutomaticMemory(room);}catch(e){WLOG.fail('정리 저장 후 갱신',e,{stage:refreshStage,outcome:'saved-refresh-pending'});if(refreshStage==='저장 후 주입 동기화')recordPendingSyncError(room,e);notify('정리는 저장됐습니다. 주입 갱신은 다음 전송 때 재시도합니다.','warn',6000);}
         try{state.v2Cognition=await (bridge().getView||bridge().getRoom).call(bridge(),apiChatIdOf(room));}catch{}
         try{counts.set(room,{memory:after(turns(latest),room.unified.memoryCursor).length,observe:after(turns(latest),room.unified.observeCursor).length});}catch(e){console.warn('[Wish] 저장 후 카운트 계산 보류',e);updateCounts(room,latest);}
-        if(chunked&&state.currentRoom===room){checked.delete(room);schedule(room,2500,force==='retry'?'':force,{origin:'continue',scope});}
+        if(chunked&&state.currentRoom===room&&!isManualAiProvider()){checked.delete(room);schedule(room,2500,force==='retry'?'':force,{origin:'continue',scope});}
         if(staged.notices?.length)WishMemorySafety.reportNotices(staged.notices,room.unified.status);
         else notify(room.unified.status,'success',4500);return true;
       }catch(e){
@@ -4362,8 +4440,12 @@ const p=plan(list,{...u,settings:settings(room)},force==='retry'||retrying?(u.fa
           return false;
         }
         if(ExternalReplay.changed(apiChatIdOf(room),replayEpoch))return false;
-        // 외부 AI 복붙 창을 닫은 것은 오류가 아니라 취소입니다. 오류 기록·재시도 표시 없이 안내만 합니다.
-        if(e?.code==='WISH_USER_ABORT'&&isManualAiProvider()){notify('외부 AI 정리를 취소했습니다. 준비되면 [함께 정리]를 다시 눌러 주세요.','info',5000);return false;}
+        // 외부 AI 복붙 작업의 실패는 방 오류로 남기지 않고, 기다리는 작업 줄에 표시해 고친 답을 다시 넣을 수 있게 합니다.
+        if(isManualAiProvider()&&scope){
+          WLOG.fail(manual?.mode==='import'?'외부 AI 답 적용':'외부 AI 요청문 만들기',e,{stage:e?.diagnostic?.stage||unifiedStage||'확정 대화 확인'});
+          if(manual?.mode==='import'&&e?.code!=='WISH_MANUAL_STALE'){const j=loadManualJob(room);if(j&&j.code===manual.job.code){j.lastError=String(e?.message||e);saveManualJob(room,j);}}
+          renderModalIfIdle();return false;
+        }
         WLOG.fail('기억·인물 통합 정리',e,{stage:e?.diagnostic?.stage||unifiedStage||'확정 대화 확인'});
         if(state.currentRoom===room&&room.unified&&!localRestoreInProgress()){
           room.unified.lastError=String(e.message||e);room.unified.failedKind=jobKind;
@@ -4372,7 +4454,7 @@ const p=plan(list,{...u,settings:settings(room)},force==='retry'||retrying?(u.fa
           if(delay){room.unified.status='일시 장애 · '+Math.ceil(delay/1000)+'초 후 재시도'+(scope&&!settings(room).enabled?' (자동 정리 일시정지 방 · 이 방을 떠나거나 새로고침하면 취소)':'');schedule(room,delay,'',{origin:'retry',scope});}
           try{await saveRoom(room);}catch{}
         }
-        notify('통합 정리 보류: '+String(e.message||e)+(isManualAiProvider()?' · 외부 AI에 이 문구를 그대로 알려 고친 JSON을 받은 뒤, [다시 시도]를 눌러 새 창에 붙여 넣어 주세요.':''),'error',8000,{...({logged:true}),error:e});return false;
+        notify('통합 정리 보류: '+String(e.message||e),'error',8000,{...({logged:true}),error:e});return false;
       }finally{quietCheck=false;active.delete(room.chatId);aiUpdateRunning=false;}
     });running.set(room.chatId,job);
     try{return await job;}finally{running.delete(room.chatId);renderModalIfIdle();}
@@ -4396,13 +4478,20 @@ const p=plan(list,{...u,settings:settings(room)},force==='retry'||retrying?(u.fa
       counts.set(room,{memory:0,observe:0});try{await bridge().refresh();}catch{}renderModalIfIdle();
     });
   }
+  // 요청문을 만들 때와 답을 넣을 때 같은 기억·같은 대화 범위인지 확인하는 지문입니다(오류 표시 같은 상태 값은 제외).
+  async function manualJobStamp(room,cog,packs,p,kind){
+    const u=room.unified?{...room.unified,lastError:'',failedKind:'',retry:null,status:''}:room.unified;
+    const rows=list=>list.map(t=>[String(t.key),String(t.assistantId||''),aiHashTiny(String(t.userText||'')+'\u0000'+String(t.assistantText||''))]);
+    return sha256Hex(new TextEncoder().encode(JSON.stringify({k:kind,s:rawSignature({...room,unified:u},cog,packs),m:p.memory?rows(p.mem):[],o:p.observe?rows(p.obs):[]})));
+  }
   const manualDueNoticed=new Set();
   function manualDueNotice(room,p){
     const lanes=[p.memory?'기억 '+p.mem.length+'턴':'',p.observe?'인물 '+p.obs.length+'턴':''].filter(Boolean);
     const key=[room.chatId,room.unified?.memoryCursor||'',room.unified?.observeCursor||'',p.memory?1:0,p.observe?1:0].join('|');
-    if(!lanes.length||manualDueNoticed.has(key))return;
+    // 답을 기다리는 작업이 있으면 확인 탭의 작업 줄로 충분하므로 차례 알림을 겹쳐 띄우지 않습니다.
+    if(!lanes.length||manualDueNoticed.has(key)||loadManualJob(room))return;
     if(manualDueNoticed.size>200)manualDueNoticed.clear();manualDueNoticed.add(key);
-    notify('외부 AI 정리 차례 · '+lanes.join(' · ')+' 쌓였습니다. 확인 탭의 [함께 정리]를 누르면 외부 AI에 붙여 넣을 요청문이 준비됩니다.','info',7000);
+    notify('외부 AI 정리 차례 · '+lanes.join(' · ')+' 쌓였습니다. 확인 탭의 [함께 정리]를 누르면 요청문이 복사됩니다.','info',7000);
   }
   function view(room) {
     const cfg=settings(room),n=counts.get(room)||{};
@@ -14309,7 +14398,7 @@ html.rpcm-mobile-keyboard-open #wish-rp-root{top:var(--rpcm-vv-top,0px);bottom:a
 #wish-rp-root [data-key="pg-cognition"] .m3-panel::after{display:none}
 #wish-rp-root [data-key="home-head"]{column-gap:6px}
 #wish-rp-root [data-key="home-head"] .m3-home-verification{margin-left:0}
-#wish-rp-root [data-key="home-head"] .m3-auto-control{gap:8px;justify-content:flex-end}
+#wish-rp-root [data-key="home-head"] .m3-auto-control{gap:8px;justify-content:flex-end;max-width:100%}
 .m3-step{display:inline-flex;align-items:center;border:1px solid var(--m3-line);border-radius:var(--m3-r-ctl);overflow:hidden;background:var(--m3-card);flex:none}
 .m3-step button{width:28px;height:30px;color:var(--m3-muted);transition:background .18s,color .18s}
 .m3-step button:hover{background:var(--m3-accent-soft);color:var(--m3-accent)}
@@ -14863,7 +14952,7 @@ function createWishUI(AD) {
 
     lore: { enabled: false, sem: false, max: 4, dens: 'balanced', lastSel: null, auto: { enabled: false, interval: 5, read: 8, pending: 0, last: '' }, packs: [] },
 
-    ai: { providerLabel: '', model: '', manual: false, ready: true },
+    ai: { providerLabel: '', model: '', manual: false, ready: true, job: null },
     pol: { state: true, log: true, lore: true, char: true, extra: true, cog: 'smart' },
     autoChar: false,
     quickCog: []
@@ -14988,11 +15077,19 @@ function createWishUI(AD) {
   function reviewPanel(r) {
     return `<section class="m3-panel" data-key="rv-${esc(r.id)}" style="--cc:${COL.cog}"><div class="m3-row">${kind(r.kind || '인지', COL.cog)}<b class="m3-grow">${esc(r.desc)}</b></div>${r.quote ? `<blockquote class="m3-quote">${esc(r.quote)}</blockquote>` : ''}${r.acceptLabel ? '' : '<p class="m3-muted" style="margin-top:8px">바로 확정하기 어려운 항목이라 먼저 내용을 확인합니다.</p>'}<div class="m3-row m3-card-actions">${r.acceptLabel ? btn(esc(r.acceptLabel), 'rvAccept', { arg: r.id, cls: 'primary mini', icon: 'check' }) : btn('확인하기', 'rvOpen', { arg: r.id, cls: 'mini', icon: 'eye' })}${btn('이 후보 제외', 'rvDismiss', { arg: r.id, cls: 'quiet mini' })}</div></section>`;
   }
+  // 외부 AI 복붙 모드: 기다리는 작업 줄(요청문 다시 복사·TXT·답 파일·취소·외부 AI 바로 열기)
+  const manualJobPanel=()=>{
+    const j=V.ai.job,links=[['ChatGPT','https://chatgpt.com/'],['Gemini','https://gemini.google.com/app'],['Claude','https://claude.ai/new']].map(([n,u])=>'<a class="m3-btn quiet mini" href="'+u+'" target="_blank" rel="noopener noreferrer">'+n+'</a>').join('');
+    if(!j)return '<p class="m3-muted" data-key="manual-ai-home">외부 AI 복붙 모드 · [함께 정리]로 요청문 복사 → 외부 AI에 붙여 넣기 → 답 복사 → [답 붙여넣기]</p>';
+    return '<section class="m3-panel m3-focus" data-key="manual-job"><b>기다리는 외부 AI 작업 · '+esc(j.lanes||'정리')+' · '+esc(j.at)+'</b><p class="m3-muted">작업 코드 '+esc(j.code)+' · 요청문 '+fmt(j.chars)+'자 · 외부 AI 답의 복사 버튼을 누른 뒤 [답 붙여넣기]를 눌러 주세요. 기다리는 동안 RP를 계속해도 됩니다.</p>'+
+      (j.error?'<div class="m3-status m3-err" aria-live="polite">'+ic('alert')+'<span>답 적용 실패 · '+esc(j.error)+'</span></div>':'')+
+      '<div class="m3-actions m3-topgap">'+links+'</div><div class="m3-actions m3-topgap">'+btn('다시 복사','manualCopy',{cls:'mini',icon:'copy'})+btn('TXT','manualTxt',{cls:'mini',icon:'down'})+btn('답 파일','manualFile',{cls:'mini',icon:'up'})+(j.error?btn('오류 문구 복사','manualErrCopy',{cls:'mini',icon:'copy'}):'')+btn('취소','manualCancel',{cls:'quiet mini'})+'</div></section>';
+  };
   function vCheck(){const m=V.memory,c=V.cog,u=V.unified||{},I=V.inj;
- const tile=(kind,label,count,total,on,action)=>{const left=Math.max(0,total-count),done=Math.min(1,count/Math.max(1,total));return '<div class="m3-tile" data-key="home-'+kind+'">'+ring(done,COL[kind])+ '<div class="m3-txt"><div class="m3-k">'+label+'</div><div class="m3-v">'+((kind==='log'?m.running:u.running)?'정리 중':on?left+'<small>턴 뒤</small>':'일시정지')+'</div><div class="m3-ts">미처리 확정 '+count+'/'+total+'턴</div></div>'+(V.job?'':btn('지금 정리',action,{cls:'quiet mini'}))+'</div>';};
+ const tile=(kind,label,count,total,on,action)=>{const left=Math.max(0,total-count),done=Math.min(1,count/Math.max(1,total));return '<div class="m3-tile" data-key="home-'+kind+'">'+ring(done,COL[kind])+ '<div class="m3-txt"><div class="m3-k">'+label+'</div><div class="m3-v">'+((kind==='log'?m.running:u.running)?'정리 중':on?left+'<small>턴 뒤</small>':'일시정지')+'</div><div class="m3-ts">미처리 확정 '+count+'/'+total+'턴</div></div>'+(V.job?'':btn('지금 정리',action,{cls:'quiet mini',dis:!!V.ai.manual}))+'</div>';};
  const status=I.armed?(I.authWaiting?'<span class="m3-home-verification">'+ic('clock')+'로그인 확인 대기 · 저장된 기억 유지</span>':I.verified?'<span class="m3-home-verification ok">'+ic('check')+'서버 저장 확인됨 · 최신 AI 바로 이전 답변에 숨김 주입</span>':I.error?'<span class="m3-home-verification" style="color:var(--m3-bad,#ef7d86)">'+ic('alert')+'주입 확인 실패 · 서버 재검증 필요</span>':'<span class="m3-home-verification">'+ic('clock')+'서버 저장 확인 중…</span>'):'<span class="m3-muted">주입 대기</span>';
  const fresh=V.fresh?.show?'<section class="m3-panel m3-focus" data-key="home-fresh"><b>'+esc(V.fresh.title||'새 방 시작 설정')+'</b><p>'+esc(V.fresh.desc||'')+'</p>'+btn('나중에','freshSkip',{cls:'quiet mini'})+btn('적용','freshApply',{cls:'primary mini'})+'</section>':'';
- return '<div class="m3-pagehead" data-key="home-head"><h2>확인 '+help(helpSections([['전달량','AI 원문과 주입 지침을 포함합니다. 한도 안이면 켜진 기억을 모두 넣고 초과하면 설정한 방식으로 선택합니다.'],['공통 안내·서식','연속성·인지 안내와 항목 제목, 구분자, 숨김 표식의 실제 길이입니다. 기억 본문은 각 분류에 따로 셉니다.'],['서버 저장 확인','현재 표시 내용과 저장된 주입본이 일치하고 서버 검증까지 끝났을 때만 확인됨으로 표시합니다. 확인 실패가 표시되면 오류가 끝없이 숨겨지지 않으며 서버 재검증으로 다시 시도할 수 있습니다.']]))+'</h2>'+status+'<span class="m3-auto-control m3-actions">'+btn('함께 정리','unifiedAll',{cls:'primary mini',dis:!!V.job})+btn(u.enabled?'자동 정리 일시정지':'자동 정리 시작','unifiedToggle',{cls:'quiet mini',icon:u.enabled?'pause':'play'})+'</span></div>'+fresh+capCard()+(V.ai.manual?'<section class="m3-panel" data-key="manual-ai-home"><b>외부 AI 복붙 모드</b><p class="m3-muted">자동 정리는 차례가 되면 알림만 드립니다. [함께 정리]를 누르면 외부 AI에 붙여 넣을 요청문이 준비됩니다.</p></section>':V.ai.ready===false?'<section class="m3-panel" data-key="manual-ai-offer"><b>보조 AI 연결이 없습니다</b><p class="m3-muted">API 키가 없어도 외부 AI(ChatGPT·Gemini 등)에 복붙하는 방식으로 기억·인물 정리를 할 수 있습니다.</p>'+btn('외부 AI 복붙으로 쓰기','manualAiSetup',{cls:'mini',icon:'key'})+'</section>':'')+
+ return '<div class="m3-pagehead" data-key="home-head"><h2>확인 '+help(helpSections([['전달량','AI 원문과 주입 지침을 포함합니다. 한도 안이면 켜진 기억을 모두 넣고 초과하면 설정한 방식으로 선택합니다.'],['공통 안내·서식','연속성·인지 안내와 항목 제목, 구분자, 숨김 표식의 실제 길이입니다. 기억 본문은 각 분류에 따로 셉니다.'],['서버 저장 확인','현재 표시 내용과 저장된 주입본이 일치하고 서버 검증까지 끝났을 때만 확인됨으로 표시합니다. 확인 실패가 표시되면 오류가 끝없이 숨겨지지 않으며 서버 재검증으로 다시 시도할 수 있습니다.']]))+'</h2>'+status+'<span class="m3-auto-control m3-actions">'+(V.ai.manual?btn('답 붙여넣기','manualPaste',{cls:'mini',icon:'check',dis:!!V.job||!V.ai.job}):'')+btn('함께 정리','unifiedAll',{cls:'primary mini',dis:!!V.job})+btn(u.enabled?'자동 정리 일시정지':'자동 정리 시작','unifiedToggle',{cls:'quiet mini',icon:u.enabled?'pause':'play'})+'</span></div>'+fresh+capCard()+(V.ai.manual?manualJobPanel():V.ai.ready===false?'<section class="m3-panel" data-key="manual-ai-offer"><b>보조 AI 연결이 없습니다</b><p class="m3-muted">API 키가 없어도 외부 AI(ChatGPT·Gemini 등)에 복붙하는 방식으로 기억·인물 정리를 할 수 있습니다.</p>'+btn('외부 AI 복붙으로 쓰기','manualAiSetup',{cls:'mini',icon:'key'})+'</section>':'')+
  (I.error?'<section class="m3-panel m3-alert" data-key="injection-error"><b>'+(I.authWaiting?'로그인 확인 대기':'주입 확인 필요')+'</b><p style="white-space:pre-wrap;overflow-wrap:anywhere">'+esc(I.error)+'</p>'+(I.lastCheckedAt?'<p class="m3-muted">마지막 서버 저장 확인 · '+esc(new Date(I.lastCheckedAt).toLocaleString('ko-KR'))+'</p>':'')+'<div class="m3-actions m3-topgap">'+btn('저장본으로 재검증','reverify',{cls:'mini',icon:'refresh',dis:!!V.job})+btn('주입 해제','release',{cls:'danger mini',icon:'close',dis:!!V.job})+btn('오류 상세','errorLogs',{cls:'mini',icon:'doc'})+'</div></section>':'')+
  '<div class="m3-tiles" data-key="home-tiles">'+tile('log','기억 통합',m.committed,m.target,m.enabled,'unifiedMemory')+tile('cog','인물 통합',u.observePending||0,c.every,c.auto,'cogRe')+'</div>'+
  '<p class="m3-muted" data-key="auto-pause-scope">자동 정리 시작·일시정지는 이 방의 기억·인물에 적용됩니다. 기억 주입은 주입 설정을 따릅니다.</p>'+
@@ -15127,7 +15224,7 @@ function mRelationships() {
     const t = [['state', '현재상태'], ['log', '날짜로그'], ['char', '캐릭터'], ['extra', '기타·OOC']].filter(([k]) => k !== 'speech' || has('speech'));
     if (!t.some(x => x[0] === S.mem)) S.mem = 'state';
     const sub = { state: mState, log: mLog, speech: mSpeech, char: mChar, extra: mExtra }[S.mem]();
-    return `${pageHead('기억 '+help(helpSections([['하이브리드 회수','전체 기억은 저장소에 보존하고, 최근 기억과 현재 맥락에 관련된 날짜로그·자료만 골라 주입합니다.'],['오래된 기억','에리식 의미검색과 키워드 검색이 전체 과거 기록에서 오래된 사건을 다시 찾습니다.'],['보조 AI 재검토','설정한 경우 후보가 40,000자를 넘으면 USER 전송 직전에 AI 선별을 최대 60초 기다립니다.'],['안전선','40,000자 안전선은 유지하고 서버 500이면 같은 선택본을 36,000자까지 한 번만 줄입니다.']])), '<span class="m3-actions">'+(btn('자동 정리 설정','nav',{arg:'settings',cls:'quiet mini',icon:'set'}))+btn('기억 묶음 정리','unifiedMemory',{cls:'mini',icon:'spark'})+'</span>')}${memDiffStrip()}${tabs(t, S.mem, 'memSub')}<div class="m3-sub" data-key="mem-${S.mem}">${sub}</div>`;
+    return `${pageHead('기억 '+help(helpSections([['하이브리드 회수','전체 기억은 저장소에 보존하고, 최근 기억과 현재 맥락에 관련된 날짜로그·자료만 골라 주입합니다.'],['오래된 기억','에리식 의미검색과 키워드 검색이 전체 과거 기록에서 오래된 사건을 다시 찾습니다.'],['보조 AI 재검토','설정한 경우 후보가 40,000자를 넘으면 USER 전송 직전에 AI 선별을 최대 60초 기다립니다.'],['안전선','40,000자 안전선은 유지하고 서버 500이면 같은 선택본을 36,000자까지 한 번만 줄입니다.']])), '<span class="m3-actions">'+(btn('자동 정리 설정','nav',{arg:'settings',cls:'quiet mini',icon:'set'}))+btn('기억 묶음 정리','unifiedMemory',{cls:'mini',icon:'spark',dis:!!V.ai.manual})+'</span>')}${memDiffStrip()}${tabs(t, S.mem, 'memSub')}<div class="m3-sub" data-key="mem-${S.mem}">${sub}</div>`;
   }
 
   /* ───────── 9. 화면: 자료집 ───────── */
@@ -15152,7 +15249,7 @@ function mRelationships() {
       return card('lore-pack-'+p.id,esc(p.name),`${rows.length}개 · ${origin}${foreignOwned&&p.ownerLabel?' · '+esc(p.ownerLabel):''}`,controls+(foreignOwned?'<div class="m3-row m3-pack-actionbar">'+actions+'</div>':'')+body,'',(foreignOwned?kind('복사 필요','#8b93a9'):(!Lr.enabled?kind('자료집 꺼짐','#8b93a9'):'')+chip('주입','pack.active:'+p.id,p.active)),COL.lore);
     };
     return pageHead('자료집 '+help(guide)+'<span class="m3-lore-count">사용 자료 '+on+' / '+total+'개 · 팩 '+packs.length+'개</span>',(chip('주입','lore.enabled',Lr.enabled)))+
-      `<div class="m3-toolbar"><span class="m3-grow"></span><span class="m3-actions">${btn('새 팩','packNew',{cls:'mini',icon:'plus'})}${btn('텍스트 → 자료','loreConvert',{cls:'mini',icon:'spark',feat:'loreConvert'})}${btn('자료집 묶음 정리','loreApiBundle',{cls:'mini',icon:'refresh'})}</span></div>`+
+      `<div class="m3-toolbar"><span class="m3-grow"></span><span class="m3-actions">${btn('새 팩','packNew',{cls:'mini',icon:'plus'})}${btn('텍스트 → 자료','loreConvert',{cls:'mini',icon:'spark',feat:'loreConvert'})}${btn('자료집 묶음 정리','loreApiBundle',{cls:'mini',icon:'refresh',dis:!!V.ai.manual})}</span></div>`+
       [['이 방의 진행형 자료',packs.filter(p=>p.auto&&!p.copyOrigin&&(!p.ownerChatId||p.ownerCurrent))],['가져온·분리한 자료 묶음',packs.filter(p=>p.copyOrigin&&(!p.ownerChatId||p.ownerCurrent))],['직접 관리·공용 자료',packs.filter(p=>!p.auto&&!p.copyOrigin&&(!p.ownerChatId||p.ownerCurrent))],['다른 방 자료 · 복사 후 사용',packs.filter(p=>p.ownerChatId&&!p.ownerCurrent)]].filter(([,rows])=>rows.length).map(([title,rows])=>`<div class="m3-sechead"><b>${esc(title)}</b><small class="m3-muted">${rows.length}팩 · 펼치기와 사용 설정은 별개</small></div>`+rows.map(packCard).join('')).join('')+(!packs.length?empty('자료집 팩이 없습니다.'):'')+
       heldLore();
   }
@@ -15189,7 +15286,7 @@ function mRelationships() {
   function vExternalRebuild(dis=false){
     const open=S.openSet.has('external-export');
     const options=[['all','전체','기억 · 자료집 · 인물 모두','doc'],['memory','기억','현재상태 · 날짜로그','memory'],['lore','자료집','세계관 · 물건 · 복장 · 장소 등','book'],['people','인물','인지 · 호칭말투 · 관계감정선 · 은폐','people']];
-    return (V.ai.manual?'<section class="m3-panel m3-external-panel" data-key="manual-ai-tools"><b>외부 AI로 이어서 정리</b><div class="m3-muted">마지막 정리 이후의 새 대화만 외부 AI에 보내고, 받은 답을 기존 기억에 합칩니다. API 키가 필요 없습니다.</div><div class="m3-row m3-card-actions">'+btn('기억·인물 함께','unifiedAll',{cls:'primary mini',dis})+btn('기억만','manualRunMemory',{cls:'mini',dis})+btn('인물만','manualRunPeople',{cls:'mini',dis})+btn('복붙 지침','promptGuides',{arg:'manualRelay',cls:'mini',icon:'doc',dis})+'</div></section>':'')+'<section class="m3-panel m3-external-panel" data-key="external"><b>외부 AI로 재구축</b><div class="m3-muted">전체 대화를 읽고, 선택한 영역을 다시 정리합니다.</div><div class="m3-row m3-card-actions m3-external-actions"><details class="m3-external-picker" data-open="external-export"'+(open?' open':'')+'><summary class="m3-btn mini" aria-expanded="'+open+'" aria-disabled="'+dis+'">'+ic('down')+'<span>지침 + TXT 받기</span>'+ic('chev','m3-external-chevron')+'</summary><div class="m3-external-options" popover="manual" aria-label="재구축 영역 선택"><div class="m3-external-menuhead"><b>어떤 영역을 재구축할까요?</b><small>선택하면 TXT 다운로드창이 열립니다.</small></div>'+options.map(([scope,label,desc,icon])=>'<button type="button" class="m3-external-option" data-act="externalExport" data-arg="'+scope+'"'+(dis?' disabled':'')+'><span class="m3-external-option-icon">'+ic(icon)+'</span><span><b>'+label+'</b><small>'+desc+'</small></span>'+ic('chev')+'</button>').join('')+'<p class="m3-external-menufoot">모두 전체 확정 대화를 읽으며, 정리 대상만 달라집니다.</p></div></details>'+btn('JSON 가져오기','externalImport',{cls:'mini',icon:'up',dis})+btn('지침','promptGuides',{arg:'externalAll',cls:'mini',icon:'doc',dis})+'</div>';
+    return '<section class="m3-panel m3-external-panel" data-key="external"><b>외부 AI로 재구축</b><div class="m3-muted">전체 대화를 읽고, 선택한 영역을 다시 정리합니다.</div><div class="m3-row m3-card-actions m3-external-actions"><details class="m3-external-picker" data-open="external-export"'+(open?' open':'')+'><summary class="m3-btn mini" aria-expanded="'+open+'" aria-disabled="'+dis+'">'+ic('down')+'<span>지침 + TXT 받기</span>'+ic('chev','m3-external-chevron')+'</summary><div class="m3-external-options" popover="manual" aria-label="재구축 영역 선택"><div class="m3-external-menuhead"><b>어떤 영역을 재구축할까요?</b><small>선택하면 TXT 다운로드창이 열립니다.</small></div>'+options.map(([scope,label,desc,icon])=>'<button type="button" class="m3-external-option" data-act="externalExport" data-arg="'+scope+'"'+(dis?' disabled':'')+'><span class="m3-external-option-icon">'+ic(icon)+'</span><span><b>'+label+'</b><small>'+desc+'</small></span>'+ic('chev')+'</button>').join('')+'<p class="m3-external-menufoot">모두 전체 확정 대화를 읽으며, 정리 대상만 달라집니다.</p></div></details>'+btn('JSON 가져오기','externalImport',{cls:'mini',icon:'up',dis})+btn('지침','promptGuides',{arg:'externalAll',cls:'mini',icon:'doc',dis})+'</div>';
   }
   const POPOVER_OK=typeof HTMLElement!=='undefined'&&typeof HTMLElement.prototype.showPopover==='function';
   function positionExternalMenu(){
@@ -15268,8 +15365,8 @@ function mRelationships() {
   function vTools(){const j=V.rebuild,run=V.rebuildRunning,rows=j?.segments||[],done=rows.filter(s=>s.status==='complete').length,status={pending:'대기',running:'판독 중',complete:'완료',failed:'실패'};
  return pageHead('자료 관리')+
  `<section class="m3-panel" data-key="memdiff-settings"><div class="m3-panel-head"><b>정리 전후 비교</b>${btn('정리 기록','memDiff',{cls:'mini',icon:'history'})}</div><p class="m3-muted">현재상태·날짜로그·관계·인지·호칭·자료집 · 방마다 최근 10회 · 추가 API 호출 없음</p></section>`+
- '<section class="m3-panel '+(j?'m3-focus':'')+'" data-key="rebuild"><div class="m3-row m3-sp"><div class="m3-t"><b class="m3-title-help">과거 대화 전체 재구축 '+help(helpSections([['읽는 범위','확정 RP를 AI 답변 끝 기준 약 20만 자씩 나눕니다. 한 턴이 더 길면 통째로 유지합니다.'],['분석과 적용','대화 읽기는 원문을 준비합니다. 이어서 분석은 외부 AI API를 사용합니다. 성공한 구간을 저장하고 실패한 구간부터 이어갑니다.'],['기존 기억','전체 결과 적용을 누르기 전까지 유지합니다.']]))+'</b><div class="m3-muted">확정 RP를 읽고 현재상태·날짜별 사건·인물·인지·자료·호칭을 다시 구성합니다.</div></div>'+(run?btn('작업 중단','rebuildStop',{cls:'danger mini'}):j&&!['complete','applied'].includes(j.status)?btn('이어서 분석','rebuildRun',{cls:'primary mini'}):btn('대화 읽기','rebuildRead',{cls:'primary mini'}))+'</div><p class="m3-muted">지침을 제외한 원문 약 200,000자 · AI 답변 끝에서 분할 · 한 턴이 더 길면 해당 턴은 통째로 유지</p>'+
- (j?'<div class="m3-hbar m3-topgap"><i style="width:'+ (rows.length?done/rows.length*100:0)+'%"></i></div><p class="m3-muted">'+esc(j.message||'')+' · 판독 완료 '+done+'/'+rows.length+'</p>'+rows.map(s=>'<div class="m3-seg" data-key="segment-'+s.index+'"><span class="m3-n '+(s.status==='complete'?'m3-done':s.status==='running'?'m3-run':'')+'">'+s.index+'</span><span class="m3-t">'+s.messages+'메시지 · '+fmt(s.chars)+'자'+(s.error?'<br><small class="m3-error">'+esc(s.error)+'</small>':'')+'</span><span class="m3-s">'+esc(status[s.status]||s.status)+'</span></div>').join('')+'<div class="m3-row m3-card-actions">'+(j.status==='complete'&&j.ready?btn('전체 결과 적용','rebuildApply',{cls:'primary mini',dis:run}):'')+btn('대화 다시 읽기','rebuildRead',{cls:'quiet mini',dis:run})+btn('구간 목록 비우기','rebuildClear',{cls:'danger mini',dis:run})+'</div>':'')+'</section>'+
+ '<section class="m3-panel '+(j?'m3-focus':'')+'" data-key="rebuild"><div class="m3-row m3-sp"><div class="m3-t"><b class="m3-title-help">과거 대화 전체 재구축 '+help(helpSections([['읽는 범위','확정 RP를 AI 답변 끝 기준 약 20만 자씩 나눕니다. 한 턴이 더 길면 통째로 유지합니다.'],['분석과 적용','대화 읽기는 원문을 준비합니다. 이어서 분석은 외부 AI API를 사용합니다. 성공한 구간을 저장하고 실패한 구간부터 이어갑니다.'],['기존 기억','전체 결과 적용을 누르기 전까지 유지합니다.']]))+'</b><div class="m3-muted">확정 RP를 읽고 현재상태·날짜별 사건·인물·인지·자료·호칭을 다시 구성합니다.</div></div>'+(run?btn('작업 중단','rebuildStop',{cls:'danger mini'}):j&&!['complete','applied'].includes(j.status)?btn('이어서 분석','rebuildRun',{cls:'primary mini',dis:!!V.ai.manual}):btn('대화 읽기','rebuildRead',{cls:'primary mini',dis:!!V.ai.manual}))+'</div><p class="m3-muted">지침을 제외한 원문 약 200,000자 · AI 답변 끝에서 분할 · 한 턴이 더 길면 해당 턴은 통째로 유지</p>'+
+ (j?'<div class="m3-hbar m3-topgap"><i style="width:'+ (rows.length?done/rows.length*100:0)+'%"></i></div><p class="m3-muted">'+esc(j.message||'')+' · 판독 완료 '+done+'/'+rows.length+'</p>'+rows.map(s=>'<div class="m3-seg" data-key="segment-'+s.index+'"><span class="m3-n '+(s.status==='complete'?'m3-done':s.status==='running'?'m3-run':'')+'">'+s.index+'</span><span class="m3-t">'+s.messages+'메시지 · '+fmt(s.chars)+'자'+(s.error?'<br><small class="m3-error">'+esc(s.error)+'</small>':'')+'</span><span class="m3-s">'+esc(status[s.status]||s.status)+'</span></div>').join('')+'<div class="m3-row m3-card-actions">'+(j.status==='complete'&&j.ready?btn('전체 결과 적용','rebuildApply',{cls:'primary mini',dis:run}):'')+btn('대화 다시 읽기','rebuildRead',{cls:'quiet mini',dis:run||!!V.ai.manual})+btn('구간 목록 비우기','rebuildClear',{cls:'danger mini',dis:run})+'</div>':'')+'</section>'+
 vExternalRebuild(run||ExternalBundles.busy())+
  '<hr class="m3-secondary-divider"><div data-key="secondary-rebuild"><b>외부 AI로 2차 재구축</b><div class="m3-muted">현재 방 자료를 카드별 고밀도 기록체로 압축합니다. 사건·원문·팩 구분을 보존합니다.</div><div class="m3-row m3-card-actions">'+btn('지침 + TXT 받기','secondaryExport',{cls:'mini',dis:run})+btn('JSON 가져오기','secondaryImport',{cls:'mini',dis:run})+btn('지침','promptGuides',{arg:'externalSecondary',cls:'mini',icon:'doc'})+'</div>'+vSecondaryStatus(run)+'</div></section>'+
  '<section class="m3-panel" data-key="room-copy"><b class="m3-title-help">다른 방 자료 복사하기 '+help(helpSections([['독립 사본','원본 방과 연결하지 않고 현재 방 안에 독립 복사합니다. 이후 어느 한쪽이 자동 갱신돼도 다른 방은 바뀌지 않습니다.'],['선택 복사','현재상태·날짜로그·캐릭터/OOC·자료집·인물인지·은폐·호칭말투를 필요한 것만 체크해 복사합니다.'],['안전 범위','주입 중 상태, AI cursor·근거 manifest, 재구축 staging, 자동화 실행상태는 방 사이에 이식하지 않습니다.']]))+'</b><div class="m3-muted">분기·새 방으로 기존 정사 자료를 옮길 때 사용합니다. 내용을 펼쳐 확인하고 섹션·사건·카드를 개별 선택합니다. 자료집은 별도 참고 팩으로 보관합니다.</div><div class="m3-row m3-card-actions">'+btn('다른 방에서 선택 복사','roomCopy',{cls:'mini',icon:'copy',dis:run})+'</div></section>'+
@@ -16163,7 +16260,7 @@ diff:`<div class="m3-shell">
     ai(d) {
       const a = d.draft, ds = a.provider === 'deepseek', models = [...((d.models || {})[a.provider] || [])];
       const manual = a.provider === 'manual';
-      const manualPanel = manual ? `<div class="m3-panel" data-key="manual-ai-intro"><b>API 키 없이 외부 AI로 진행합니다</b><p class="m3-muted">정리할 때 요청문을 복사해 ChatGPT·Gemini·Claude 같은 외부 AI 웹 채팅에 붙여 넣고, 받은 답을 다시 붙여 넣으면 API로 받을 때와 같은 검사를 거쳐 기존 기억에 합칩니다. 기억·인물 정리는 마지막 정리 이후의 새 대화만 보냅니다.</p><ul class="m3-muted"><li>자동 정리는 차례가 되면 알림만 드립니다. 확인 탭의 [함께 정리]나 자료 관리의 [외부 AI로 이어서 정리]로 진행합니다.</li><li>보내기 직전 AI 후보 선별은 쓰지 않고 로컬 선별로 대신합니다.</li><li>에리 의미검색(임베딩)은 저장된 Gemini API Key가 있을 때만 동작합니다.</li><li>저장된 API 키는 그대로 두므로 언제든 API 방식으로 돌아갈 수 있습니다.</li></ul><div class="m3-actions">${btn('복붙 안내 지침 편집', 'promptGuides', { arg: 'manualRelay', cls: 'mini', icon: 'doc' })}</div></div>` : '';
+      const manualPanel = manual ? `<div class="m3-panel" data-key="manual-ai-intro"><b>API 키 없이 외부 AI로 진행합니다</b><p class="m3-muted">확인 탭의 [함께 정리]를 누르면 요청문이 복사됩니다. ChatGPT·Gemini·Claude 같은 외부 AI에 붙여 넣고, 답을 복사한 뒤 [답 붙여넣기]를 누르면 API로 받을 때와 같은 검사를 거쳐 기존 기억에 합칩니다. 마지막 정리 이후의 새 대화만 보냅니다.</p><ul class="m3-muted"><li>답을 기다리는 동안 패널을 닫거나 새로고침하고, RP를 계속 진행해도 됩니다.</li><li>자동 정리는 차례가 되면 알림만 드립니다.</li><li>보내기 직전 AI 후보 선별은 쓰지 않고, API 묶음 정리·API 전체 재구축 버튼은 잠깁니다. 전체 재구축은 자료 관리의 [외부 AI로 재구축]을 쓰세요.</li><li>에리 의미검색(임베딩)은 저장된 Gemini API Key가 있을 때만 동작합니다.</li><li>저장된 API 키는 그대로 두므로 언제든 API 방식으로 돌아갈 수 있습니다.</li></ul><div class="m3-actions">${btn('복붙 안내 지침 편집', 'promptGuides', { arg: 'manualRelay', cls: 'mini', icon: 'doc' })}</div></div>` : '';
       if(!ds&&a.model&&!models.some(([id])=>id===a.model))models.unshift([a.model,a.model+' · 기존 설정']);
       return sheet(d, { title: '보조 AI 연결', desc: '인지 · 기억 갱신 · 날짜로그 정리 · 자료집 · 전체 재구축이 같은 연결을 씁니다', body: `
       <section class="m3-grp"><div class="m3-gt">${ic('key')}연결</div>${field('AI 서비스', selc(D(d, 'provider'), a.provider, d.providers || [['ai-studio', 'Google AI Studio'], ['firebase', 'Firebase AI Logic'], ['deepseek', 'DeepSeek API'], ['manual', '외부 AI 복붙 (API 없이)']]))}
@@ -16177,7 +16274,7 @@ diff:`<div class="m3-shell">
     },
     manualAi(d) {
       const a = d.draft, chars = String(d.request || '').length, ready = !!String(a.answer || '').trim();
-      return sheet(d, { title: '외부 AI로 진행 · ' + esc(d.label || '보조 AI 요청'), wide: true, desc: 'API 없이 복붙으로 처리합니다 · 답을 넣기 전까지 RP를 진행하지 마세요 · 이 창을 닫으면 이번 작업은 취소됩니다', body: `
+      return sheet(d, { title: '외부 AI로 진행 · ' + esc(d.label || '보조 AI 요청'), wide: true, desc: 'API 없이 복붙으로 처리합니다 · 이 창을 닫으면 이번 작업은 취소됩니다', body: `
       <section class="m3-grp" data-key="manual-send"><div class="m3-gt">${ic('copy')}1. 요청문 보내기</div>
       <p class="m3-muted">요청문 ${chars.toLocaleString()}자 · ChatGPT·Gemini·Claude 같은 외부 AI의 <b>새 대화</b>에 붙여 넣으세요. 입력창에 다 들어가지 않으면 TXT로 받아 파일로 첨부하면 됩니다.</p>
       <div class="m3-actions m3-topgap">${btn('요청문 복사', 'manualAiCopy', { arg: d.id, cls: 'primary mini', icon: 'copy' })}${btn('TXT로 받기', 'manualAiDownload', { arg: d.id, cls: 'mini', icon: 'down' })}${btn('안내 지침 편집', 'promptGuides', { arg: 'manualRelay', cls: 'quiet mini', icon: 'doc' })}</div>
@@ -16187,6 +16284,13 @@ diff:`<div class="m3-shell">
       <div class="m3-actions m3-topgap">${btn('답 파일 불러오기', 'manualAiFile', { arg: d.id, cls: 'mini', icon: 'up' })}${a.file ? `<span class="m3-muted">${esc(a.file)}</span>` : ''}</div>
       ${a.error ? `<div class="m3-status m3-err" aria-live="polite">${ic('alert')}<span>${esc(a.error)}</span></div>` : ''}</section>`,
         foot: `${closeBtn(d, '취소')}${SP}${btn('검사 후 적용', 'manualAiApply', { arg: d.id, cls: 'primary', icon: 'check', dis: !ready })}` });
+    },
+    manualPaste(d) {
+      const a = d.draft, ready = !!String(a.answer || '').trim();
+      return sheet(d, { title: '외부 AI 답 넣기', desc: '이 창을 닫아도 기다리는 작업은 그대로 남습니다', body: `
+      ${a.error ? `<div class="m3-status m3-err" aria-live="polite">${ic('alert')}<span>${esc(a.error)}</span></div>` : ''}
+      ${field('외부 AI의 답', ta(D(d, 'answer'), a.answer || '', '외부 AI가 준 답 전체를 붙여 넣으세요. 코드 블록 표시는 그대로 두어도 됩니다.', '200'), '답이 중간에 끊기면 외부 AI에 “이어서”라고 보낸 뒤, 이어진 부분까지 순서대로 모두 붙여 넣으세요.')}`,
+        foot: `${closeBtn(d, '닫기')}${SP}${btn('적용', 'manualPasteApply', { arg: d.id, cls: 'primary', icon: 'check', dis: !ready || !!d.busy })}` });
     },
     roomCopy:copyDialogView,
     roomName:roomNameDialogView,
@@ -17116,7 +17220,7 @@ function model(r){
  S={tab:({check:'home',cognition:'cog'})[state.v2Tab]||state.v2Tab||'home',mem:state.v2MemoryView==='character'?'char':['state','log','speech','extra'].includes(state.v2MemoryView)?state.v2MemoryView:'state',cog:state.v2MemoryView==='cog-reviews'?'review':'people',open:opened,job:automaticMemoryJob?{label:'현재상태·날짜별 사건 정리 중'}:automaticLoreJob?{label:'자료 카드 정리 중'}:aiUpdateRunning&&!U3.checking()?{label:'기억 작업 마무리 중'}:null};
 }
 if(!state.currentRoom||!WUICache.ai)return {};model(state.currentRoom);const r=state.currentRoom;const injection=WUIInjectionView(r,items),plan=injection.items;
-const rebuild=R31.get(r);const vm={held:WishHeldUI.view(r),apiEconomy:{...WishEconomy.settings(r),status:WishEconomy.describe(r)},cogInclude:Number(r.injectionPolicy?.cognitionEvery)>0,recall:recallSelectionSettings(r),rebuild:rebuild?{status:rebuild.status,message:rebuild.message,segments:rebuild.segments,ready:!!rebuild.draft}:null,rebuildRunning:R31.busy(),unified:U3.view(r),room:{...WishRoomNames.describe(r),name:D.room},version:SCRIPT_VERSION,save:{saving:state.saveStatus==='saving',at:state.lastSavedAt?new Date(state.lastSavedAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}):''},job:S.job,features:{autoDefault:false,semantic:false,density:false},inj:injection,defaults:{enabled:WUICache.ai.autoMemoryEnabled!==false,every:WUICache.ai.memoryMaxTurns},memory:D.memory,cog:{...D.cog,actors:D.actors,facts:D.facts.map(f=>({...f,included:f.sel}))},reviews:D.reviews.map(rv=>({...rv,acceptLabel:rv.accept})),state:{inject:D.pol.state,sections:D.state,raw:String(r.slots?.find(s=>s.id==='currentState')?.content||'')},logs:{inject:D.pol.log,blocks:D.logs.map(b=>({...b,undated:b.date==='날짜 미상',included:D.pol.log&&plan.some(i=>i.kind==='log'&&!i.off&&(i.sourceKey===b.key||i.key==='log:'+b.key))})),dupDates:logView.duplicateDates},relationships:{held:Array.isArray(r.relationshipHeld)?r.relationshipHeld:[],on:r.relationshipConfig?.enabled!==false,rows:WishRelationships.normalize(r.relationships)},speech:{on:D.speechOn,rows:D.speech},chars:{autoDetect:D.autoChar,rows:D.chars},extras:{rows:D.extras},presets:D.presets.map(p=>({...p,ret:p.retentionTurns})),lore:D.lore,ai:{providerLabel: getAiProviderLabel(D.ai.provider),model:D.ai.provider==='manual'?'API 없이 · 요청문 복사 → 답 붙여넣기':D.ai.model,manual:D.ai.provider==='manual',ready:isAiProviderReady(D.ai)},pol:D.pol,autoChar:D.autoChar,quickCog:D.facts.map(f=>({id:f.id,label:f.label,mode:f.mode,included:state.quickCognitionDesired.has(f.id)?state.quickCognitionDesired.get(f.id):f.sel})),recent:[D.memory.last,D.lore.auto.last].filter(Boolean),labels:{resetDesc:'현재 방의 기억·인지·이 방 전용 자동 자료를 초기화합니다. 일반 자료집은 유지됩니다.'}};
+const rebuild=R31.get(r);const vm={held:WishHeldUI.view(r),apiEconomy:{...WishEconomy.settings(r),status:WishEconomy.describe(r)},cogInclude:Number(r.injectionPolicy?.cognitionEvery)>0,recall:recallSelectionSettings(r),rebuild:rebuild?{status:rebuild.status,message:rebuild.message,segments:rebuild.segments,ready:!!rebuild.draft}:null,rebuildRunning:R31.busy(),unified:U3.view(r),room:{...WishRoomNames.describe(r),name:D.room},version:SCRIPT_VERSION,save:{saving:state.saveStatus==='saving',at:state.lastSavedAt?new Date(state.lastSavedAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}):''},job:S.job,features:{autoDefault:false,semantic:false,density:false},inj:injection,defaults:{enabled:WUICache.ai.autoMemoryEnabled!==false,every:WUICache.ai.memoryMaxTurns},memory:D.memory,cog:{...D.cog,actors:D.actors,facts:D.facts.map(f=>({...f,included:f.sel}))},reviews:D.reviews.map(rv=>({...rv,acceptLabel:rv.accept})),state:{inject:D.pol.state,sections:D.state,raw:String(r.slots?.find(s=>s.id==='currentState')?.content||'')},logs:{inject:D.pol.log,blocks:D.logs.map(b=>({...b,undated:b.date==='날짜 미상',included:D.pol.log&&plan.some(i=>i.kind==='log'&&!i.off&&(i.sourceKey===b.key||i.key==='log:'+b.key))})),dupDates:logView.duplicateDates},relationships:{held:Array.isArray(r.relationshipHeld)?r.relationshipHeld:[],on:r.relationshipConfig?.enabled!==false,rows:WishRelationships.normalize(r.relationships)},speech:{on:D.speechOn,rows:D.speech},chars:{autoDetect:D.autoChar,rows:D.chars},extras:{rows:D.extras},presets:D.presets.map(p=>({...p,ret:p.retentionTurns})),lore:D.lore,ai:{providerLabel: getAiProviderLabel(D.ai.provider),model:D.ai.provider==='manual'?'API 없이 · 요청문 복사 → 답 붙여넣기':D.ai.model,manual:D.ai.provider==='manual',ready:isAiProviderReady(D.ai),job:D.ai.provider==='manual'?manualJobView(r):null},pol:D.pol,autoChar:D.autoChar,quickCog:D.facts.map(f=>({id:f.id,label:f.label,mode:f.mode,included:state.quickCognitionDesired.has(f.id)?state.quickCognitionDesired.get(f.id):f.sel})),recent:[D.memory.last,D.lore.auto.last].filter(Boolean),labels:{resetDesc:'현재 방의 기억·인지·이 방 전용 자동 자료를 초기화합니다. 일반 자료집은 유지됩니다.'}};
 Object.assign(vm.memory,{error:U3.monitor(r).error,enabled:vm.unified.enabled&&vm.unified.memoryEnabled,committed:vm.unified.memoryPending,target:vm.unified.memoryEvery,fixed:vm.unified.memoryEvery,running:vm.unified.running,status:vm.unified.error||vm.unified.status});Object.assign(vm.cog,{auto:vm.unified.enabled&&vm.unified.observeEnabled,every:vm.unified.observeEvery});vm.job=vm.unified.running?{label:vm.unified.jobLabel||'통합 결과 확인 중'}:vm.job;
 if(R31.busy())vm.job={label:rebuild?.message||'재구축 자료 준비 중'};
 const eligibility=sessionSetupEligibilityFor(r);vm.fresh=eligibility?.fresh&&WUICache.freshDismissed!==String(state.currentChatId)?{show:true,title:'새 방 시작 설정',desc:'켜진 기억·자료·인물 정보를 첫 AI 메시지에 적용합니다.'}:null;for(const [path,value] of Object.entries(WUISettingsDraft()))WUISetPath(vm,path,value);vm.diagnostics=WLOG.list();vm.job=WLOG.view()||vm.job;return vm;}
@@ -17310,8 +17414,31 @@ Object.assign(WUI_ADAPTER.act,{
  manualAiFile:id=>{const d=WUI.ui.dlg(id);if(!d)return;const input=document.createElement('input');input.type='file';input.accept='.json,.txt,application/json,text/plain';input.onchange=async()=>{const file=input.files?.[0],live=WUI.ui.dlg(id);if(!file||!live)return;if(file.size>8*1024*1024){live.draft.error='답 파일이 너무 큽니다(8MB 초과).';WUI.paint();return;}try{const text=await file.text(),now=WUI.ui.dlg(id);if(!now)return;now.draft.answer=text;now.draft.file=file.name+' · '+text.length.toLocaleString()+'자';now.draft.error='';}catch(e){live.draft.error='답 파일을 읽지 못했습니다: '+String(e.message||e);}WUI.paint();};input.click();},
  manualAiApply:id=>{const d=WUI.ui.dlg(id);if(!d)return;let text=normalizeManualAiAnswer(d.draft.answer);if(!text){d.draft.error='붙여 넣은 답이 비어 있습니다.';WUI.paint();return;}try{try{JSON.parse(text);}catch(first){const joined=repairManualAiJoin(text);try{JSON.parse(joined);}catch{throw first;}text=joined;}}catch(e){const at=WLOG.jsonLocation(e);d.draft.error='JSON 형식이 아니거나 답이 중간에 끊겼습니다'+(at?' · '+at:'')+'. 끊겼다면 외부 AI에 “이어서”를 보내 나머지를 이어 붙여 주세요.';WUI.paint();return;}d.draft.error='';WUIResolve(id,text);},
  manualAiSetup:()=>{const d=openAiSettingsDialog();if(d?.draft){d.draft.provider='manual';WUI.paint();}},
- manualRunMemory:()=>U3.run(state.currentRoom,'memory'),manualRunPeople:()=>U3.run(state.currentRoom,'observe'),
+ manualPaste:async()=>{const r=state.currentRoom;if(!r)return;if(!loadManualJob(r)){notify('기다리는 외부 AI 작업이 없습니다. [함께 정리]로 요청문부터 복사해 주세요.','warn');return;}let text='';try{text=await navigator.clipboard.readText();}catch(_){text='';}if(!String(text||'').trim()){manualOpenPaste('','클립보드를 읽지 못했습니다. 외부 AI 답을 아래 칸에 붙여 넣어 주세요.');return;}await manualApplyFrom(r,text,'');},
+ manualPasteApply:async id=>{const d=WUI.ui.dlg(id);if(!d||d.busy)return;d.busy=true;WUI.paint();try{await manualApplyFrom(state.currentRoom,d.draft.answer,id);}finally{const live=WUI.ui.dlg(id);if(live){live.busy=false;WUI.paint();}}},
+ manualCopy:async()=>{const r=state.currentRoom,j=loadManualJob(r);if(!j)return;const text=loadManualRequest(r,j.code);if(!text){notify('요청문을 다시 만듭니다.','info',2500);return U3.run(r,j.force);}const ok=await copyPlainText(text);notify(ok?'요청문을 다시 복사했습니다 ('+text.length.toLocaleString()+'자).':'복사하지 못했습니다. [TXT]로 받아 외부 AI에 첨부해 주세요.',ok?'success':'warn',5000);},
+ manualTxt:()=>{const r=state.currentRoom,j=loadManualJob(r);if(!j)return;const text=loadManualRequest(r,j.code);if(!text){notify('요청문을 다시 만들었습니다. [TXT]를 한 번 더 눌러 주세요.','info',4000);return U3.run(r,j.force);}downloadText(text,'Wish-외부AI-요청문-'+j.code+'.txt','text/plain');notify('요청문 TXT 저장을 요청했습니다. 외부 AI 새 대화에 파일로 첨부해 주세요.','success',5000);},
+ manualFile:()=>{const r=state.currentRoom;if(!loadManualJob(r))return;const input=document.createElement('input');input.type='file';input.accept='.json,.txt,application/json,text/plain';input.onchange=async()=>{const file=input.files?.[0];if(!file)return;if(file.size>8*1024*1024){notify('답 파일이 너무 큽니다(8MB 초과).','error');return;}let text='';try{text=await file.text();}catch(e){notify('답 파일을 읽지 못했습니다: '+String(e.message||e),'error');return;}await manualApplyFrom(state.currentRoom,text,'');};input.click();},
+ manualCancel:()=>{const r=state.currentRoom;if(!loadManualJob(r))return;if(!confirm('기다리는 외부 AI 작업을 취소할까요? 이미 받은 답은 쓸 수 없게 됩니다.'))return;clearManualJob(r);notify('외부 AI 작업을 취소했습니다.','info',3500);WUI.paint();},
+ manualErrCopy:async()=>{const j=loadManualJob(state.currentRoom);if(!j?.lastError)return;const ok=await copyPlainText('방금 준 JSON을 프로그램에 넣었더니 아래 오류가 났습니다. 같은 작업 지침과 입력 자료를 기준으로 오류를 고친 JSON 전체를 다시 출력해 주세요. 최상위의 "wish_job": "'+j.code+'"는 그대로 넣어 주세요.\n\n오류: '+j.lastError);notify(ok?'오류 문구를 복사했습니다 · 외부 AI의 같은 대화에 붙여 넣어 고친 답을 받아 주세요.':'복사하지 못했습니다.',ok?'success':'warn',6000);},
 });
+// 붙여 넣은 답을 적용합니다. 형식 오류는 작업 줄과 답 넣기 창에 보여 주고, 작업은 그대로 남깁니다.
+function manualOpenPaste(text,error){return WUI.openSheet('manualPaste',{draft:{answer:String(text||''),error:String(error||'')}});}
+async function manualApplyFrom(room,text,dlgId){
+ if(!room)return false;
+ try{
+  await applyManualAnswer(room,text);
+  const job=loadManualJob(room);
+  if(!job){if(dlgId)WUI.closeSheet(dlgId);WUI.paint();return true;}
+  if(dlgId){const d=WUI.ui.dlg(dlgId);if(d)d.draft.error=job.lastError||'적용하지 못했습니다. 확인 탭의 기다리는 작업 줄을 확인해 주세요.';}
+  WUI.paint();return false;
+ }catch(e){
+  const msg=String(e?.message||e),job=loadManualJob(room);
+  if(job){job.lastError=msg;saveManualJob(room,job);}
+  if(dlgId){const d=WUI.ui.dlg(dlgId);if(d)d.draft.error=msg;}else manualOpenPaste(text,msg);
+  WUI.paint();return false;
+ }
+}
 for(const path of Object.keys(WUI_FIELD_MAP))WUI_ADAPTER.bind[path]=v=>{WUISettingsDraft()[path]=v;};
 WUI_ADAPTER.bind['relationships.on']=v=>WishRelationships.mutate(state.currentRoom,r=>{r.relationshipConfig={enabled:!!v};});
 for(const [path,key] of Object.entries({'state.inject':'slot-enable','logs.inject':'slot-enable','char.enabled':'slot-enable','extra.enabled':'slot-enable','pack.active':'lore-pack-active','fact.mode':'cog-injection-mode','speech.on':'speech-enabled','lore.auto.enabled':'lore-auto-enabled'}))WUI_ADAPTER.bind[path]=async(v,id)=>{const arg=path==='state.inject'?'currentState':path==='logs.inject'?'logSummary':id||'';if(path==='pack.active'&&v===true){const pack=(state.v2LorePacks||[]).find(p=>String(p.scopeId)===String(id));if(pack?.ownerChatId&&String(pack.ownerChatId)!==String(state.currentRoom?.chatId||''))throw Error('다른 방 소유 자료집은 직접 공유하지 않습니다. 자료 관리 → 다른 방 자료 복사하기에서 독립 사본으로 가져와 주세요.');}const selector='[data-v2-'+key+(arg?'="'+arg+'"':'')+']';return WUIInvoke(key,arg,{[selector]:v});};
@@ -17346,7 +17473,7 @@ Object.assign(WUI_ADAPTER.act,{
 });
 Object.assign(WUI_ADAPTER.act,{
  secondaryExport:()=>SecondaryRebuild.openExport(),secondaryExportRun:id=>SecondaryRebuild.exportFromDialog(id),secondaryImport:()=>SecondaryRebuild.importFile(),secondaryApply:id=>SecondaryRebuild.apply(id),secondaryEdit:id=>SecondaryRebuild.editReview(id),secondaryToggleEdit:arg=>{const [id,key]=arg.split('|'),d=WUI.ui.dlg(id);if(d&&!d.busy){d.draft.editing||={};d.draft.editing[key]=!d.draft.editing[key];WUI.paint(false);}},secondaryManage:()=>SecondaryRebuild.openManage(),secondaryChange:arg=>{const [id,mode]=arg.split('|');return SecondaryRebuild.change(id,mode);},
- unifiedAll:()=>U3.run(state.currentRoom,'all'),rebuildRead:()=>R31.read(state.currentRoom),rebuildRun:()=>R31.run(state.currentRoom),rebuildApply:()=>R31.apply(state.currentRoom),rebuildStop:()=>R31.stop(),rebuildClear:()=>R31.clear(state.currentRoom),rebuildExport:()=>R31.exportText(state.currentRoom),rebuildImport:()=>R31.importFile(state.currentRoom),
+ unifiedAll:()=>{const r=state.currentRoom;if(isManualAiProvider()&&loadManualJob(r)&&!confirm('기다리는 외부 AI 작업이 있습니다. 새 요청문으로 바꿀까요?\n이미 외부 AI에 보낸 이전 요청문의 답은 쓸 수 없게 됩니다.'))return;return U3.run(r,'all');},rebuildRead:()=>R31.read(state.currentRoom),rebuildRun:()=>R31.run(state.currentRoom),rebuildApply:()=>R31.apply(state.currentRoom),rebuildStop:()=>R31.stop(),rebuildClear:()=>R31.clear(state.currentRoom),rebuildExport:()=>R31.exportText(state.currentRoom),rebuildImport:()=>R31.importFile(state.currentRoom),
  bulkStart:()=>R31.read(state.currentRoom),bulkResume:()=>R31.run(state.currentRoom),bulkShow:()=>WUI.open('tools'),bulkDiscard:()=>R31.clear(state.currentRoom),extTxt:()=>R31.exportText(state.currentRoom),
 });
 for(const name of ['delta','index'])WUI_ADAPTER.bind['apiEconomy.'+name]=value=>{WUISettingsDraft()['apiEconomy.'+name]=!!value;};
