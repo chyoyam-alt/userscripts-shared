@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         👾 Crack INFO Game HUD (미니 RPG HUD)
 // @namespace    crack-info-game-hud-clean
-// @version      3.6.0
+// @version      3.6.1
 // @description  크랙 채팅 최신 답변을 게임식 로그·관계도·HUD 코멘트로 정리하고, PET/마스코트·토큰 사용량·암호화 클라우드 인계·펫 다이어리를 지원합니다.
 // @author       뤼부이
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/INFOGameHUD.user.js
@@ -29,7 +29,7 @@
   if (window.__CIGH_CLEAN_V240_RELEASE_LOADED__) return;
   window.__CIGH_CLEAN_V240_RELEASE_LOADED__ = true;
 
-  const VERSION = '3.6.0';
+  const VERSION = '3.6.1';
   const FAB_ID = 'cigh-clean-fab';
   const PANEL_ID = 'cigh-clean-panel';
   const POPUP_ID = 'cigh-clean-popup';
@@ -20665,6 +20665,63 @@ const RB_ICONS={
 };
 RB_ICONS.redo=RB_ICONS.undo.map(r=>[...r].reverse().join(''));
 RB_ICONS.right=RB_ICONS.back.map(r=>[...r].reverse().join(''));
+const RB_SET_ICONS={
+  gear:["....###....", ".##.#-#.##.", ".#-##-##-#.", ".##-----##.", "..#--#--#..", "###-#a#-###", "#---#a#---#", "###-#a#-###", "..#--#--#..", ".##-----##.", ".#-##-##-#.", ".##.#-#.##.", "....###...."],
+  close:["##.....##", "###...###", ".###.###.", "..#####..", "...###...", "..#####..", ".###.###.", "###...###", "##.....##"],
+  sliders:["..###......", "--#a#------", "..###......", "...........", "......###..", "------#a#--", "......###..", "...........", "...###.....", "---#a#-----", "...###....."],
+  spark:["....a......", "....a....#.", "...awa..###", "..awwwa..#.", "aawwwwwaa..", "..awwwa....", "...awa.....", "....a......", "....a......"],
+  letter:["############", "##--------##", "#-#------#-#", "#--#----#--#", "#---#aa#---#", "#----aa----#", "#----------#", "############"],
+  cloud:["....####....", "..##----#...", ".#-------##.", "#----------#", "#----------#", "#----------#", ".##########."],
+  chart:[".......aa..", ".......aa..", ".......aa..", "...##..aa..", "...##..aa..", "...##..aa..", "##.##..aa##", "##.##..aa##", "##.##..aa##", "###########"],
+  floppy:["#########..", "#.#---#.##.", "#.#---#..##", "#.#####...#", "#.........#", "#.#######.#", "#.#aaaaa#.#", "#.#aaaaa#.#", "#.#######.#", "###########"],
+  search:["..####.....", ".#....#....", "#.ww...#...", "#.w....#...", "#......#...", ".#....#....", "..#####....", "......##...", ".......##..", "........##.", ".........##"],
+  bell:["....a....", "...###...", "..#---#..", "..#---#..", ".#-----#.", ".#-----#.", "#-------#", "#########", "...###..."],
+  speech:["###########", "#.........#", "#.a..a..a.#", "#.........#", "###.#######", "..#.#......", "..##......."],
+  bunny:["..#...#..", ".#a#.#a#.", ".#a#.#a#.", ".#a###a#.", "#.......#", "#.#...#.#", "#a..#..a#", "#.......#", ".#######."],
+  console:["###########", "#.........#", "#.aa......#", "#.a.......#", "#.........#", "#.........#", "###########", "....###....", "..#######.."],
+  diamond:[".....w.....", "....wwa....", "...wwwaa...", "..wwwwaaa..", ".wwwwwaaaa.", "wwwwwwaaaaa", ".aaaaaAAAA.", "..aaaaAAA..", "...aaaAA...", "....aaA....", ".....A....."]
+};
+const RB_SET_PAL={'#':'currentColor','-':'currentColor','a':'var(--cigh-accent)','A':'color-mix(in srgb,var(--cigh-accent) 60%,#000)','w':'color-mix(in srgb,var(--cigh-accent) 45%,#fff)'};
+function rbSetIcon(n,s=1){const g=RB_SET_ICONS[n];if(!g)return '';const h=g.length,w=g[0].length;let r='';g.forEach((row,y)=>{for(let x=0;x<w;){const c=row[x];if(c==='.'){x++;continue}let e=x+1;while(e<w&&row[e]===c)e++;r+=`<rect x="${x}" y="${y}" width="${e-x}" height="1" style="fill:${RB_SET_PAL[c]}${c==='-'?';fill-opacity:.42':''}"/>`;x=e}});return `<svg class="cigh-rb-sicon" viewBox="0 0 ${w} ${h}" width="${w*s}" height="${h*s}" shape-rendering="crispEdges" aria-hidden="true">${r}</svg>`}
+const RB_SET_STYLE = `
+.cigh-rb-sicon{display:block;flex:none;image-rendering:pixelated;pointer-events:none}
+#cigh-clean-settings .cigh-rb-top{flex:none;display:flex;align-items:center;gap:6px;height:26px;padding:0 4px 0 8px;box-sizing:border-box;background:var(--cigh-bg-2);border-bottom:1px solid var(--cigh-border);color:var(--cigh-text-soft)}
+#cigh-clean-settings .cigh-rb-top b{color:var(--cigh-accent);font-weight:700;letter-spacing:.06em!important}
+#cigh-clean-settings .cigh-rb-top small{margin-left:auto;color:var(--cigh-text-dim)}
+#cigh-clean-settings .cigh-rb-top button{width:22px;height:22px;min-height:0;margin:0;padding:0;display:grid;place-items:center;border:0;border-radius:3px;background:transparent;color:var(--cigh-text-soft);cursor:pointer}
+#cigh-clean-settings .cigh-rb-top button:hover{color:var(--cigh-accent);background:var(--cigh-accent-softer)}
+#cigh-clean-settings .cigh-rb-tabs{flex:none;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));background:var(--cigh-bg-3);border-bottom:1px solid var(--cigh-border-faint)}
+#cigh-clean-settings .cigh-rb-tabs button{position:relative;min-width:0;min-height:0;margin:0;padding:6px 0 5px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border:0;border-right:1px solid var(--cigh-border-faint);border-radius:0;background:transparent;color:var(--cigh-text-faint);cursor:pointer}
+#cigh-clean-settings .cigh-rb-tabs button:last-child{border-right:0}
+#cigh-clean-settings .cigh-rb-tabs button .cigh-rb-sicon{opacity:.72}
+#cigh-clean-settings .cigh-rb-tabs button:hover{color:var(--cigh-accent)}
+#cigh-clean-settings .cigh-rb-tabs button:hover .cigh-rb-sicon{opacity:1}
+#cigh-clean-settings .cigh-rb-tabs button.on{color:var(--cigh-accent);background:var(--cigh-accent-softer)}
+#cigh-clean-settings .cigh-rb-tabs button.on .cigh-rb-sicon{opacity:1}
+#cigh-clean-settings .cigh-rb-tabs button.on::after{content:"";position:absolute;left:50%;bottom:0;width:10px;height:2px;margin-left:-5px;background:var(--cigh-accent)}
+#cigh-clean-settings .cigh-rb-tabs button span{font:10px/1.2 "CIGH Mona 10","Malgun Gothic",monospace!important;white-space:nowrap}
+#cigh-clean-settings .cigh-rb-tabs button:focus-visible{outline:1px solid var(--cigh-accent-soft);outline-offset:-3px}
+#cigh-clean-settings .cigh-clean-sh{margin:14px 0 6px;font-weight:700}
+#cigh-clean-settings [data-rb-page]>.cigh-clean-sh:first-child,#cigh-clean-settings .cigh-rb-home>.cigh-clean-sh:first-child,#cigh-clean-settings .cigh-clean-fold-body>.cigh-clean-sh:first-child{margin-top:0}
+#cigh-clean-settings .cigh-rb-sh::before{content:"◆";font-size:8px!important}
+#cigh-clean-settings .cigh-clean-sh::after{order:2}
+#cigh-clean-settings .cigh-clean-sh small{order:3;font-weight:400;color:var(--cigh-text-faint)}
+#cigh-clean-settings .cigh-rb-home{margin-bottom:4px}
+#cigh-clean-settings .cigh-rb-row{position:relative;display:flex;align-items:center;gap:8px;min-height:32px;margin:0;padding:5px 2px 5px 13px;border-bottom:1px dashed var(--cigh-border-faint);color:var(--cigh-text);cursor:pointer;box-sizing:border-box}
+#cigh-clean-settings .cigh-rb-row:last-child{border-bottom:0}
+#cigh-clean-settings .cigh-rb-row::before{content:"▶";position:absolute;left:1px;top:50%;transform:translateY(-50%);font-size:8px!important;color:var(--cigh-accent);opacity:0}
+#cigh-clean-settings .cigh-rb-row:hover::before,#cigh-clean-settings .cigh-rb-row:focus-within::before{opacity:1}
+#cigh-clean-settings .cigh-rb-row.col{flex-direction:column;align-items:stretch;gap:6px;cursor:default}
+#cigh-clean-settings .cigh-rb-row.col::before{top:15px}
+#cigh-clean-settings .cigh-rb-lbl{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.4}
+#cigh-clean-settings .cigh-rb-row.col .cigh-rb-lbl{flex-direction:row;align-items:center;gap:7px}
+#cigh-clean-settings .cigh-rb-row .cigh-rb-lbl small{display:block;color:var(--cigh-text-faint);line-height:1.4}
+#cigh-clean-settings .cigh-rb-tstate{flex:none;width:24px;text-align:right;font:10px/1 "CIGH Mona 10","Malgun Gothic",monospace!important;color:var(--cigh-text-dim)}
+#cigh-clean-settings .cigh-rb-tstate.on{color:var(--cigh-accent)}
+#cigh-clean-settings input.cigh-rb-switch::after{transition:none}
+#cigh-clean-settings .cigh-rb-row .cigh-rb-segments{margin:0}
+#cigh-clean-settings .cigh-rb-row .cigh-rb-dock-picks{margin:0}
+`;
 function rbIcon(n,s=14){const m=RB_ICONS[n];if(!m)return '';let r='';m.forEach((row,y)=>{for(let x=0;x<7;){if(row[x]!=='#'){x++;continue}let e=x+1;while(e<7&&row[e]==='#')e++;r+=`<rect x="${x}" y="${y}" width="${e-x}" height="1"/>`;x=e}});return `<svg class="cigh-rb-icon" viewBox="0 0 7 7" width="${s}" height="${s}" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true">${r}</svg>`}
 
 
@@ -20674,7 +20731,7 @@ function injectStyle() {
   rbLegacy_injectStyle();
   document.getElementById('cigh-rebuild-style')?.remove();
   const style = document.createElement('style');
-  style.id = 'cigh-rebuild-style'; style.textContent = RB_STYLE + RB_LOCAL_DATA_STYLE;
+  style.id = 'cigh-rebuild-style'; style.textContent = RB_STYLE + RB_LOCAL_DATA_STYLE + RB_SET_STYLE;
   document.head.appendChild(style);
 }
 
@@ -20900,8 +20957,8 @@ function rbMountLocalDataPage(page) {
 }
 
 
-// One persistent form is the draft. Pages only hide/reveal groups; no missing inputs
-// can be saved as defaults. The original validation/setter pipeline stays in charge.
+// Settings chrome: title strip + six tabs. Fields, draft baseline, validation and
+// save pipeline are the same as before; only the navigation and layout changed.
 function openSettings(){
   const existing=document.getElementById(SETTINGS_ID);if(existing){existing.rbRequestClose?.();return;}
   const panel=ensurePanel(),returnFocus=document.activeElement;
@@ -20912,28 +20969,30 @@ function openSettings(){
   box.querySelectorAll('[data-fold-body]').forEach(e=>{sourceSections[e.dataset.foldBody]=e;e.classList.remove('collapsed');});
   box.querySelectorAll('[data-fold-section]').forEach(e=>e.remove());
   const save=box.querySelector('[data-action="save"]');save.parentElement.remove();
+  const sh=(title,hint='')=>{const d=document.createElement('div');d.className='cigh-clean-sh cigh-rb-sh';d.innerHTML=esc(title)+(hint?`<small>${esc(hint)}</small>`:'');return d;};
   const body=document.createElement('div');body.className='cigh-rb-settings-body';
-  const backRow=document.createElement('div');backRow.className='cigh-rb-backrow';backRow.hidden=true;backRow.innerHTML='<button type="button" class="cigh-rb-backbtn" data-rb-back>‹ 뒤로</button>';body.appendChild(backRow);
-  const backButton=backRow.querySelector('[data-rb-back]');
   const pages={};
-  const menu=document.createElement('div');menu.dataset.rbPage='menu';body.appendChild(menu);
-  const pageDefs=[['ai','AI 연결','spark',['api','model']],['view','표시·연출','screen',['ui','fx']],['log','로그 문체','scroll',['log-style']],['cloud','클라우드 백업','cloud',['cloud']],['usage','사용량','chart',['usage']],['local','로컬 데이터 관리','trash',[]]];
-  for(const [id,title,icon,groups] of pageDefs){const page=document.createElement('div');page.dataset.rbPage=id;page.hidden=true;groups.forEach(g=>{if(sourceSections[g])page.appendChild(sourceSections[g]);});pages[id]=page;body.appendChild(page);}
+  const pageDefs=[['home','기본','sliders',['ui','fx']],['ai','AI','spark',['api','model']],['log','문체','letter',['log-style']],['cloud','백업','cloud',['cloud']],['usage','사용량','chart',['usage']],['local','데이터','floppy',[]]];
+  const pageTitles={home:'기본 설정',ai:'AI 연결',log:'로그 문체',cloud:'클라우드 백업',usage:'사용량',local:'로컬 데이터'};
+  for(const [id,,,groups] of pageDefs){const page=document.createElement('div');page.dataset.rbPage=id;page.hidden=true;groups.forEach(g=>{if(sourceSections[g])page.appendChild(sourceSections[g]);});pages[id]=page;body.appendChild(page);}
+  // Headers sit beside the section bodies, so sections that re-render their own body keep them.
+  [['api','연결'],['model','모델'],['log-style','로그 문체','LOG 탭에 적용'],['cloud','클라우드 백업'],['usage','사용량']].forEach(([key,title,hint])=>sourceSections[key]?.before(sh(title,hint)));
   rbMountLocalDataPage(pages.local);
   box.replaceChildren();
-  box.appendChild(body);
+  const top=document.createElement('div');top.className='cigh-rb-top';
+  top.innerHTML=`${rbSetIcon('gear')}<b>설정</b><small>v${esc(VERSION)}</small><button type="button" data-rb-close aria-label="설정 닫기" title="닫기">${rbSetIcon('close')}</button>`;
+  const tabs=document.createElement('div');tabs.className='cigh-rb-tabs';tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','설정 분류');
+  tabs.innerHTML=pageDefs.map(([id,label,icon])=>`<button type="button" role="tab" data-rb-tab="${id}" aria-selected="false">${rbSetIcon(icon)}<span>${label}</span></button>`).join('');
+  box.append(top,tabs,body);
   const footer=document.createElement('div');footer.className='cigh-rb-savebar';
-  footer.innerHTML=`<span role="status" aria-live="polite">SETTINGS</span><div class="cigh-rb-save-actions"><span class="cigh-rb-footer-version">v${VERSION}</span><button type="button" data-rb-revert>되돌리기</button></div>`;
+  footer.innerHTML=`<span role="status" aria-live="polite">SETTINGS</span><div class="cigh-rb-save-actions"><button type="button" data-rb-revert>되돌리기</button></div>`;
   footer.querySelector('.cigh-rb-save-actions').appendChild(save);box.appendChild(footer);
   rbButtonIcon(save,'check','저장');save.classList.add('cigh-rb-primary');
-  // Move the same auto-read control to AI. Other FX options stay on the view page.
-  const autoRow=pages.view.querySelector('#cigh-clean-auto-analyze-input')?.closest('label');
-  if(autoRow)pages.ai.appendChild(autoRow);
-  const preview=pages.view.querySelector('[data-action="preview"]')?.parentElement;
+  // Quick toggles replace the duplicated FX checkboxes on screen; the hidden
+  // originals stay in the form so the draft baseline and save pipeline are unchanged.
+  const preview=pages.home.querySelector('[data-action="preview"]')?.parentElement;
   if(preview)pages.ai.appendChild(preview);
   box.querySelectorAll('input[type="checkbox"]:not(.cigh-rb-data-check)').forEach(i=>{i.classList.add('cigh-rb-switch');i.setAttribute('role','switch');});
-  // Retain native select controls for provider/model validation, and add accessible
-  // segmented buttons as synchronized views rather than replacing input values.
   function segments(select,labels){
     if(!select)return;const group=document.createElement('div');group.className='cigh-rb-segments';group.setAttribute('role','group');group.setAttribute('aria-label',select.closest('label')?.querySelector('span')?.textContent||'선택');
     const sync=()=>{group.replaceChildren();[...select.options].forEach(o=>{const b=document.createElement('button');b.type='button';b.textContent=labels?.[o.value]||o.textContent;b.classList.toggle('on',o.value===select.value);b.setAttribute('aria-pressed',String(o.value===select.value));b.addEventListener('click',()=>{select.value=o.value;select.dispatchEvent(new Event('change',{bubbles:true}));sync();});group.appendChild(b);});};
@@ -20941,18 +21000,15 @@ function openSettings(){
   }
   const provider=box.querySelector('#cigh-clean-provider-input');
   segments(provider,{'ai-studio':'AI Studio',firebase:'Firebase',deepseek:'DeepSeek'});
-  segments(box.querySelector('#cigh-clean-font-size-input'),{small:'Aa · 작게',medium:'Aa · 보통',large:'Aa · 크게'});
-  const fontNote=document.createElement('p');fontNote.className='cigh-rb-help';
-  fontNote.textContent='기본 글꼴 · 모나체 / 기존 UI 크기 설정을 유지해요. 글자 크기에 따라 도트 경계가 부드러워질 수 있어요.';
-  pages.view.querySelector('#cigh-clean-font-size-input')?.closest('label')?.appendChild(fontNote);
+  const fontSelect=box.querySelector('#cigh-clean-font-size-input');
+  segments(fontSelect,{small:'작게',medium:'보통',large:'크게'});
   const thinking=box.querySelector('#cigh-clean-thinking-input');const syncThinking=segments(thinking);
   const model=box.querySelector('#cigh-clean-model-input');model?.addEventListener('change',()=>queueMicrotask(()=>{syncThinking?.();update();}));
   const dock=box.querySelector('#cigh-clean-header-dock-input');
+  let picks=null;
   if(dock){
-    const row=dock.closest('label');row.hidden=true;
-    const picks=document.createElement('div');picks.className='cigh-rb-dock-picks';picks.setAttribute('role','group');picks.setAttribute('aria-label','HUD 배치');
+    picks=document.createElement('div');picks.className='cigh-rb-dock-picks';picks.setAttribute('role','group');picks.setAttribute('aria-label','HUD 배치');
     picks.innerHTML=[false,true].map(on=>`<button type="button" data-rb-dock="${on}"><svg viewBox="0 0 60 44" width="60" height="44" aria-hidden="true"><rect x="1" y="1" width="58" height="42" rx="3" fill="var(--cigh-bg-soft)" stroke="var(--cigh-border)"/><path d="M2 8H58 M7 14H38 M7 20H45 M25 26H53" stroke="var(--cigh-border)" stroke-width="3"/><rect x="5" y="35" width="50" height="6" rx="2" fill="var(--cigh-fill)"/>${on?'<rect x="22" y="3" width="4" height="3" fill="var(--cigh-accent)"/><rect x="6" y="30" width="48" height="3" fill="var(--cigh-accent-soft)"/>':'<path d="M7 29l3-3 3 3-3 3z" fill="var(--cigh-accent)"/>'}</svg><b>${on?'상단 도킹':'플로팅'}</b><small>${on?'제목 옆 ◆ · 입력창 위 티커':'◆ 버튼을 원하는 곳에'}</small></button>`).join('');
-    row.after(picks);
     const sync=()=>picks.querySelectorAll('button').forEach(b=>{const on=(b.dataset.rbDock==='true')===dock.checked;b.classList.toggle('on',on);b.setAttribute('aria-pressed',String(on));});
     picks.addEventListener('click',e=>{const b=e.target.closest('button');if(b){dock.checked=b.dataset.rbDock==='true';dock.dispatchEvent(new Event('change',{bubbles:true}));}});dock.addEventListener('change',sync);sync();
   }
@@ -20964,9 +21020,11 @@ function openSettings(){
   const fields=[...box.querySelectorAll('input[id],textarea[id],select[id]')].filter(e=>!e.id.includes('-cloud-')&&!e.id.includes('-style-preset-select'));
   const draftFields=()=>fields;
   const value=e=>e.type==='checkbox'?e.checked:e.value;
-  let baseline=new Map(draftFields().map(e=>[e.id,value(e)])),pageId='menu';
+  let baseline=new Map(draftFields().map(e=>[e.id,value(e)])),pageId='home';
   const changed=()=>draftFields().filter(e=>baseline.has(e.id)&&baseline.get(e.id)!==value(e));
-  const status=document.createElement('div');status.className='cigh-rb-provider-status';pages.ai.prepend(status);
+  const status=document.createElement('div');status.className='cigh-rb-provider-status';
+  const providerGrid=provider?.closest('.cigh-clean-settings-grid');
+  if(providerGrid)providerGrid.after(status);else pages.ai.prepend(status);
   const styleInput=box.querySelector('#cigh-clean-style-input'),styleSelect=box.querySelector('#cigh-clean-style-preset-select');
   const presets=document.createElement('div');presets.className='cigh-rb-style-list';styleSelect?.after(presets);if(styleSelect)styleSelect.hidden=true;
   const example=document.createElement('div');example.className='cigh-rb-style-example';styleInput?.before(example);
@@ -20991,16 +21049,20 @@ function openSettings(){
       example.textContent=lines.length?lines.join('\n'):'이 문체에는 예시가 없어요. 아래 지침을 직접 편집할 수 있어요.';
     }
   }
-
-  const quickDefs=[['auto','자동 읽기','cigh-clean-auto-analyze-input',setAutoAnalyzeEnabled],['sfx','효과음','cigh-clean-sfx-input',setSfxEnabled],['comment','코멘트 팝업','cigh-clean-comment-popup-input',setCommentPopupEnabled],['mascot','마스코트','cigh-clean-mascot-input',setMascotEnabled]];
-  menu.innerHTML=`<div class="cigh-clean-sh">빠른 설정 <small>누르면 즉시 적용</small></div><div class="cigh-rb-quick">${quickDefs.map(([id,label])=>`<label>${esc(label)}<input type="checkbox" class="cigh-rb-switch" role="switch" data-rb-quick="${id}" aria-label="${esc(label)}"></label>`).join('')}</div><div class="cigh-clean-sh">설정</div><div class="cigh-rb-menu">${pageDefs.map(([id,title,icon])=>`<button type="button" data-rb-nav="${id}">${rbIcon(icon)}<b>${title}</b><span data-rb-summary="${id}"></span>${rbIcon('right',10)}</button>`).join('')}</div><p class="cigh-rb-help">오른쪽 요약은 저장된 값이에요. 상세 설정의 변경은 저장 버튼으로 적용해요.</p>`;
-  const nameRow=pages.view.querySelector('#cigh-clean-pet-name-input')?.closest('label');
-  if(nameRow){nameRow.classList.add('cigh-rb-pet-name');nameRow.querySelector('span')?.classList.add('cigh-clean-sh');menu.querySelector('.cigh-rb-quick').after(nameRow);}
-  pages.view.querySelector('[data-fold-body="ui"] .cigh-clean-settings-help')?.replaceChildren(document.createTextNode('HUD 글자 크기를 바꿉니다. 게임 데이터나 펫 성장 상태에는 영향을 주지 않습니다.'));
-  function menuSummary(){
-    const summary={ai:getSelectedProviderModel(),view:`${getUiFontSizeLabel()} · ${isDockModeEnabled()?'도킹':'플로팅'}`,log:getStylePrompt()===DEFAULT_STYLE_PROMPT?'기본 RPG':'사용자 문체',cloud:getCloudLink().code?'코드 연결됨':'미연결',usage:'토큰 · 추정 비용',local:'저장된 방 삭제'};
-    Object.entries(summary).forEach(([k,v])=>{menu.querySelector(`[data-rb-summary="${k}"]`).textContent=v;menu.querySelector(`[data-rb-summary="${k}"]`).title=v;});
-    const getters={auto:isAutoAnalyzeEnabled,sfx:isSfxEnabled,comment:isCommentPopupEnabled,mascot:isMascotEnabled};quickDefs.forEach(([id])=>menu.querySelector(`[data-rb-quick="${id}"]`).checked=getters[id]());
+  // 기본 tab: quick toggles, pet name, UI size, HUD placement.
+  const quickDefs=[['auto','새 답변 자동 읽기','생성이 끝나면 최신 로그를 분석','search','cigh-clean-auto-analyze-input',setAutoAnalyzeEnabled],['sfx','효과음','버튼·분석 알림음','bell','cigh-clean-sfx-input',setSfxEnabled],['comment','코멘트 팝업','HUD 코멘트를 ◆ 옆에 띄움','speech','cigh-clean-comment-popup-input',setCommentPopupEnabled],['mascot','마스코트','펫을 화면 위에 띄움','bunny','cigh-clean-mascot-input',setMascotEnabled]];
+  const home=document.createElement('div');home.className='cigh-rb-home';
+  home.innerHTML=`<div class="cigh-clean-sh cigh-rb-sh">빠른 설정<small>바로 적용</small></div>${quickDefs.map(([id,label,desc,icon])=>`<label class="cigh-rb-row">${rbSetIcon(icon)}<span class="cigh-rb-lbl">${esc(label)}<small>${esc(desc)}</small></span><span class="cigh-rb-tstate" data-rb-qstate="${id}"></span><input type="checkbox" class="cigh-rb-switch" role="switch" data-rb-quick="${id}" aria-label="${esc(label)}"></label>`).join('')}<div class="cigh-clean-sh cigh-rb-sh">펫</div><div class="cigh-rb-row col" data-rb-slot="name"><span class="cigh-rb-lbl">${rbSetIcon('bunny')}펫 이름</span></div><div class="cigh-clean-sh cigh-rb-sh">화면</div><div class="cigh-rb-row col" data-rb-slot="font"><span class="cigh-rb-lbl">${rbSetIcon('console')}UI 크기</span></div><div class="cigh-rb-row col" data-rb-slot="dock"><span class="cigh-rb-lbl">${rbSetIcon('diamond')}HUD 배치</span></div>`;
+  pages.home.prepend(home);
+  const nameInput=box.querySelector('#cigh-clean-pet-name-input');
+  if(nameInput)home.querySelector('[data-rb-slot="name"]').appendChild(nameInput);
+  if(fontSelect){const slot=home.querySelector('[data-rb-slot="font"]');const seg=fontSelect.nextElementSibling;slot.appendChild(fontSelect);if(seg?.classList.contains('cigh-rb-segments'))slot.appendChild(seg);}
+  if(picks)home.querySelector('[data-rb-slot="dock"]').appendChild(picks);else home.querySelector('[data-rb-slot="dock"]').remove();
+  if(sourceSections.ui)sourceSections.ui.hidden=true;
+  if(sourceSections.fx)sourceSections.fx.hidden=true;
+  function syncQuick(){
+    const getters={auto:isAutoAnalyzeEnabled,sfx:isSfxEnabled,comment:isCommentPopupEnabled,mascot:isMascotEnabled};
+    quickDefs.forEach(([id])=>{const on=!!getters[id]();home.querySelector(`[data-rb-quick="${id}"]`).checked=on;const st=home.querySelector(`[data-rb-qstate="${id}"]`);st.textContent=on?'ON':'OFF';st.classList.toggle('on',on);});
   }
   let updateQueued=false;
   function update(){
@@ -21010,16 +21072,16 @@ function openSettings(){
   }
   function refreshSettingsState(){
     const count=changed().length;
-    const pageTitle=pageDefs.find(x=>x[0]===pageId)?.[1]||'SETTINGS';
     const readOnlyPage=['cloud','usage','local'].includes(pageId);
-    footer.querySelector('[role="status"]').textContent=count?`● 변경 ${count}개`:pageId==='menu'?'SETTINGS':pageId==='local'?'로컬 데이터 · 선택 후 삭제':`${pageTitle} · 저장됨`;
+    footer.querySelector('[role="status"]').textContent=count?`● 변경 ${count}개`:pageId==='local'?'로컬 데이터 · 선택 후 삭제':`${pageTitles[pageId]||'SETTINGS'} · 저장됨`;
     save.disabled=!count;save.hidden=!count||readOnlyPage;
     footer.querySelector('[data-rb-revert]').hidden=!count||readOnlyPage;
     status.textContent=provider.value==='deepseek'?(hasDeepSeekKey()?'● DeepSeek 키 저장됨':'○ DeepSeek 키 필요'):provider.value==='firebase'?(hasFirebaseConfig()?'● Firebase Config 저장됨':'○ Firebase Config 필요'):(hasGeminiKey()?'● Gemini 키 저장됨':'○ Gemini 키 필요');
-    renderPresets();menuSummary();
+    renderPresets();syncQuick();
   }
   function navigate(id){
-    pageId=id;backRow.hidden=id==='menu';Object.values(pages).forEach(p=>p.hidden=p.dataset.rbPage!==id);menu.hidden=id!=='menu';body.scrollTop=0;
+    pageId=id;Object.values(pages).forEach(p=>p.hidden=p.dataset.rbPage!==id);body.scrollTop=0;
+    tabs.querySelectorAll('[data-rb-tab]').forEach(t=>{const on=t.dataset.rbTab===id;t.classList.toggle('on',on);t.setAttribute('aria-selected',String(on));t.tabIndex=on?0:-1;});
     update();
     if(id==='local')pages.local.rbRefresh?.();
     if(id==='usage')refreshUsageSettingsSection(box);
@@ -21032,17 +21094,23 @@ function openSettings(){
   }
   box.rbRequestClose=requestClose;box.rbCloseSaved=close;
   panel.appendChild(box);applyThemeMode();
-  // Bound once after all fields have been moved; page changes keep these references valid.
+  // Bound once after all fields have been moved; tab changes keep these references valid.
   bindSettingsPanel(box);
   box.addEventListener('input',event=>{if(!event.target.matches('[data-rb-quick]'))update();});box.addEventListener('change',update);
+  tabs.addEventListener('keydown',event=>{
+    if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+    const list=[...tabs.querySelectorAll('[data-rb-tab]')],i=list.indexOf(document.activeElement);if(i<0)return;
+    event.preventDefault();const next=event.key==='Home'?0:event.key==='End'?list.length-1:(i+(event.key==='ArrowRight'?1:-1)+list.length)%list.length;
+    navigate(list[next].dataset.rbTab);list[next].focus();
+  });
   box.addEventListener('click',event=>{
-    const nav=event.target.closest('[data-rb-nav]');if(nav){navigate(nav.dataset.rbNav);backButton?.focus();return;}
-    if(event.target.closest('[data-rb-back]')){navigate('menu');menu.querySelector('[data-rb-nav]')?.focus();return;}
+    const tab=event.target.closest('[data-rb-tab]');if(tab){if(tab.dataset.rbTab!==pageId)navigate(tab.dataset.rbTab);return;}
+    if(event.target.closest('[data-rb-close]')){requestClose();return;}
     if(event.target.closest('[data-rb-revert]')){
       draftFields().forEach(e=>{if(baseline.has(e.id)){if(e.type==='checkbox')e.checked=baseline.get(e.id);else e.value=baseline.get(e.id);}});
       provider.dispatchEvent(new Event('change',{bubbles:true}));model?.dispatchEvent(new Event('change',{bubbles:true}));
       // Rebuild model-dependent choices before restoring their draft baseline.
-      queueMicrotask(()=>{if(thinking&&baseline.has(thinking.id))thinking.value=baseline.get(thinking.id);thinking?.dispatchEvent(new Event('change',{bubbles:true}));dock?.dispatchEvent(new Event('change',{bubbles:true}));styleInput?.dispatchEvent(new Event('input',{bubbles:true}));box.querySelector('#cigh-clean-font-size-input')?.dispatchEvent(new Event('change',{bubbles:true}));update();});return;
+      queueMicrotask(()=>{if(thinking&&baseline.has(thinking.id))thinking.value=baseline.get(thinking.id);thinking?.dispatchEvent(new Event('change',{bubbles:true}));dock?.dispatchEvent(new Event('change',{bubbles:true}));styleInput?.dispatchEvent(new Event('input',{bubbles:true}));fontSelect?.dispatchEvent(new Event('change',{bubbles:true}));update();});return;
     }
     const action=event.target.closest('[data-action]')?.dataset.action;
     if(['clear','deepseek-clear','firebase-clear','style-reset'].includes(action)){
@@ -21052,12 +21120,12 @@ function openSettings(){
     }
     if(action)queueMicrotask(update);
   });
-  quickDefs.forEach(([id,label,inputId,setter])=>menu.querySelector(`[data-rb-quick="${id}"]`).addEventListener('change',event=>{
-    setter(event.target.checked);const field=box.querySelector('#'+inputId);field.checked=event.target.checked;baseline.set(inputId,field.checked);
+  quickDefs.forEach(([id,,,,inputId,setter])=>home.querySelector(`[data-rb-quick="${id}"]`).addEventListener('change',event=>{
+    setter(event.target.checked);const field=box.querySelector('#'+inputId);if(field){field.checked=event.target.checked;baseline.set(inputId,field.checked);}
     if(id==='mascot')syncMascotForRoute();update();
   }));
-  rbTrapFocus(box,()=>{if(document.getElementById('cigh-rb-confirm'))return;if(pageId==='menu')requestClose();else{navigate('menu');menu.querySelector('[data-rb-nav]')?.focus();}});
-  navigate('menu');menu.querySelector('[data-rb-nav]')?.focus();
+  rbTrapFocus(box,()=>{if(document.getElementById('cigh-rb-confirm'))return;requestClose();});
+  navigate('home');tabs.querySelector('[data-rb-tab="home"]')?.focus({preventScroll:true});
 }
 
 
