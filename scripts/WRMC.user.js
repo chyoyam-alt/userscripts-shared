@@ -15079,11 +15079,11 @@ function createWishUI(AD) {
   }
   // 외부 AI 복붙 모드: 기다리는 작업 줄(요청문 다시 복사·TXT·답 파일·취소·외부 AI 바로 열기)
   const manualJobPanel=()=>{
-    const j=V.ai.job,links=[['ChatGPT','https://chatgpt.com/'],['Gemini','https://gemini.google.com/app'],['Claude','https://claude.ai/new']].map(([n,u])=>'<a class="m3-btn quiet mini" href="'+u+'" target="_blank" rel="noopener noreferrer">'+n+'</a>').join('');
+    const j=V.ai.job;
     if(!j)return '<p class="m3-muted" data-key="manual-ai-home">외부 AI 복붙 모드 · [함께 정리]로 요청문 복사 → 외부 AI에 붙여 넣기 → 답 복사 → [답 붙여넣기]</p>';
     return '<section class="m3-panel m3-focus" data-key="manual-job"><b>기다리는 외부 AI 작업 · '+esc(j.lanes||'정리')+' · '+esc(j.at)+'</b><p class="m3-muted">작업 코드 '+esc(j.code)+' · 요청문 '+fmt(j.chars)+'자 · 외부 AI 답의 복사 버튼을 누른 뒤 [답 붙여넣기]를 눌러 주세요. 기다리는 동안 RP를 계속해도 됩니다.</p>'+
       (j.error?'<div class="m3-status m3-err" aria-live="polite">'+ic('alert')+'<span>답 적용 실패 · '+esc(j.error)+'</span></div>':'')+
-      '<div class="m3-actions m3-topgap">'+links+'</div><div class="m3-actions m3-topgap">'+btn('다시 복사','manualCopy',{cls:'mini',icon:'copy'})+btn('TXT','manualTxt',{cls:'mini',icon:'down'})+btn('답 파일','manualFile',{cls:'mini',icon:'up'})+(j.error?btn('오류 문구 복사','manualErrCopy',{cls:'mini',icon:'copy'}):'')+btn('취소','manualCancel',{cls:'quiet mini'})+'</div></section>';
+      '<div class="m3-actions m3-topgap">'+btn('다시 복사','manualCopy',{cls:'mini',icon:'copy'})+btn('TXT','manualTxt',{cls:'mini',icon:'down'})+btn('답 파일','manualFile',{cls:'mini',icon:'up'})+(j.error?btn('오류 문구 복사','manualErrCopy',{cls:'mini',icon:'copy'}):'')+btn('취소','manualCancel',{cls:'quiet mini'})+'</div></section>';
   };
   function vCheck(){const m=V.memory,c=V.cog,u=V.unified||{},I=V.inj;
  const tile=(kind,label,count,total,on,action)=>{const left=Math.max(0,total-count),done=Math.min(1,count/Math.max(1,total));return '<div class="m3-tile" data-key="home-'+kind+'">'+ring(done,COL[kind])+ '<div class="m3-txt"><div class="m3-k">'+label+'</div><div class="m3-v">'+((kind==='log'?m.running:u.running)?'정리 중':on?left+'<small>턴 뒤</small>':'일시정지')+'</div><div class="m3-ts">미처리 확정 '+count+'/'+total+'턴</div></div>'+(V.job?'':btn('지금 정리',action,{cls:'quiet mini',dis:!!V.ai.manual}))+'</div>';};
