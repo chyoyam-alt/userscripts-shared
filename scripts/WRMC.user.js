@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽 Wish RP Manager Core
 // @namespace    local.rp.context.manager
-// @version      1.3.39
+// @version      1.4.0
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @description  Crack RP용 컨텍스트 주입·인지·자동 장기기억·자료집·전체 재구축을 하나로 관리합니다.
@@ -32,7 +32,10 @@
   'use strict';
   // Core 1.0.0: private cloud sync and native summary engines removed; local backup/restore retained.
   // Koofr WebDAV backup/restore is optional and manual only (no timers, startup requests or shared server).
-  // Manual AI relay: provider '외부 AI 복붙' routes every AI request through a copy/paste sheet (no API key); automatic runs only notify.
+  // Core 1.4.0: external AI mode (provider '외부 AI 복붙', no API key): [함께 정리] copies a request and [답 붙여넣기] applies the answer.
+  // In that mode API-only buttons/options are disabled, and AI candidate selection, embeddings and state-delta requests are off; automatic runs only notify.
+  // Panel smoothness: identical redraws skip HTML parsing/diffing, off-screen cards skip layout/paint, and invisible infinite dot animations are removed.
+  // The in-chat 🔎 Wish 주입 button no longer stacks above Crack's chat input when scrolled under it.
   // 2.7.5: prepare only actual WebSocket sends/rerolls; leave composer keys and clicks untouched.
   // 2.7.4: isolate reviewable omissions, retain warning history, improve bounded retrieval.
   // 2.7.3: preserve blank preambles and distinguish cognition from Korean word endings.
@@ -47,7 +50,7 @@
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '1.3.39';
+  const SCRIPT_VERSION = '1.4.0';
   const EDITION = 'core';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const RUNTIME_ATTR = 'data-wish-rp-runtime';
@@ -441,7 +444,7 @@
     const style = document.createElement('style');
     style.id = 'wish-rp-message-injection-style';
     style.textContent = `
-      .wish-rp-message-injection-look{position:relative;z-index:2;flex:0 0 auto;width:auto;min-width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:0 6px;font:11px/1.3 system-ui;white-space:nowrap;border:0;border-radius:999px;background:transparent;color:inherit;box-shadow:none;cursor:pointer;opacity:.56;pointer-events:auto!important;transition:opacity .14s ease,transform .14s ease,background-color .14s ease}
+      .wish-rp-message-injection-look{flex:0 0 auto;width:auto;min-width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:0 6px;font:11px/1.3 system-ui;white-space:nowrap;border:0;border-radius:999px;background:transparent;color:inherit;box-shadow:none;cursor:pointer;opacity:.56;pointer-events:auto!important;transition:opacity .14s ease,transform .14s ease,background-color .14s ease}
       .wish-rp-message-injection-look svg{display:block;width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
       .wish-rp-message-injection-look:hover,.wish-rp-message-injection-look:focus-visible{opacity:1;background:rgba(127,127,127,.12);outline:none;transform:scale(1.06)}
       .wish-rp-message-injection-look:active{transform:scale(.92)}
@@ -3976,7 +3979,7 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
       guide+='\n[자료집 독립 처리 범위 — references에 우선 적용]\n자료집은 이미 별도 API로 일부 대화를 반영했다. memory.references의 생성·갱신 근거는 rp.references만 사용한다. rp.memory 또는 rp.shared의 나머지 과거 대화는 사건·현재상태 전용이다. rp.references가 비면 references.upsert=[]로 두고 기존 자료를 보존한다. 다른 작업 범위는 바꾸지 않는다.\n';
     }
 const deltaNotices=[];
-    let stateDelta=p.memory&&!options.rebuild&&WishEconomy.settings(room).delta;
+    let stateDelta=p.memory&&!options.rebuild&&WishEconomy.settings(room).delta&&!isManualAiProvider();
     if(stateDelta){
       // Remove snapshot-only output directions, retaining all semantic preservation rules.
       const drop=['2. 그 사건 판정과 동일한','6. events에 변화가 없어도','- state는 하위 작업 B의 적용 후 전체','- 유지·갱신은 기존 ref 그대로 sections','- 모든 기존 지속 상태가 실제로 끝난 경우 sections=[]','- sections는 증분 조각이 아니라','- 내용이 바뀌지 않은 기존 섹션은 가능한 한 기존 body','- 새 지속 상태도 없고 기존 상태도 없으면 sections=[]'];
@@ -9877,7 +9880,7 @@ function formatLocalRecordTime(value){
       await assertRoomRevision(room);working.entries=[...protectedEntries,...accepted];working.revision=Math.max(0,Number(working.revision||0))+1;working.updatedAt=nowIso();
       const automation={...structuredClone(initialAutomation),initialized:true,lastProcessedMessageId:source.cursorMessageId,lastRunAt:Date.now(),lastError:'',failureCount:0,paused:false,lastStatus:`자료집 자동 전환 · 새 ${added} · 교체 ${reused} · 제거 ${deleted} · 보호 ${protectedEntries.length}${source.includesLatest?' · 최신 턴 재확인 대기':''}`};
       await putLorePackAndRoomAtomic(working,freshFingerprint,room,automation,{activeLorePackRemoveIds:[...promotedPackIds],activeLorePackAddIds:[expectedPackId],expectedLibraryFingerprints:referencePackFingerprints,expectedRoomRevision,expectedRoomEpoch,dirtyReason:'진행형 자료 일반팩 전환'});
-      let semanticWarning='';if(room.loreConfig.semanticEnabled!==false&&String(loadAiSettings().apiKey||'').trim()){if(loreIndexingRunning){queueSemanticSearchRerun(room);semanticWarning='의미 검색 재준비를 예약했습니다.';}else try{await prepareSemanticSearchIndex(room);}catch(error){semanticWarning=String(error?.message||error);}}
+      let semanticWarning='';if(room.loreConfig.semanticEnabled!==false&&String(loadAiSettings().apiKey||'').trim()&&!isManualAiProvider()){if(loreIndexingRunning){queueSemanticSearchRerun(room);semanticWarning='의미 검색 재준비를 예약했습니다.';}else try{await prepareSemanticSearchIndex(room);}catch(error){semanticWarning=String(error?.message||error);}}
       const carrierWarning=await syncLoreMutation(room,'lore-pack-auto-promotion');
       if(!source.includesLatest&&source.cursorMessageId!==source.stableAnchorMessageId&&automation.enabled)scheduleAutomaticLoreMaintenance(room,'promotion-backlog',2500);
       return {mode:'promote',added,updated:reused,deleted,protected:protectedEntries.length,skippedProtected,deactivated:activePromoted.length,latestRecheck:source.includesLatest,semanticWarning,carrierWarning};
@@ -9937,7 +9940,7 @@ function formatLocalRecordTime(value){
       working.entries=[...protectedEntries,...accepted];working.revision=Math.max(0,Number(working.revision||0))+1;working.updatedAt=nowIso();
       const automation={...structuredClone(initialAutomation),initialized:true,lastProcessedMessageId:source.anchorMessageId,lastRunAt:Date.now(),lastError:'',failureCount:0,paused:false,lastStatus:`외부 전체 재구축 · 새 ${added} · 교체 ${reused} · 제거 ${deleted} · 보호 ${protectedEntries.length}`};
       await putLorePackAndRoomAtomic(working,freshFingerprint,room,automation,{expectedLibraryFingerprints:referencePackFingerprints,expectedRoomRevision,expectedRoomEpoch,dirtyReason:'진행형 자료 외부 재구축'});
-      let semanticWarning='';if(room.loreConfig.semanticEnabled!==false&&String(loadAiSettings().apiKey||'').trim()){
+      let semanticWarning='';if(room.loreConfig.semanticEnabled!==false&&String(loadAiSettings().apiKey||'').trim()&&!isManualAiProvider()){
         if(loreIndexingRunning){queueSemanticSearchRerun(room);semanticWarning='의미 검색 재준비를 예약했습니다.';}
         else try{await prepareSemanticSearchIndex(room);}catch(error){semanticWarning=String(error?.message||error);}
       }
@@ -10048,6 +10051,7 @@ function formatLocalRecordTime(value){
 
   async function geminiEmbedTexts(texts, room, taskType = 'RETRIEVAL_DOCUMENT', timeout = 120000) {
     const cfg = loadAiSettings();
+    if (isManualAiProvider(cfg)) throw new Error('외부 AI 복붙 모드에서는 에리 의미검색(임베딩)을 쓰지 않습니다.');
     if (!cfg.apiKey) throw new Error('의미 검색에는 AI 설정의 Gemini API Key가 필요합니다. DeepSeek/Firebase를 쓰는 경우에도 임베딩용 Key만 추가해 주세요.');
     const list = (texts || []).map(x => String(x || '').trim()).filter(Boolean);
     if (!list.length) return [];
@@ -10403,7 +10407,7 @@ function formatLocalRecordTime(value){
       // Only an over-budget inventory needs query vectors, lexical scores or AI ranks.
       vector=cachedSemanticQueryVector(room,query);
       candidates=gather(true);normalPlan=candidates.normalPlan;
-      if(allowAi&&allowSemanticNetwork&&hasOriginal&&!vector&&recallSelectionSettings(room).semantic&&buildInjectedMessage(original,buildContextBlockFromItems(normalPlan,room)).length>APP.carrierSafeChars){
+      if(allowAi&&allowSemanticNetwork&&hasOriginal&&!vector&&recallSelectionSettings(room).semantic&&!isManualAiProvider()&&buildInjectedMessage(original,buildContextBlockFromItems(normalPlan,room)).length>APP.carrierSafeChars){
         try{await semanticQueryVector(room,query);}catch(error){semanticError=String(error?.message||error);}
         assertCurrent();
         if(cachedSemanticQueryVector(room,query))return refreshHybridRecall(room,query,{allowAi,allowSemanticNetwork:false,carrierSource,onProgress});
@@ -14204,9 +14208,8 @@ html.rpcm-mobile-keyboard-open #wish-rp-root{top:var(--rpcm-vv-top,0px);bottom:a
 .m3-live{display:inline-flex;align-items:center;gap:5px;font-weight:500}
 .m3-live.on{color:var(--m3-ok)}.m3-live.busy{color:var(--m3-accent)}.m3-live.warn{color:var(--m3-warn)}
 .m3-live i{width:6px;height:6px;border-radius:50%;background:currentColor}
-.m3-live.on i{animation:m3-halo 2.8s ease-out infinite}
 .m3-live.busy i,.m3-live.warn i{animation:m3-blink 1s ease-in-out infinite}
-@keyframes m3-halo{0%{box-shadow:0 0 0 0 color-mix(in srgb,currentColor 50%,transparent)}70%,100%{box-shadow:0 0 0 6px transparent}}
+
 .m3-save{transition:color .3s}.m3-save.saving{color:var(--m3-warn)}
 .m3-headtools{display:flex;gap:2px}
 .m3-ico{position:relative;overflow:hidden;width:34px;height:34px;flex:none;border-radius:var(--m3-r-ctl);display:grid;place-items:center;color:var(--m3-muted);transition:background .18s,color .18s,transform .3s var(--m3-spring)}
@@ -14399,6 +14402,10 @@ html.rpcm-mobile-keyboard-open #wish-rp-root{top:var(--rpcm-vv-top,0px);bottom:a
 #wish-rp-root [data-key="home-head"]{column-gap:6px}
 #wish-rp-root [data-key="home-head"] .m3-home-verification{margin-left:0}
 #wish-rp-root [data-key="home-head"] .m3-auto-control{gap:8px;justify-content:flex-end;max-width:100%}
+#wish-rp-root .m3-toggle:has(>input:disabled){opacity:.5;cursor:not-allowed}
+#wish-rp-root .m3-toggle>input:disabled{cursor:not-allowed}
+#wish-rp-root select:disabled{opacity:.55;cursor:not-allowed}
+#wish-rp-root .m3-card{content-visibility:auto;contain-intrinsic-size:auto 71px}
 .m3-step{display:inline-flex;align-items:center;border:1px solid var(--m3-line);border-radius:var(--m3-r-ctl);overflow:hidden;background:var(--m3-card);flex:none}
 .m3-step button{width:28px;height:30px;color:var(--m3-muted);transition:background .18s,color .18s}
 .m3-step button:hover{background:var(--m3-accent-soft);color:var(--m3-accent)}
@@ -14456,7 +14463,7 @@ html.rpcm-mobile-keyboard-open #wish-rp-root{top:var(--rpcm-vv-top,0px);bottom:a
 .m3-inject:hover{transform:translateY(-1px);box-shadow:0 8px 18px -12px var(--m3-accent)}
 .m3-inject:active{transform:scale(.97)}
 .m3-inject .m3-dot{width:8px;height:8px;border-radius:50%;background:currentColor;opacity:.55}
-.m3-inject.on .m3-dot{opacity:1;animation:m3-halo 2.8s ease-out infinite}
+.m3-inject.on .m3-dot{opacity:1}
 .m3-bottomnav{display:none;flex:none;border-top:1px solid var(--m3-line2);padding:4px 4px calc(6px + env(safe-area-inset-bottom,0px));background:var(--m3-sheet)}
 .m3-bottomnav button{position:relative;flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:3px;padding:7px 0 4px;border-radius:var(--m3-r-ctl);color:var(--m3-muted);font-size:10px;font-weight:500;transition:color .22s;overflow:hidden}
 .m3-bottomnav button svg.ic{width:19px;height:19px;transition:transform .4s var(--m3-spring)}
@@ -14822,8 +14829,8 @@ pre.m3-block.tall{max-height:none;min-height:340px}
 }
 .m3-ui :is(.m3-toast,.m3-status) .ic-check>*{stroke-dasharray:21;animation:wfx-draw .55s .12s var(--m3-ease) backwards}
 .m3-ui :is(.m3-toast,.m3-status) .ic-alert>*{transform-origin:12px 4.2px;animation:wfx-nod .7s .1s var(--m3-ease)}
-.m3-ui :is(.m3-nav,.m3-bottomnav) button[aria-current=page] svg.ic>*{animation:wfx-pop .55s var(--m3-spring)}
-.m3-ui .m3-inject.on .m3-dot{animation:wfx-pop .45s var(--m3-spring),m3-halo 2.8s ease-out .45s infinite}
+.m3-ui :is(.m3-nav,.m3-bottomnav) button[aria-current=page] svg.ic>*{animation:wfx-pop .55s var(--m3-spring);transition:none}
+.m3-ui .m3-inject.on .m3-dot{animation:wfx-pop .45s var(--m3-spring)}
 .m3-ui .m3-btn svg.ic{transition:color .25s}
 .m3-ui .m3-btn:not(.m3-ai-call):not(:disabled):active{transform:scale(.97)!important}
 @media (hover:hover){.m3-ui .m3-btn:not(.primary):not(.danger):not(.m3-reset-action):hover svg.ic{color:var(--m3-accent)}}
@@ -14919,7 +14926,7 @@ function createWishUI(AD) {
   IC.play='<path d="m8 5 11 7-11 7Z"/>';
   const ic = (n, c = '') => `<svg class="ic ic-${n} ${c}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[n] || ''}</svg>`;
   const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  const fmt = n => Number(n || 0).toLocaleString('ko-KR');
+  const FMT_KO = new Intl.NumberFormat('ko-KR'), fmt = n => FMT_KO.format(Number(n || 0));
   let UID = 0; const uid = p => 'w' + p + (++UID);
 
   /* ───────── 2. 분류 색 · 라벨 (V.labels로 덮어쓸 수 있음) ───────── */
@@ -15093,7 +15100,7 @@ function createWishUI(AD) {
  (I.error?'<section class="m3-panel m3-alert" data-key="injection-error"><b>'+(I.authWaiting?'로그인 확인 대기':'주입 확인 필요')+'</b><p style="white-space:pre-wrap;overflow-wrap:anywhere">'+esc(I.error)+'</p>'+(I.lastCheckedAt?'<p class="m3-muted">마지막 서버 저장 확인 · '+esc(new Date(I.lastCheckedAt).toLocaleString('ko-KR'))+'</p>':'')+'<div class="m3-actions m3-topgap">'+btn('저장본으로 재검증','reverify',{cls:'mini',icon:'refresh',dis:!!V.job})+btn('주입 해제','release',{cls:'danger mini',icon:'close',dis:!!V.job})+btn('오류 상세','errorLogs',{cls:'mini',icon:'doc'})+'</div></section>':'')+
  '<div class="m3-tiles" data-key="home-tiles">'+tile('log','기억 통합',m.committed,m.target,m.enabled,'unifiedMemory')+tile('cog','인물 통합',u.observePending||0,c.every,c.auto,'cogRe')+'</div>'+
  '<p class="m3-muted" data-key="auto-pause-scope">자동 정리 시작·일시정지는 이 방의 기억·인물에 적용됩니다. 기억 주입은 주입 설정을 따릅니다.</p>'+
- (u.error?'<section class="m3-panel m3-alert" data-key="home-error"><b>작업 확인</b><p>'+esc(u.error)+'</p>'+(V.ai.manual?'<p class="m3-muted">외부 AI에 위 문구를 그대로 알려 고친 JSON을 받은 뒤, [다시 시도]를 눌러 새 창에 붙여 넣어 주세요.</p>':'')+btn('다시 시도','unifiedRetry',{cls:'mini'})+(/연결/.test(u.error)?btn('연결 설정','api',{cls:'quiet mini',icon:'key'}):'')+btn('오류 상세','errorLogs',{cls:'mini',icon:'doc'})+'</section>':'')+
+ (u.error?'<section class="m3-panel m3-alert" data-key="home-error"><b>작업 확인</b><p>'+esc(u.error)+'</p>'+(V.ai.manual?'<p class="m3-muted">외부 AI 복붙 모드에서는 [함께 정리]로 새 요청문을 받아 다시 진행해 주세요.</p>':'')+btn('다시 시도','unifiedRetry',{cls:'mini',dis:!!V.ai.manual})+(/연결/.test(u.error)?btn('연결 설정','api',{cls:'quiet mini',icon:'key'}):'')+btn('오류 상세','errorLogs',{cls:'mini',icon:'doc'})+'</section>':'')+
  (V.reviews.length?'<section class="m3-panel" data-key="home-reviews"><b>이전 검토 '+V.reviews.length+'건</b>'+V.reviews.map(reviewPanel).join('')+'</section>':'')+
  '<section class="m3-panel" data-key="home-injection"><div class="m3-row m3-sp"><b>'+(I.verified?'확인된 주입 항목':'주입 후보 · 확인 대기')+'</b><span class="m3-muted">'+fmt(I.total)+' / '+fmt(I.max)+'자</span></div>'+injRows()+'</section>';
 }
@@ -15249,7 +15256,7 @@ function mRelationships() {
       return card('lore-pack-'+p.id,esc(p.name),`${rows.length}개 · ${origin}${foreignOwned&&p.ownerLabel?' · '+esc(p.ownerLabel):''}`,controls+(foreignOwned?'<div class="m3-row m3-pack-actionbar">'+actions+'</div>':'')+body,'',(foreignOwned?kind('복사 필요','#8b93a9'):(!Lr.enabled?kind('자료집 꺼짐','#8b93a9'):'')+chip('주입','pack.active:'+p.id,p.active)),COL.lore);
     };
     return pageHead('자료집 '+help(guide)+'<span class="m3-lore-count">사용 자료 '+on+' / '+total+'개 · 팩 '+packs.length+'개</span>',(chip('주입','lore.enabled',Lr.enabled)))+
-      `<div class="m3-toolbar"><span class="m3-grow"></span><span class="m3-actions">${btn('새 팩','packNew',{cls:'mini',icon:'plus'})}${btn('텍스트 → 자료','loreConvert',{cls:'mini',icon:'spark',feat:'loreConvert'})}${btn('자료집 묶음 정리','loreApiBundle',{cls:'mini',icon:'refresh',dis:!!V.ai.manual})}</span></div>`+
+      `<div class="m3-toolbar"><span class="m3-grow"></span><span class="m3-actions">${btn('새 팩','packNew',{cls:'mini',icon:'plus'})}${btn('텍스트 → 자료','loreConvert',{cls:'mini',icon:'spark',feat:'loreConvert',dis:!!V.ai.manual})}${btn('자료집 묶음 정리','loreApiBundle',{cls:'mini',icon:'refresh',dis:!!V.ai.manual})}</span></div>`+
       [['이 방의 진행형 자료',packs.filter(p=>p.auto&&!p.copyOrigin&&(!p.ownerChatId||p.ownerCurrent))],['가져온·분리한 자료 묶음',packs.filter(p=>p.copyOrigin&&(!p.ownerChatId||p.ownerCurrent))],['직접 관리·공용 자료',packs.filter(p=>!p.auto&&!p.copyOrigin&&(!p.ownerChatId||p.ownerCurrent))],['다른 방 자료 · 복사 후 사용',packs.filter(p=>p.ownerChatId&&!p.ownerCurrent)]].filter(([,rows])=>rows.length).map(([title,rows])=>`<div class="m3-sechead"><b>${esc(title)}</b><small class="m3-muted">${rows.length}팩 · 펼치기와 사용 설정은 별개</small></div>`+rows.map(packCard).join('')).join('')+(!packs.length?empty('자료집 팩이 없습니다.'):'')+
       heldLore();
   }
@@ -15266,7 +15273,7 @@ function mRelationships() {
   }
   function vCog() {
     const c = V.cog, pick = c.facts.filter(f => f.included).length;
-    return `${pageHead('인물 '+help(helpSections([['인물·인지','누가 무엇을 알고 모르는지, 누구에게 숨기는지를 관리합니다. 인지 주입 버튼과 각 정보의 포함·제외 설정을 따릅니다.'],['호칭·말투','화자→상대별 현재 호칭과 말투를 관리합니다. 호칭·말투 주입을 켜면 매턴 포함하며 과거 호칭보다 현재값을 우선합니다.'],['인물 묶음 정리','팝업에서 전체 확정 대화를 읽고 구간 수를 선택합니다. 인물·인지·호칭·말투·관계·감정선·은폐만 내장 API로 정리하고 결과 확인 후 적용합니다.']])), `<span class="m3-actions">${btn('자동 정리 설정', 'nav', { arg: 'settings', cls: 'quiet mini', icon: 'set' })}${btn('모아보기','personDossier',{cls:'mini',icon:'search'})}${btn('관계도','relationMap',{cls:'mini',icon:'relation'})}${btn('인물 묶음 정리', 'cogRe', { cls: 'mini', icon: 'refresh' })}</span>`)}
+    return `${pageHead('인물 '+help(helpSections([['인물·인지','누가 무엇을 알고 모르는지, 누구에게 숨기는지를 관리합니다. 인지 주입 버튼과 각 정보의 포함·제외 설정을 따릅니다.'],['호칭·말투','화자→상대별 현재 호칭과 말투를 관리합니다. 호칭·말투 주입을 켜면 매턴 포함하며 과거 호칭보다 현재값을 우선합니다.'],['인물 묶음 정리','팝업에서 전체 확정 대화를 읽고 구간 수를 선택합니다. 인물·인지·호칭·말투·관계·감정선·은폐만 내장 API로 정리하고 결과 확인 후 적용합니다.']])), `<span class="m3-actions">${btn('자동 정리 설정', 'nav', { arg: 'settings', cls: 'quiet mini', icon: 'set' })}${btn('모아보기','personDossier',{cls:'mini',icon:'search'})}${btn('관계도','relationMap',{cls:'mini',icon:'relation'})}${btn('인물 묶음 정리', 'cogRe', { cls: 'mini', icon: 'refresh', dis: !!V.ai.manual })}</span>`)}
     ${tabs([['people', '인물·인지'], ['speech', '호칭·말투'], ['relationships','관계·감정선'], ['review', `검토 ${V.reviews.length}`]], S.cog, 'cogSub')}
     <div class="m3-sub" data-key="cog-${S.cog}">${S.cog === 'relationships' ? mRelationships() : S.cog === 'speech' ? mSpeech() : S.cog === 'review' ? `<div class="m3-sechead"><span class="m3-muted">자동 정리가 보류한 후보와 이전 버전 후보입니다. 반영하거나 제외해 주세요</span>${V.reviews.length ? btn('모두 제외', 'rvClear', { cls: 'quiet mini' }) : ''}</div>${heldCReviews()}` :
       `<div class="m3-sechead"><b>인물 ${c.actors.length}</b><span class="m3-actions">${btn('인물 추가', 'acNew', { cls: 'mini', icon: 'plus' })}${chip('주입','cogInclude',V.pol.cog!=='off')}</span></div>
@@ -15376,7 +15383,7 @@ vExternalRebuild(run||ExternalBundles.busy())+
 
   /* ───────── 12. 화면: 설정 ───────── */
   function savedTag(group){const x=WUIAutoSave.status(group);return x.phase==='saved'?'<span class="wp-saved" data-key="saved-'+group+'">'+ic('check')+'저장됨</span>':x.phase==='error'?'<span class="m3-actions"><span class="wp-save-error" title="'+esc(x.error)+'">저장 안 됨</span>'+btn('재시도','autosaveRetry',{arg:group,cls:'mini'})+'</span>':'<span class="wp-idle" data-key="saved-'+group+'">'+(x.phase==='saving'||x.phase==='pending'?'저장 중…':'바꾸면 바로 저장')+'</span>';}
-  function vSettings(){const u=V.unified||{},q=V.recall||{};
+  function vSettings(){const u=V.unified||{},q=V.recall||{},apiOnly=h=>V.ai.manual?h.replace('<input ','<input disabled '):h,manualOff='외부 AI 복붙 모드에서는 쓰지 않음 · API 연결로 돌아가면 저장된 설정대로 적용';
     const mode=q.semantic?(q.selector?'both':'semantic'):(q.selector?'priority':'local');
     const autoHelp=helpSections([['모든 방 공통',('바꾸는 즉시 ')+'기억·인물 묶음의 켜짐과 주기가 기존 방과 새 방에 함께 적용됩니다. 인물 주기는 최소 2턴이며 기억 주기는 항상 두 배입니다. 기본값은 인물 5턴·기억 10턴입니다. 확인 화면의 일시정지·시작, 정리한 위치와 기억 내용은 방마다 유지합니다.'],['턴 계산','1턴은 USER 메시지와 AI 답변 한 쌍입니다. 리롤은 같은 턴이며 최신 1턴은 다음 답변 뒤 확정됩니다.'],['함께 처리','두 묶음의 주기가 겹치면 같은 AI 요청으로 처리합니다. 주입 후보 선별은 별도로 설정합니다.']]);
     const recallHelp=helpSections([['기본 회수','최근 날짜와 키워드·에리 의미검색으로 찾은 관련 날짜/자료만 먼저 고릅니다. 전체 저장 기억은 삭제되지 않습니다.'],['보조 AI 재검토','AI 선별이 중간에 실패하면 이미 받은 앞부분 점수로 상위 후보의 순서만 조정합니다. 예산 경계가 그 구간 안에 있을 때만 결과가 달라지며, 항상 더 낫다고 보장하지 않습니다. 비용은 줄지 않습니다. 후보가 40,000자를 넘으면 USER 전송 직전에 AI 선별을 최대 60초 기다립니다.'],['보호할 기억','현재상태·인지·호칭·켜진 캐릭터/OOC·고정 자료를 보호하고 일반 사건·자료는 카드 단위로 고릅니다.'],['안전선','40,000자 안전선과 서버 500 시 36,000자 1회 축소 규칙은 그대로 유지합니다.']]);
@@ -15384,8 +15391,8 @@ vExternalRebuild(run||ExternalBundles.busy())+
     return pageHead('설정')+
       `<section class="m3-panel" data-key="ai-settings"><div class="m3-panel-head"><b class="m3-title-help">보조 AI 연결 ${help('기억·인물 정리, 날짜로그, 선택된 주입 후보 재검토에 같은 연결을 사용합니다. 에리 임베딩 의미검색은 Gemini API Key가 준비된 경우 사용합니다.')}</b>${btn('연결 · 모델','api',{cls:'mini'})}</div><p class="m3-muted">${esc([V.ai.providerLabel,V.ai.model].filter(Boolean).join(' · '))}</p></section>`+
       `<section class="m3-panel" data-key="automation-settings"><div class="m3-panel-head"><b class="m3-title-help">자동 정리 ${help(autoHelp)}</b>${savedTag('unified')}</div><p class="m3-muted m3-scope-hint">${'모든 방 공통 · 바꾸면 바로 적용 · 일시정지는 방별'}</p>${tog('기억 묶음','unified.memoryEnabled',u.memoryEnabled,'현재상태 · 날짜별 사건 · 자료')}${step('기억 정리 주기','unified.memoryEvery',u.memoryEvery,{readOnly:true,unit:'턴마다 · 인물 ×2'})}${tog('인물 묶음','unified.observeEnabled',u.observeEnabled,'인지 · 호칭 · 말투 · 은폐')}${step('인물 정리 주기','unified.observeEvery',u.observeEvery,{min:2,max:100,unit:'턴마다'})}</section>`+
-      `<section class="m3-panel" data-key="economy-settings"><div class="m3-panel-head"><b class="m3-title-help">API 사용량 절약 ${help('실험 기능 · 저장하면 모든 방에 공통 적용합니다. 둘 다 OFF이면 2.5.8 방식입니다. OFF는 이미 갱신된 기억을 되돌리지는 않습니다. 처음 켜기 전 기억·인지·자료 백업을 보관하며, 복원용 파일은 기존 백업/복원 화면에서 가져올 수 있습니다. RP 원문은 이 백업으로 되돌리지 않습니다.')}</b>${savedTag('apiEconomy')}</div><div class="m3-economy-scope m3-scope-hint"><span class="m3-muted">모든 방 공통 · 확장 프로그램에 저장</span>${btn('절약 적용 전 백업 받기','economyBackup',{cls:'mini'})}</div>${helpToggle('현재상태 변경분 갱신','apiEconomy.delta',V.apiEconomy?.delta,'변경된 원문 구간만 수정하고 나머지 문구는 보존합니다. 수정·추가·종료에 신규 RP 근거와 요청 토큰을 검증합니다. 애매한 편집은 원본을 유지하고 오류를 표시합니다. 날짜별 사건·자료·인지는 기존 증분 방식을 유지합니다.')}${helpToggle('색인으로 후보 선별','apiEconomy.index',V.apiEconomy?.index,'전체 후보가 40,000자를 초과할 때만 기존 선별 설정에 따라 사용합니다. 첫 선별에서 원문과 점수를 읽고 짧은 발췌 색인을 함께 준비하므로 첫 호출은 더 커질 수 있습니다. 다음 호출부터 같은 원문의 색인을 사용하며 실제 주입은 원문입니다. 자료 변경·색인 부적합·캐시 소실 때는 원문으로 돌아갑니다. 핵심 단서 누락 가능성은 실전 비교가 필요합니다.')}<p class="m3-muted">${esc(V.apiEconomy?.status||'')}</p></section>`+
-      `<section class="m3-panel" data-key="recall-settings"><div class="m3-panel-head"><b class="m3-title-help">선택된 기억 AI 재검토 ${help(recallHelp)}</b>${savedTag('recall')}</div><p class="m3-muted m3-scope-hint">모든 방 공통 · 확장 프로그램에 저장</p><div class="m3-setting-row m3-recall-mode"><label for="wish-recall-mode">재검토 방식</label>${selc('recall.mode',mode,[['local','에리·키워드 결과만 사용'],['priority','AI로 후보 순서 재검토'],['both','AI로 관련성·순서 재검토'],['semantic','AI로 관련성만 재검토']],'m3-select',' id="wish-recall-mode" aria-label="선택된 기억 AI 재검토"')}</div><p class="m3-muted">최근·관련 기억 검색은 유지 · 원문·서식 포함 전체 후보가 40,000자를 초과할 때만 AI 선별 · 관련 후보를 40,000자 안전선까지 포함 · 전송 시 40,000자 초과 후보만 AI 선별 · 임베딩·자동 정리는 별도</p>${helpToggle('AI로 관련성 재확인','recall.semantic',q.semantic,'사용하도록 설정한 전체 후보가 원문·서식 포함 40,000자를 초과하면 보조 AI가 문맥 관련성을 확인합니다. 제외 항목은 유지하며, 키워드가 일치하지 않는 후보도 평가합니다. 기존 검색 벡터는 재사용하고 전송 직전 새 임베딩 요청은 하지 않습니다.')}${helpToggle('AI로 우선순위 정하기','recall.selector',q.selector,'현재 질문·미해결 약속·위험과 직접 연결된 후보부터 40,000자 안전선 안에 배치합니다. 실패하면 에리·키워드 순위를 그대로 사용합니다.')}</section>`+
+      `<section class="m3-panel" data-key="economy-settings"><div class="m3-panel-head"><b class="m3-title-help">API 사용량 절약 ${help('실험 기능 · 저장하면 모든 방에 공통 적용합니다. 둘 다 OFF이면 2.5.8 방식입니다. OFF는 이미 갱신된 기억을 되돌리지는 않습니다. 처음 켜기 전 기억·인지·자료 백업을 보관하며, 복원용 파일은 기존 백업/복원 화면에서 가져올 수 있습니다. RP 원문은 이 백업으로 되돌리지 않습니다.')}</b>${savedTag('apiEconomy')}</div><div class="m3-economy-scope m3-scope-hint"><span class="m3-muted">${V.ai.manual?manualOff:'모든 방 공통 · 확장 프로그램에 저장'}</span>${btn('절약 적용 전 백업 받기','economyBackup',{cls:'mini',dis:!!V.ai.manual})}</div>${apiOnly(helpToggle('현재상태 변경분 갱신','apiEconomy.delta',!V.ai.manual&&V.apiEconomy?.delta,'변경된 원문 구간만 수정하고 나머지 문구는 보존합니다. 수정·추가·종료에 신규 RP 근거와 요청 토큰을 검증합니다. 애매한 편집은 원본을 유지하고 오류를 표시합니다. 날짜별 사건·자료·인지는 기존 증분 방식을 유지합니다.'))}${apiOnly(helpToggle('색인으로 후보 선별','apiEconomy.index',!V.ai.manual&&V.apiEconomy?.index,'전체 후보가 40,000자를 초과할 때만 기존 선별 설정에 따라 사용합니다. 첫 선별에서 원문과 점수를 읽고 짧은 발췌 색인을 함께 준비하므로 첫 호출은 더 커질 수 있습니다. 다음 호출부터 같은 원문의 색인을 사용하며 실제 주입은 원문입니다. 자료 변경·색인 부적합·캐시 소실 때는 원문으로 돌아갑니다. 핵심 단서 누락 가능성은 실전 비교가 필요합니다.'))}<p class="m3-muted">${esc(V.apiEconomy?.status||'')}</p></section>`+
+      `<section class="m3-panel" data-key="recall-settings"><div class="m3-panel-head"><b class="m3-title-help">선택된 기억 AI 재검토 ${help(recallHelp)}</b>${savedTag('recall')}</div><p class="m3-muted m3-scope-hint">${V.ai.manual?manualOff+' · 최근·키워드 검색만 사용':'모든 방 공통 · 확장 프로그램에 저장'}</p><div class="m3-setting-row m3-recall-mode"><label for="wish-recall-mode">재검토 방식</label>${selc('recall.mode',V.ai.manual?'local':mode,[['local','에리·키워드 결과만 사용'],['priority','AI로 후보 순서 재검토'],['both','AI로 관련성·순서 재검토'],['semantic','AI로 관련성만 재검토']],'m3-select',' id="wish-recall-mode" aria-label="선택된 기억 AI 재검토"'+(V.ai.manual?' disabled':''))}</div><p class="m3-muted">최근·관련 기억 검색은 유지 · 원문·서식 포함 전체 후보가 40,000자를 초과할 때만 AI 선별 · 관련 후보를 40,000자 안전선까지 포함 · 전송 시 40,000자 초과 후보만 AI 선별 · 임베딩·자동 정리는 별도</p>${apiOnly(helpToggle('AI로 관련성 재확인','recall.semantic',!V.ai.manual&&q.semantic,'사용하도록 설정한 전체 후보가 원문·서식 포함 40,000자를 초과하면 보조 AI가 문맥 관련성을 확인합니다. 제외 항목은 유지하며, 키워드가 일치하지 않는 후보도 평가합니다. 기존 검색 벡터는 재사용하고 전송 직전 새 임베딩 요청은 하지 않습니다.'))}${apiOnly(helpToggle('AI로 우선순위 정하기','recall.selector',!V.ai.manual&&q.selector,'현재 질문·미해결 약속·위험과 직접 연결된 후보부터 40,000자 안전선 안에 배치합니다. 실패하면 에리·키워드 순위를 그대로 사용합니다.'))}</section>`+
       `<section class="m3-panel" data-key="api-guides"><div class="m3-panel-head"><b>API 추출 지침</b>${btn('지침','promptGuides',{arg:'apiCommon',cls:'mini',icon:'doc'})}</div><p class="m3-muted">기억·인물·후보 선별 등 지침을 선택해 편집합니다. 모든 방 공통 · 기본값 복원 가능</p></section>`+
       `<section class="m3-panel" data-key="usage-settings"><div class="m3-panel-head"><b>AI 사용량 가계부</b>${btn('가계부','usageLedger',{cls:'mini',icon:'wallet'})}</div><p class="m3-muted">날짜별 호출 횟수와 예상 비용(USD) · 추가 API 호출 없음</p></section>`+advanced;
   }
@@ -16260,7 +16267,7 @@ diff:`<div class="m3-shell">
     ai(d) {
       const a = d.draft, ds = a.provider === 'deepseek', models = [...((d.models || {})[a.provider] || [])];
       const manual = a.provider === 'manual';
-      const manualPanel = manual ? `<div class="m3-panel" data-key="manual-ai-intro"><b>API 키 없이 외부 AI로 진행합니다</b><p class="m3-muted">확인 탭의 [함께 정리]를 누르면 요청문이 복사됩니다. ChatGPT·Gemini·Claude 같은 외부 AI에 붙여 넣고, 답을 복사한 뒤 [답 붙여넣기]를 누르면 API로 받을 때와 같은 검사를 거쳐 기존 기억에 합칩니다. 마지막 정리 이후의 새 대화만 보냅니다.</p><ul class="m3-muted"><li>답을 기다리는 동안 패널을 닫거나 새로고침하고, RP를 계속 진행해도 됩니다.</li><li>자동 정리는 차례가 되면 알림만 드립니다.</li><li>보내기 직전 AI 후보 선별은 쓰지 않고, API 묶음 정리·API 전체 재구축 버튼은 잠깁니다. 전체 재구축은 자료 관리의 [외부 AI로 재구축]을 쓰세요.</li><li>에리 의미검색(임베딩)은 저장된 Gemini API Key가 있을 때만 동작합니다.</li><li>저장된 API 키는 그대로 두므로 언제든 API 방식으로 돌아갈 수 있습니다.</li></ul><div class="m3-actions">${btn('복붙 안내 지침 편집', 'promptGuides', { arg: 'manualRelay', cls: 'mini', icon: 'doc' })}</div></div>` : '';
+      const manualPanel = manual ? `<div class="m3-panel" data-key="manual-ai-intro"><b>API 키 없이 외부 AI로 진행합니다</b><p class="m3-muted">확인 탭의 [함께 정리]를 누르면 요청문이 복사됩니다. ChatGPT·Gemini·Claude 같은 외부 AI에 붙여 넣고, 답을 복사한 뒤 [답 붙여넣기]를 누르면 API로 받을 때와 같은 검사를 거쳐 기존 기억에 합칩니다. 마지막 정리 이후의 새 대화만 보냅니다.</p><ul class="m3-muted"><li>답을 기다리는 동안 패널을 닫거나 새로고침하고, RP를 계속 진행해도 됩니다.</li><li>자동 정리는 차례가 되면 알림만 드립니다.</li><li>API를 쓰는 버튼·옵션(묶음 정리·다시 시도·텍스트 → 자료·API 전체 재구축·AI 재검토·API 사용량 절약·연결 테스트)은 회색으로 잠기고 [함께 정리]만 씁니다. 전체 재구축은 자료 관리의 [외부 AI로 재구축]을 쓰세요.</li><li>주입 후보는 최근·키워드 검색으로 고르며 에리 의미검색(임베딩)도 쓰지 않습니다.</li><li>저장된 API 키는 그대로 두므로 언제든 API 방식으로 돌아갈 수 있습니다.</li></ul><div class="m3-actions">${btn('복붙 안내 지침 편집', 'promptGuides', { arg: 'manualRelay', cls: 'mini', icon: 'doc' })}</div></div>` : '';
       if(!ds&&a.model&&!models.some(([id])=>id===a.model))models.unshift([a.model,a.model+' · 기존 설정']);
       return sheet(d, { title: '보조 AI 연결', desc: '인지 · 기억 갱신 · 날짜로그 정리 · 자료집 · 전체 재구축이 같은 연결을 씁니다', body: `
       <section class="m3-grp"><div class="m3-gt">${ic('key')}연결</div>${field('AI 서비스', selc(D(d, 'provider'), a.provider, d.providers || [['ai-studio', 'Google AI Studio'], ['firebase', 'Firebase AI Logic'], ['deepseek', 'DeepSeek API'], ['manual', '외부 AI 복붙 (API 없이)']]))}
@@ -16270,7 +16277,7 @@ diff:`<div class="m3-shell">
       </section>
       <p class="m3-muted">추출·재구축·자료 변환은 선택한 설정을 사용합니다. 후보 선별·색인·연결 테스트는 낮음으로 실행합니다. DeepSeek 추론 OFF는 유지하며, 사용자 지정 서버에서는 해당 보조 작업의 추론을 끕니다. 임베딩 의미검색은 별도입니다.</p>${manual ? '</div>' : ''}
       <div class="m3-status ${a.test === 'ok' ? 'm3-ok' : a.test === 'busy' ? 'm3-busy' : a.test === 'err' ? 'm3-err' : ''}" aria-live="polite">${ic(manual || a.test === 'ok' ? 'check' : 'alert')}<span>${manual ? '외부 AI 복붙은 연결 테스트가 없습니다 · 저장하면 바로 사용합니다.' : a.test === 'busy' ? `연결 테스트 중${dots}` : a.test === 'ok' ? '연결 성공 · 저장을 눌러야 유지됩니다' : a.test === 'err' ? esc(a.testMsg || '연결 실패') : '연결 테스트는 소량의 API를 사용합니다.'}</span></div>`,
-        foot: `${manual ? '' : btn('인증 삭제', 'aiClear', { arg: d.id, cls: 'danger mini' })}${SP}${manual ? '' : btn('연결 테스트', 'aiTest', { arg: d.id, dis: a.test === 'busy' })}${saveBtn(d, '저장', 'aiSave')}` });
+        foot: `${btn('인증 삭제', 'aiClear', { arg: d.id, cls: 'danger mini', dis: manual })}${SP}${btn('연결 테스트', 'aiTest', { arg: d.id, dis: manual || a.test === 'busy' })}${saveBtn(d, '저장', 'aiSave')}` });
     },
     manualAi(d) {
       const a = d.draft, chars = String(d.request || '').length, ready = !!String(a.answer || '').trim();
@@ -16360,7 +16367,7 @@ nativeBundle(d) {
       const status=x.notice||(!error&&x.busy?j?.message:'')||(applied?'정리한 결과가 저장되었습니다.':'');
       const messages=(legacy?'<div class="m3-native-alert">이전 버전의 새 대화 작업이 남아 있습니다. 대화 읽기를 누르면 전체 정리로 새로 준비할 수 있습니다.</div>':'')+(error?'<div class="m3-native-alert" role="alert">'+esc(error)+'</div>':'')+(status?'<div class="m3-native-message" role="status">'+esc(status)+'</div>':'');
       const reread=j?'<div class="m3-native-reread">'+btn('대화 다시 읽기','nativeBundleRead',{arg:d.id,cls:'quiet',icon:'refresh',dis:x.busy})+'</div>':'';
-      const primary=x.busy?btn('현재 요청 뒤 중단','nativeBundleStop',{}):!j?btn('대화 읽기','nativeBundleRead',{arg:d.id,cls:'primary',icon:'book'}):ready?btn(remaining?(done?'이어서 AI 정리':'AI 정리 시작'):'결과 확인','nativeBundleRun',{arg:d.id,icon:'spark'}):complete?btn('결과 적용','nativeBundleApply',{arg:d.id,cls:'primary',icon:'check'}):'';
+      const primary=x.busy?btn('현재 요청 뒤 중단','nativeBundleStop',{}):!j?btn('대화 읽기','nativeBundleRead',{arg:d.id,cls:'primary',icon:'book'}):ready?btn(remaining?(done?'이어서 AI 정리':'AI 정리 시작'):'결과 확인','nativeBundleRun',{arg:d.id,icon:'spark',dis:!!V.ai.manual&&!!remaining}):complete?btn('결과 적용','nativeBundleApply',{arg:d.id,cls:'primary',icon:'check'}):'';
       let html=sheet(d,{title:NativeBundles.labels[d.bundle],desc:'전체 대화를 읽고, 이 묶음만 새롭게 정리해요.',body:'<div class="m3-native"><div class="m3-native-steps">'+steps+'</div>'+scope+metrics+emptyState+partition+list+result+messages+note+reread+'</div>',foot:'<div class="m3-native-footer"><span>'+(x.busy?'완료 구간은 자동 저장됩니다.':complete?'확인한 결과를 적용하세요.':applied?'저장 완료':'결과 확인 후 최종 적용')+'</span>'+btn('닫기','closeDlg',{arg:d.id,dis:x.busy})+primary+'</div>'});
       html=html.replace('class="m3-sheet ', 'class="m3-sheet m3-native-sheet ');
       if(x.busy)html=html.replace('aria-label="닫기"','aria-label="닫기" disabled');
@@ -16374,11 +16381,11 @@ nativeBundle(d) {
         '<p class="m3-muted">원문 인용 일치 검사는 하지 않습니다. 실패·중단 후 같은 페이지에서 다시 실행하면 입력과 설정이 같을 때 완료 구간부터 이어집니다.</p>'+
         (x.progress?'<div class="m3-status">'+esc(x.progress)+'</div>':'')+
         (x.error?'<div class="m3-status m3-warning">'+esc(x.error)+'</div>':''),
-        foot:`${btn('전용 지침','promptGuides',{arg:'apiLoreBundle',cls:'quiet mini',dis:x.busy})}${SP}${x.busy?btn('현재 요청 뒤 중단','loreApiStop',{arg:d.id,cls:'quiet'}):closeBtn(d,'닫기')}${btn('AI로 자료집 정리','loreApiRun',{arg:d.id,cls:'primary',icon:'spark',dis:x.busy})}`});
+        foot:`${btn('전용 지침','promptGuides',{arg:'apiLoreBundle',cls:'quiet mini',dis:x.busy})}${SP}${x.busy?btn('현재 요청 뒤 중단','loreApiStop',{arg:d.id,cls:'quiet'}):closeBtn(d,'닫기')}${btn('AI로 자료집 정리','loreApiRun',{arg:d.id,cls:'primary',icon:'spark',dis:x.busy||!!V.ai.manual})}`});
     },
     loreConvert(d) {
       const x = d.draft;
-      return sheet(d, { title: '텍스트 → 자료집 변환', desc: '설정 문서·위키 글을 붙여 넣으면 AI가 자료 카드로 나눕니다', body: `${field('넣을 곳', selc(D(d, 'target'), x.target, [['new', '새 팩 만들기'], ...V.lore.packs.filter(p=>!p.ownerChatId||p.ownerCurrent).map(p => [p.id, p.name])]))}${x.target === 'new' ? field('새 팩 이름', inp(D(d, 'name'), x.name || '', '예: 세력도')) : ''}${field('원문', ta(D(d, 'src'), x.src || '', '여기에 붙여 넣기', '200'), '한 번에 120,000자까지 · 초과하면 나눠서 변환하세요.')}${x.busy ? `<div class="m3-status m3-busy">${ic('spark')}<span>변환 중${dots}</span></div>` : ''}`, foot: `${SP}${closeBtn(d, '취소')}${btn('AI로 변환', 'lcRun', { arg: d.id, cls: 'primary', icon: 'spark', dis: x.busy || !String(x.src || '').trim() })}` });
+      return sheet(d, { title: '텍스트 → 자료집 변환', desc: '설정 문서·위키 글을 붙여 넣으면 AI가 자료 카드로 나눕니다', body: `${field('넣을 곳', selc(D(d, 'target'), x.target, [['new', '새 팩 만들기'], ...V.lore.packs.filter(p=>!p.ownerChatId||p.ownerCurrent).map(p => [p.id, p.name])]))}${x.target === 'new' ? field('새 팩 이름', inp(D(d, 'name'), x.name || '', '예: 세력도')) : ''}${field('원문', ta(D(d, 'src'), x.src || '', '여기에 붙여 넣기', '200'), '한 번에 120,000자까지 · 초과하면 나눠서 변환하세요.')}${x.busy ? `<div class="m3-status m3-busy">${ic('spark')}<span>변환 중${dots}</span></div>` : ''}`, foot: `${SP}${closeBtn(d, '취소')}${btn('AI로 변환', 'lcRun', { arg: d.id, cls: 'primary', icon: 'spark', dis: x.busy || !!V.ai.manual || !String(x.src || '').trim() })}` });
     },
     /* props: { draft:{ server,key,device,auto,min,enc,pass,test } } → act csTest / csSave(dlgId) */
 
@@ -16525,7 +16532,7 @@ nativeBundle(d) {
   }
   function tween(el, from, to) { if (REDUCED || !Number.isFinite(to) || !Number.isFinite(from)) return; const t0 = performance.now(), dur = 800; const f = now => { const k = Math.min(1, (now - t0) / dur); if (el.firstChild) el.firstChild.nodeValue = fmt(Math.round(from + (to - from) * (1 - (1 - k) ** 3))); if (k < 1 && el.isConnected) requestAnimationFrame(f); }; requestAnimationFrame(f); }
   function fxInit(r) { r.querySelectorAll('[data-count]:not([data-fx-c])').forEach(el => { el.setAttribute('data-fx-c', ''); tween(el, 0, Number(el.getAttribute('data-count'))); }); }
-  let root = null, raf = 0, modelDirty = true;
+  let root = null, raf = 0, modelDirty = true, rootHtml = '', rootPatched = null, rootTouched = true;
   function ensureRoot() {
     if (root && root.isConnected) return;
     root = document.getElementById('wish-rp-root');
@@ -16534,7 +16541,10 @@ nativeBundle(d) {
   }
   function render() {
     raf = 0; if(needsFullView()){if(modelDirty||!vmAt)readVM();}else readMonitorVM(); modelDirty=false; ensureRoot();
-    const tpl = document.createElement('template'); tpl.innerHTML = vRoot(); patchKids(root, tpl.content); mountApprovedViews(); fxInit(root); positionExternalMenu(); positionPackMenus();
+    // 사용자 입력 없이 같은 화면을 다시 그릴 때는 파싱·비교를 건너뜁니다(탭 전환 직후 반복 갱신이 애니메이션을 끊지 않게).
+    const html = vRoot();
+    if (rootTouched || rootPatched !== root || html !== rootHtml) { const tpl = document.createElement('template'); tpl.innerHTML = html; patchKids(root, tpl.content); rootHtml = html; rootPatched = root; rootTouched = false; }
+    mountApprovedViews(); fxInit(root); positionExternalMenu(); positionPackMenus();
     renderQuick(); updateMonitor();
     if (S.scrollTop) { S.scrollTop = false; const m = root.querySelector('.m3-main'); if (m) m.scrollTop = 0; }
     if (S.wantFocus) { S.wantFocus = false; const el = root.querySelector('.wish-dlg-layer>.m3-dialog:last-child [data-autofocus]'); if (el) el.focus({ preventScroll: true }); }
@@ -16692,6 +16702,7 @@ nativeBundle(d) {
   const wired = new WeakSet();
   function wire(host) {
     if (wired.has(host)) return; wired.add(host);
+    for (const type of ['input','change','click','keydown','pointerdown','paste','drop','focusout','compositionend']) host.addEventListener(type, () => { rootTouched = true; }, true);
     host.addEventListener('scroll',positionExternalMenu,true);
     host.addEventListener('scroll',positionPackMenus,true);
     window.addEventListener('resize',positionPackMenus);
