@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽 Wish RP Manager Core
 // @namespace    local.rp.context.manager
-// @version      1.5.1
+// @version      1.5.2
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @description  Crack RP용 컨텍스트 주입·인지·자동 장기기억·자료집·전체 재구축을 하나로 관리합니다.
@@ -36,6 +36,7 @@
   // Koofr WebDAV backup/restore is optional and manual only (no timers, startup requests or shared server).
   // Core 1.5.0: Firebase gets an optional App Check debug token (required by Firebase AI Logic from 2026-11-02), exchanged on demand without background timers.
   // New provider 'vertex': a Vertex AI service account JSON is signed in-browser (RS256) into a 1-hour access token kept in memory only and renewed 5 minutes early.
+  // Core 1.5.2: the memory before/after view groups rewritten phrases instead of striking word by word.
   // Core 1.5.1 UI polish: quiet buttons share the normal button look, delete-type buttons are red-tinted, several dialogs are tidied,
   // and folds that remember being open build their contents only while open (no new timers or continuous animations).
   // Core 1.4.0: external AI mode (provider '외부 AI 복붙', no API key): [함께 정리] copies a request and [답 붙여넣기] applies the answer.
@@ -56,7 +57,7 @@
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '1.5.1';
+  const SCRIPT_VERSION = '1.5.2';
   const EDITION = 'core';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const RUNTIME_ATTR = 'data-wish-rp-runtime';
@@ -16199,14 +16200,20 @@ diff:`<div class="m3-shell">
     const reason=e=>MemoryDiff.REASON[e.reason]||'기억 변경';
     const when=at=>{const x=new Date(Number(at));return (x.getMonth()+1)+'월 '+x.getDate()+'일 '+String(x.getHours()).padStart(2,'0')+':'+String(x.getMinutes()).padStart(2,'0');};
     const delta=c=>{const all=Object.values(c),a=all.reduce((n,x)=>n+x.add,0),ch=all.reduce((n,x)=>n+x.chg,0),dl=all.reduce((n,x)=>n+x.del,0);return `<span class="dd">${a?`<i class="add">+${a}</i>`:''}${ch?`<i class="chg">~${ch}</i>`:''}${dl?`<i class="del">−${dl}</i>`:''}${a||ch||dl?'':'<i class="none">변경 없음</i>'}</span>`;};
-    const tokens=s=>String(s||'').split(/(\s+)/).filter(x=>x!=='');
+    // Word diff: words keep their trailing spaces (spaces never match on their own), and a short match sitting between two
+    // larger rewrites is folded into them, so a rewritten sentence reads as one struck phrase followed by one new phrase.
+    const tokens=s=>String(s||'').match(/^\s+|\S+\s*/g)||[];
     function wdiff(a,b){const A=tokens(a),B=tokens(b),n=A.length,m=B.length;
-      if(n+m>10000||n*m>250000)return `<del>${esc(a)}</del><br><ins>${esc(b)}</ins>`;
-      const L=Array.from({length:n+1},()=>new Uint16Array(m+1));
-      for(let i=n-1;i>=0;i--)for(let j=m-1;j>=0;j--)L[i][j]=A[i]===B[j]?L[i+1][j+1]+1:Math.max(L[i+1][j],L[i][j+1]);
-      const ws=x=>!x.trim();let i=0,j=0,o='';
-      while(i<n&&j<m){if(A[i]===B[j]){o+=esc(A[i]);i++;j++;}else if(L[i+1][j]>=L[i][j+1]){o+=ws(A[i])?esc(A[i]):`<del>${esc(A[i])}</del>`;i++;}else{o+=ws(B[j])?esc(B[j]):`<ins>${esc(B[j])}</ins>`;j++;}}
-      while(i<n){o+=ws(A[i])?'':`<del>${esc(A[i])}</del>`;i++;}while(j<m){o+=ws(B[j])?esc(B[j]):`<ins>${esc(B[j])}</ins>`;j++;}return o;}
+      if(n*m>250000)return `<del>${esc(a)}</del><br><ins>${esc(b)}</ins>`;
+      const ka=A.map(x=>x.trim()),kb=B.map(x=>x.trim()),L=Array.from({length:n+1},()=>new Uint16Array(m+1));
+      for(let i=n-1;i>=0;i--)for(let j=m-1;j>=0;j--)L[i][j]=ka[i]===kb[j]?L[i+1][j+1]+1:Math.max(L[i+1][j],L[i][j+1]);
+      const seg=[],put=(eq,x,y)=>{const l=seg.at(-1);if(l&&l.eq===eq&&!eq){l.a+=x;l.b+=y;}else seg.push({eq,a:x,b:y});};
+      let i=0,j=0;while(i<n||j<m){if(i<n&&j<m&&ka[i]===kb[j])put(true,A[i++],B[j++]);else if(j>=m||(i<n&&L[i+1][j]>=L[i][j+1]))put(false,A[i++],'');else put(false,'',B[j++]);}
+      const len=s=>s.trim().length,big=s=>Math.max(len(s.a),len(s.b));
+      for(let k=1;k<seg.length-1;k++){const s=seg[k];if(s.eq&&!seg[k-1].eq&&!seg[k+1].eq&&len(s.b)<=big(seg[k-1])&&len(s.b)<=big(seg[k+1])){const p=seg[k-1],q=seg[k+1];p.a+=s.a+q.a;p.b+=s.b+q.b;seg.splice(k,2);k=Math.max(0,k-3);}}
+      const same=seg.reduce((t,s)=>t+(s.eq?len(s.b):0),0);
+      if(same<Math.max(len(a),len(b))*0.3)return `<del>${esc(String(a||'').trim())}</del>\n<ins>${esc(String(b||'').trim())}</ins>`;
+      return seg.map((s,k)=>{if(s.eq)return esc(s.b)+(k<seg.length-1&&!/\s$/.test(s.b)?(s.a.match(/\s+$/)||[''])[0]:'');const x=s.a.trimEnd(),y=s.b.trimEnd(),tail=s.b.slice(y.length)||(x&&!y?s.a.slice(x.length):'');return (x?`<del>${esc(x)}</del>`:'')+(x&&y?' ':'')+(y?`<ins>${esc(y)}</ins>`:'')+esc(tail);}).join('');}
     d.draft.i=Math.min(Math.max(0,Number(d.draft.i)||0),cps.length-1);d.draft.tab=d.draft.tab||'state';d.draft.mode=d.draft.mode||'diff';
     const tl=q('[data-tl]');
     tl.innerHTML='<div class="tl-h">정리 기록</div>'+cps.map((e,k)=>`<button type="button" data-cp="${k}" class="${k===d.draft.i?'sel':''}" style="--i:${k}"><span class="r">${esc(reason(e))}</span><span class="a">${when(e.at)}</span><span data-delta></span></button>`).join('');
