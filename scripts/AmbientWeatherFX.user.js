@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🌧️ Crack Ambient Weather FX (시간대 배경 & 날씨 효과)
 // @namespace    crack-ambient-weather-fx
-// @version      2.7.0
+// @version      2.8.0
 // @description  Crack 채팅방에 시간대 배경·화면 효과·키워드 자동 전환·사운드를 추가합니다.
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/AmbientWeatherFX.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/AmbientWeatherFX.user.js
@@ -247,9 +247,10 @@
   // v1.1.1: move fireworks burst targets higher and slightly enlarge sparks/flashes while keeping the v1.0.12 trail style.
 
   // v2.6.3: time parser NFKC normalization — supports PM．10:23 / AM．7:05 and full-width AM/PM, digits, colon variants.
+  // v2.8.0: power saver now also caps CAWF's own CSS animations at 30fps (the canvas effects already had low-power FPS budgets), and the shore effect drops its faintest back foam SVG (main/front foam unchanged) to cut per-frame SVG repaint cost.
   const SCRIPT_NAME = 'Crack Ambient Weather FX';
   // v2.6.4: liquid-glass settings UI, fixed status header and idle launcher animation.
-  const VERSION = '2.7.0';
+  const VERSION = '2.8.0';
   const STORE_KEY = 'cawf_settings_v1';
   const GUARD_KEY = '__CAWF_AMBIENT_WEATHER_FX_V257_LOADED__';
 
@@ -891,6 +892,86 @@
     return Math.min(kind === 'rain' ? 1.25 : 1.5, deviceDpr);
   }
 
+  // v2.8.0 절전: CSS 애니메이션도 캔버스처럼 프레임 상한(30fps)을 둔다.
+  // 큰 블러/블렌드 레이어는 움직일 때마다 화면 전체를 다시 합성하므로, 그리는 횟수를 줄이는 게 가장 크게 듣는다.
+  // 재생 속도를 0으로 두고 시간을 직접 밀어 준다. pause()/play()를 쓰지 않으므로
+  // 절전·탭 숨김 때 CSS가 거는 멈춤(animation-play-state)은 그대로 따르고, animationiteration/end도 그대로 난다.
+  const CSS_ANIM_CAP_FPS = 30;
+  const CSS_ANIM_CAP_SCAN_MS = 500;
+  const cssAnimCap = { on: false, anims: new Map(), stepTimer: 0, scanTimer: 0, last: 0 };
+
+  function getCssAnimCapScopes() {
+    return [state.root, document.getElementById(IDS.button), document.getElementById(IDS.panel)].filter(Boolean);
+  }
+
+  function scanCssAnimCap() {
+    if (!cssAnimCap.on) return;
+    for (const scope of getCssAnimCapScopes()) {
+      let list;
+      try { list = scope.getAnimations({ subtree: true }); } catch (e) { continue; }
+      for (const anim of list) {
+        // CSS 애니메이션만 묶는다(짧은 transition은 그대로 둔다).
+        if (cssAnimCap.anims.has(anim) || !anim.animationName || anim.playState === 'finished') continue;
+        const rate = anim.playbackRate;
+        if (!(rate > 0)) continue;
+        try { anim.playbackRate = 0; } catch (e) { continue; }
+        cssAnimCap.anims.set(anim, rate);
+      }
+    }
+    if (cssAnimCap.anims.size && !cssAnimCap.stepTimer) {
+      cssAnimCap.last = performance.now();
+      cssAnimCap.stepTimer = setInterval(stepCssAnimCap, 1000 / CSS_ANIM_CAP_FPS);
+    }
+  }
+
+  function stepCssAnimCap() {
+    const now = performance.now();
+    // 탭이 숨겨져 타이머가 늦게 돈 경우 한 번에 크게 건너뛰지 않게 막는다.
+    const dt = Math.min(250, now - cssAnimCap.last);
+    cssAnimCap.last = now;
+    // 읽기(스타일 확정)를 먼저 모두 하고 쓰기를 나중에 해서 강제 스타일 계산을 한 번으로 줄인다.
+    const running = [];
+    for (const [anim] of cssAnimCap.anims) {
+      const playState = anim.playState;
+      if (playState === 'idle' || !anim.effect?.target?.isConnected) { cssAnimCap.anims.delete(anim); continue; }
+      if (playState === 'running') running.push(anim);
+    }
+    for (const anim of running) {
+      const rate = cssAnimCap.anims.get(anim) || 1;
+      const next = (anim.currentTime || 0) + dt * rate;
+      try { anim.currentTime = next; } catch (e) {}
+      // 정해진 횟수만 도는 애니메이션은 끝나면 원래 속도로 돌려놓아 자연스럽게 끝나게 한다.
+      const end = anim.effect?.getComputedTiming?.().endTime;
+      if (Number.isFinite(end) && next >= end) {
+        try { anim.playbackRate = rate; } catch (e) {}
+        cssAnimCap.anims.delete(anim);
+      }
+    }
+    if (!cssAnimCap.anims.size) {
+      clearInterval(cssAnimCap.stepTimer);
+      cssAnimCap.stepTimer = 0;
+    }
+  }
+
+  function syncCssAnimCap() {
+    const want = IS_LOW_POWER;
+    if (want === cssAnimCap.on) return;
+    cssAnimCap.on = want;
+    if (want) {
+      scanCssAnimCap();
+      cssAnimCap.scanTimer = setInterval(scanCssAnimCap, CSS_ANIM_CAP_SCAN_MS);
+      return;
+    }
+    clearInterval(cssAnimCap.scanTimer);
+    clearInterval(cssAnimCap.stepTimer);
+    cssAnimCap.scanTimer = 0;
+    cssAnimCap.stepTimer = 0;
+    for (const [anim, rate] of cssAnimCap.anims) {
+      try { anim.playbackRate = rate; } catch (e) {}
+    }
+    cssAnimCap.anims.clear();
+  }
+
   function computePowerSaveActive() {
     const mode = state.settings?.powerSaver || 'auto';
     if (mode === 'on') return true;
@@ -903,8 +984,9 @@
     const attr = next ? 'true' : 'false';
     try { document.documentElement.setAttribute('data-cawf-low-power', attr); } catch (e) {}
     state.root?.setAttribute?.('data-cawf-low-power', attr);
-    if (next === IS_LOW_POWER) return;
+    if (next === IS_LOW_POWER) { syncCssAnimCap(); return; }
     IS_LOW_POWER = next;
+    syncCssAnimCap();
 
     // 새 FPS/해상도/입자 수가 즉시 반영되도록, 지금 돌고 있는 렌더 루프만 재기동한다.
     state.particleSignature = '';
@@ -4291,14 +4373,6 @@
       }
       /* foam은 중앙 바다 시작선 부근에 놓고, transform으로 아래쪽 모래까지 이동시킨다. */
 
-      #${IDS.ambient} .cawf-shore-foam-back {
-        top: 1%;
-        height: 58%;
-        opacity: .22;
-        filter: blur(.72px) drop-shadow(0 2px 9px rgba(255,255,255,.09));
-        animation: cawf-shore-foam-back calc(10.5s / var(--cawf-shore-speed-safe)) ease-in-out infinite;
-      }
-
       #${IDS.ambient} .cawf-shore-foam-main {
         top: 3%;
         height: 72%;
@@ -4333,11 +4407,6 @@
         vector-effect: non-scaling-stroke;
       }
 
-      #${IDS.ambient} .cawf-shore-foam-back .cawf-shore-foam-rim {
-        stroke-width: 2.1;
-        stroke: rgba(246,255,254,.58);
-      }
-
       #${IDS.ambient} .cawf-shore-foam-main .cawf-shore-foam-rim {
         stroke-width: 3.2;
         stroke: rgba(255,255,255,.92);
@@ -4359,11 +4428,6 @@
         animation: cawf-shore-lace-flow calc(5.8s / var(--cawf-shore-speed-safe)) linear infinite;
       }
 
-      #${IDS.ambient} .cawf-shore-foam-back .cawf-shore-foam-lace {
-        stroke-width: 1.1;
-        stroke: rgba(255,255,255,.42);
-      }
-
       #${IDS.ambient} .cawf-shore-foam-soft {
         fill: none;
         stroke: rgba(255,255,255,.12);
@@ -4371,11 +4435,6 @@
         stroke-linecap: round;
         stroke-linejoin: round;
         vector-effect: non-scaling-stroke;
-      }
-
-      #${IDS.ambient} .cawf-shore-foam-back .cawf-shore-foam-soft {
-        stroke: rgba(235,255,252,.095);
-        stroke-width: 21;
       }
 
       #${IDS.ambient} .cawf-shore-foam-main .cawf-shore-foam-soft,
@@ -4514,14 +4573,6 @@
         56% { opacity: .20; transform: translate3d(-.4%, 72px, 0) scale(1.08, 1.02); }
         76% { opacity: .10; transform: translate3d(-1.0%, 178px, 0) scale(1.06, .68); }
         94% { opacity: .018; transform: translate3d(.6%, 252px, 0) scale(1.08, .36); }
-      }
-
-      @keyframes cawf-shore-foam-back {
-        0%, 100% { opacity: .00; transform: translate3d(-.8%, -76px, 0) scale(1.03, .38); }
-        16% { opacity: .08; transform: translate3d(-.2%, -32px, 0) scale(1.035, .54); }
-        36% { opacity: .24; transform: translate3d(.6%, 38px, 0) scale(1.04, .96); }
-        58% { opacity: .12; transform: translate3d(1.0%, 112px, 0) scale(1.03, .72); }
-        80% { opacity: .03; transform: translate3d(-.7%, 184px, 0) scale(1.02, .50); }
       }
 
       @keyframes cawf-shore-foam-main {
@@ -7974,15 +8025,13 @@ return { panelHTML, EF, TM, ICON, esc };
     // v0.9.10: 무거운 물막은 제거하고, 포말선 뒤의 바다 면이 살짝 흔들리는 수면 잔물결만 남긴다.
     // v0.9.12: 약한 SVG displacement + 수면 undulation 레이어로 포말선 자체가 물처럼 미세하게 비틀리게 한다.
     // v0.9.20: SVG displacement는 정적 질감으로 고정하고, 거의 보이지 않는 far 레이어를 제거해 shore 부하를 낮춘다.
-    const pathBack = 'M-94 92 C4 58 82 118 170 92 C250 68 316 130 398 104 C482 76 548 74 632 118 C716 162 782 88 868 106 C954 124 1012 68 1100 98 C1184 126 1238 82 1300 108';
+    // v2.8.0: 가장 옅은 뒤쪽 포말(foam-back) SVG를 뺀다. 포말 SVG는 움직일 때마다 화면보다 넓게 다시 그려져 CPU를 많이 쓴다.
     const pathMain = 'M-98 124 C-2 74 86 154 176 120 C260 90 328 174 418 134 C502 98 570 108 650 158 C736 212 798 104 890 132 C978 160 1028 82 1120 122 C1200 158 1248 104 1308 132';
     const pathFront = 'M-106 162 C-8 104 82 190 178 156 C266 126 336 226 432 180 C516 140 586 150 666 204 C758 264 816 140 910 172 C1000 202 1052 124 1142 166 C1224 204 1264 150 1312 178';
     const pathLace = 'M-102 136 C-12 96 76 174 170 128 C252 86 334 190 426 144 C510 104 578 126 660 172 C748 218 810 118 904 148 C990 174 1042 102 1132 140 C1212 178 1248 126 1308 150';
 
     const lowDetail = IS_MOBILE || IS_LOW_POWER;
     const roughFilterNear = lowDetail ? '' : ' filter="url(#cawf-foam-rough-near)"';
-    // Far/back foam is already blurred and low-opacity; keep displacement only on near foam for much cheaper desktop rendering.
-    const roughFilterMid = '';
     const roughDefs = lowDetail ? '' : `<svg class="cawf-shore-defs" width="0" height="0" viewBox="0 0 0 0" aria-hidden="true" focusable="false">
         <defs>
           <!-- v0.9.20: feDisplacementMap scale 애니메이션을 제거해 매 프레임 SVG 노이즈 재계산을 막는다.
@@ -8052,12 +8101,6 @@ return { panelHTML, EF, TM, ICON, esc };
       <div class="cawf-shore-undulation" aria-hidden="true"></div>
       <div class="cawf-shore-wash cawf-shore-wash-main" aria-hidden="true"></div>
       <div class="cawf-shore-wash cawf-shore-wash-front" aria-hidden="true"></div>
-      <svg class="cawf-shore-foam cawf-shore-foam-back" viewBox="0 0 1200 320" preserveAspectRatio="none" aria-hidden="true" focusable="false">
-        <path class="cawf-shore-foam-fill" d="${pathBack} L1310 -30 L-110 -30 Z"${roughFilterMid} />
-        <path class="cawf-shore-foam-soft" d="${pathBack}" />
-        <path class="cawf-shore-foam-rim" d="${pathBack}"${roughFilterMid} />
-        <path class="cawf-shore-foam-lace" d="${pathBack}"${roughFilterMid} />
-      </svg>
       <svg class="cawf-shore-foam cawf-shore-foam-main" viewBox="0 0 1200 320" preserveAspectRatio="none" aria-hidden="true" focusable="false">
         <path class="cawf-shore-foam-fill" d="${pathMain} L1310 -30 L-110 -30 Z"${roughFilterNear} />
         <path class="cawf-shore-foam-soft" d="${pathMain}" />
