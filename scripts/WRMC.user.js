@@ -15200,10 +15200,9 @@ pre.m3-block.tall{max-height:none;min-height:340px}
 /* 설정 · 재검토 방식: 좁은 화면에서도 이름 옆에 선택 상자 */
 @media (max-width:560px){#wish-rp-root .m3-setting-row.m3-recall-mode{flex-direction:row;align-items:center;gap:10px}#wish-rp-root .m3-recall-mode>label{flex:none}#wish-rp-root .m3-recall-mode select{flex:1 1 auto;width:auto;min-width:0}}
 @container (max-width:490px){
-/* 외부 AI로 재구축 · 2차 재구축: 버튼 세 개를 한 줄에 (앞 아이콘을 빼고 여백을 줄임) */
-#wish-rp-root :is(.m3-external-actions,[data-key="secondary-rebuild"]>.m3-card-actions){flex-wrap:nowrap;gap:6px}
-#wish-rp-root :is(.m3-external-actions,[data-key="secondary-rebuild"]>.m3-card-actions) .m3-btn{padding-left:8px;padding-right:8px;min-width:0}
-#wish-rp-root :is(.m3-external-actions,[data-key="secondary-rebuild"]>.m3-card-actions) .m3-btn>svg.ic:first-child{display:none}
+/* 외부 AI로 재구축 · 2차 재구축: 아이콘은 그대로 두고 여백·간격·글자만 줄여 한 줄에 (아주 좁은 폰에서는 줄바꿈) */
+#wish-rp-root :is(.m3-external-actions,[data-key="secondary-rebuild"]>.m3-card-actions){gap:4px}
+#wish-rp-root :is(.m3-external-actions,[data-key="secondary-rebuild"]>.m3-card-actions) .m3-btn{padding-left:6px;padding-right:6px;gap:4px;font-size:11px}
 /* 쪽 머리줄: 제목 옆에 들어가는 만큼 버튼을 놓고, 남는 버튼(AI 묶음 정리 등)은 다음 줄 오른쪽 */
 #wish-rp-root .m3-pagehead{gap:8px 5px}
 #wish-rp-root .m3-pagehead>.m3-actions{display:contents}
