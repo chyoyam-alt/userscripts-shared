@@ -2270,7 +2270,7 @@ const WLOG=(()=>{
     if(!prev?.length)return;const old=new Map(prev.map(m=>[String(messageIdOf(m)),m]));
     for(const m of next){const o=old.get(String(messageIdOf(m)));if(!o||!m||typeof m!=='object')continue;
       const raw=messageTextOf(m),h=wishSourceManifestCache.get(o);if(h)wishSourceManifestCache.set(m,h.map(e=>e&&e.text===raw?{...e,text:raw}:undefined));
-      const t=automationTurnTextCache.get(o);if(t&&t.raw===raw)automationTurnTextCache.set(m,{...t,raw});}
+      const t=automationTurnTextCache.get(o);if(t&&t.raw===raw)automationTurnTextCache.set(m,{...t,raw,text:t.text===t.raw?raw:t.text});}
   }
   function sourceManifestOf(messages,{preserveStatusFences=false}={}) {
     return messages.map(m=>{
@@ -2278,7 +2278,7 @@ const WLOG=(()=>{
       const cacheable=m!==null&&typeof m==='object',cached=cacheable?wishSourceManifestCache.get(m):null;
       const prior=cached?.[mode];
       // Exact raw text and identity comparisons keep in-place edits/remaps safe.
-      // Never reuse across independently fetched server objects or fence modes.
+      // Reuse only on an exact raw text, id and role match (carryMessageCaches may move entries to a re-fetched object with the same id); never across fence modes.
       if(prior&&prior.text===text&&prior.id===id&&prior.role===role)return {id,role,hash:prior.hash};
       const hash=aiHashTiny(stripAutomationNoise(text,true,preserveStatusFences).trim());
       if(cacheable){const next=cached||[];next[mode]={text,id,role,hash};wishSourceManifestCache.set(m,next);}
@@ -4053,7 +4053,7 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
   }
   function turnText(m){
     const raw=messageTextOf(m),cacheable=m!==null&&typeof m==='object';let c=cacheable?automationTurnTextCache.get(m):null;
-    if(!c||c.raw!==raw){c={raw,text:stripAutomationNoise(raw,true).trim(),hints:rpSceneTimeHints(raw)};if(cacheable)automationTurnTextCache.set(m,c);}
+    if(!c||c.raw!==raw){const text=stripAutomationNoise(raw,true).trim();c={raw,text:text===raw?raw:text,hints:rpSceneTimeHints(raw)};if(cacheable)automationTurnTextCache.set(m,c);}
     return c;
   }
   function turns(frame) {
@@ -8643,7 +8643,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     const scope=rid=>JSON.stringify([state.routeEpoch,localRestoreEpoch,ExternalReplay.revision(rid),revisions.get(rid)||0]);
     const begin=rid=>({scope:scope(rid),seq:++sequence});
     const readTag=(list,info)=>Object.defineProperty(list,'wishRead',{value:info});
-    function invalidate(rid){rid=String(rid||'');if(!rid)return;const old=records.get(rid);if(old){donors.delete(rid);donors.set(rid,old.messages);while(donors.size>2)donors.delete(donors.keys().next().value);}records.delete(rid);revisions.set(rid,(revisions.get(rid)||0)+1);while(revisions.size>8)revisions.delete(revisions.keys().next().value);}
+    function invalidate(rid){rid=String(rid||'');if(!rid)return;const old=records.get(rid);if(old&&rid===String(apiChatIdOf(state.currentRoom)||'')){donors.delete(rid);donors.set(rid,old.messages);while(donors.size>2)donors.delete(donors.keys().next().value);}records.delete(rid);revisions.set(rid,(revisions.get(rid)||0)+1);while(revisions.size>8)revisions.delete(revisions.keys().next().value);}
     function freezeMessage(value,seen=new WeakSet()){
       if(!value||typeof value!=='object'||seen.has(value))return value;
       seen.add(value);for(const child of Object.values(value))freezeMessage(child,seen);return Object.freeze(value);
@@ -8669,7 +8669,8 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
       const ids=head.map(m=>String(messageIdOf(m)));if(ids.some(id=>!id)||new Set(ids).size!==ids.length)return null;
       const chars=record.chars+head.reduce((n,m)=>n+messageTextOf(m).length,0)-prior.reduce((n,m)=>n+messageTextOf(m).length,0);
       if(chars>MAX_CHARS)return null;
-      return {messages:[...snapshot(head),...old.slice(overlap.length)],chars,addedIds:ids.slice(0,first)};
+      const fresh=snapshot(head);carryMessageCaches(prior,fresh);
+      return {messages:[...fresh,...old.slice(overlap.length)],chars,addedIds:ids.slice(0,first)};
     }
     async function read(room,knownHead=null){
       const rid=String(apiChatIdOf(room)||''),stamp=scope(rid);
@@ -12103,7 +12104,6 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     const replayEpoch=ExternalReplay.revision(apiChatIdOf(room));if(ExternalReplay.pending(apiChatIdOf(room)))return {deferred:true};
     if(ExternalReplay.changed(apiChatIdOf(room),replayEpoch))return {deferred:true};
     const p=room.pending;if(!p)return {active:0,cleared:false};
-    const volatile=new Set(['verifiedAt','carrierArmedAt','serverChars','observedHead']),pollState=x=>JSON.stringify([x,room.memoryBranchBlocked,room.autoRecallContextText],(k,v)=>volatile.has(k)?undefined:v),pollPrint=reason==='poll'?pollState(p):'';
     if(generationPending(apiChatIdOf(room))){
       const recovery=await recoverGenerationGate(apiChatIdOf(room));
       if(recovery.pending)return {active:activePendingItems(p).length,deferred:true};
@@ -12121,6 +12121,8 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       }else{p.verified=false;p.verifiedAt=0;}
     }
     if(reason==='poll'&&!p.lastSyncError&&!p.recallNeedsRefresh&&p.policy==='stable-user-v1'&&p.verified===true&&p.messageId&&p.messageId===String(messageIdOf(frame.carrier)||'')&&p.contextBlock&&!p.previousCarrierCleanup&&p.observedHead===headSignature&&Date.now()-Number(p.verifiedAt||0)<APP.carrierVerifyMs)return {active:activePendingItems(p).length,unchanged:true};
+    // Idle re-verify: fingerprint of everything this poll can change, so an unchanged result skips rewriting the room.
+    const volatile=new Set(['verifiedAt','carrierArmedAt','serverChars','observedHead']),pollState=x=>JSON.stringify([x,room.memoryBranchBlocked,room.autoRecallContextText,Object.keys(room.aiSourceManifests||{}),Object.keys(room.aiUpdateCursors||{}),Object.keys(room.aiAppliedContent||{}),room.autoMemory?.lastError],(k,v)=>volatile.has(k)?undefined:v),pollPrint=reason==='poll'?pollState(p):'',pollRev=room._rev;
     // WishHistory verifies overlap and bounds cache age; do not bypass it with a stale frame.
     const cogBridge=(typeof unsafeWindow!=='undefined'?unsafeWindow:window).__WishCognitionBridge;
     const cognitionIds=await cogBridge?.sourceIds?.(rid)||[];
@@ -12217,7 +12219,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     // Long/ranked preparation, PATCH preflight, post-write verification and the final
     // WebSocket frontier check still perform their original live reads.
     const reuseRead=allFitCarrierRead&&Date.now()-allFitCarrierRead.at<=1000&&room.pending===p&&!generationPending(rid)&&!ExternalReplay.changed(rid,replayEpoch)&&String(messageIdOf(allFitCarrierRead.message))===newId;
-    const listed=reason==='poll'&&knownFrame?frame.messages.find(m=>String(messageIdOf(m))===newId):null;
+    const listed=reason==='poll'&&knownFrame&&p.messageId===newId?knownFrame.messages.find(m=>String(messageIdOf(m))===newId):null;
     const live=reuseRead?allFitCarrierRead.message:listed&&stripOurContextBlock(messageTextOf(listed)).text.trim()?listed:await fetchMessage(apiChatIdOf(room),newId);
     if(!live || messageRoleOf(live)!=='assistant')throw new Error('이전 AI 원문을 확인하지 못했습니다.');
     const raw=messageTextOf(live),stripped=stripOurContextBlock(raw),original=stripped.found?stripped.text:raw;
@@ -12268,7 +12270,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       try{await restorePendingCarriers(room,{...(cleanupCarrier?{previousCarrierCleanup:cleanupCarrier}:{}),cleanupCarrierMessageIds:cleanupIds});delete next.previousCarrierCleanup;delete next.cleanupCarrierMessageIds;}
       catch(error){console.warn('[Wish] 새 carrier 전환은 완료했지만 이전 carrier 정리를 다음 poll로 미룹니다.',error);}
     }
-    if(pollPrint&&pollPrint===pollState(next)){sanitizeRenderedContextSoon();scheduleMessageInjectionMagnifier(40);return {active:active.length,cleared:false,unchanged:true};}
+    if(pollPrint&&raw===injected&&room._rev===pollRev&&pollPrint===pollState(next)){sanitizeRenderedContextSoon();scheduleMessageInjectionMagnifier(40);return {active:active.length,cleared:false,unchanged:true};}
     savePendingBackup(room.chatId,next);await saveRoom(room);sanitizeRenderedContextSoon();
     scheduleMessageInjectionMagnifier(40);
     if(reason==='start')notify('이전 AI에 주입 확인됨 · 최신 AI 제외 · USER 기준 유지','success',6000);
@@ -12356,7 +12358,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
         if(ExternalReplay.pending(rid)||WishDisplayDrain.pending(rid)||unstartedRooms.has(room))return;
         if(!gate&&Date.now()<crackAuthState.retryAt)return;
         const scanDue=!room.pending&&(room.autoCharacterDetection||room.autoLogRecallEnabled)&&Date.now()-Number(state.idleAutoScanAt.get(room.chatId)||0)>=APP.idleAutoScanMs;
-        const head=scanDue?await fetchRecentMessages(apiChatIdOf(room),50):null;
+        const turnSnap=WUITurnSnapshots.get(room),head=scanDue&&!backgroundWorkPending(rid)&&!turnSnap?.running&&Date.now()-Number(turnSnap?.at||0)>=10000?await fetchRecentMessages(apiChatIdOf(room),50).catch(()=>null):null;
         if(!room.pending)void WUIRefreshTurnCount(room,false,head);
         // 자동 캐릭터 감지는 주입 전에도 현재 방에서 동작해 다음 주입 준비를 해둡니다.
         if (!room.pending && (room.autoCharacterDetection || room.autoLogRecallEnabled)) {
@@ -12572,7 +12574,8 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     else if (height > state.mobileViewportMaxHeight) state.mobileViewportMaxHeight = height;
     // Set on #wish-rp-root, the only element that reads them: on <html> every change restyled the whole chat.
     const host = document.getElementById('wish-rp-root');
-    if (host) { host.style.setProperty('--rpcm-vvh', `${height}px`); host.style.setProperty('--rpcm-vv-top', `${top}px`); }
+    state.viewportVars = [`${height}px`, `${top}px`];
+    if (host) { host.style.setProperty('--rpcm-vvh', state.viewportVars[0]); host.style.setProperty('--rpcm-vv-top', state.viewportVars[1]); }
     const activeInput = document.activeElement;
     const typingFocus = !!activeInput?.matches?.('textarea,input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"])') && !!activeInput.closest?.('#wish-rp-root,#rpcm-overlay,#rpcm-detached-backdrop,#rpcm-lib-dialog-backdrop,#rpcm-library-manager-backdrop,#rpcm-log-dialog-backdrop,#rpcm-dup-dialog-backdrop,#rpcm-import-backdrop,#rpcm-ai-backdrop,#rpcm-ai-settings-backdrop,#rpcm-lore-convert-backdrop');
     const keyboardOpen = mobile && typingFocus && state.mobileViewportMaxHeight > 0 && height < state.mobileViewportMaxHeight * .82;
@@ -14340,6 +14343,7 @@ body[data-theme="dark"] .m3-ui,body[data-theme="dark"] #wish-rp-monitor{--m3-she
 @media (prefers-color-scheme:dark){body:not([data-theme]) .m3-ui,body:not([data-theme]) #wish-rp-monitor{--m3-sheet:#181c25;--m3-bg:#121620;--m3-card:#1f2430;--m3-card2:#252b39;--m3-line:#303747;--m3-line2:#272d3a;--m3-fg:#eef1f8;--m3-fg2:#b2bacd;--m3-muted:#828ba3;--m3-accent:#8ba1e4;--m3-accent-ink:#141a28;--m3-accent-soft:#232a3c;--m3-accent-line:#39425c;--m3-glow:#b9c8f5;--m3-ok:#78c8ab;--m3-warn:#d5ab6d;--m3-danger:#e08b96;--m3-shadow:0 1px 1px rgba(0,0,0,.25),0 12px 26px -20px rgba(0,0,0,.8);--m3-lift:0 2px 6px rgba(0,0,0,.3),0 18px 32px -18px rgba(0,0,0,.9);--m3-shell-shadow:0 28px 64px -32px rgba(0,0,0,.85);--m3-hi:rgba(139,161,228,.1);--m3-scrim:rgba(0,0,0,.45);--mon-bg:rgba(22,27,38,.9);--mon-top:rgba(255,255,255,.18);--mon-track:rgba(255,255,255,.15);color-scheme:dark}}
 /* ── 2. 루트 레이어 ── */
 #wish-rp-root{position:fixed;inset:0;z-index:2147483000;pointer-events:none}
+@property --rpcm-vvh{syntax:'*';inherits:false}@property --rpcm-vv-top{syntax:'*';inherits:false}
 html.rpcm-mobile-keyboard-open #wish-rp-root{top:var(--rpcm-vv-top,0px);bottom:auto;height:var(--rpcm-vvh,100%)}
 #wish-rp-root .m3-overlay{pointer-events:none}
 #wish-rp-root .m3-shell{pointer-events:auto}
@@ -16897,7 +16901,7 @@ nativeBundle(d) {
   function ensureRoot() {
     if (root && root.isConnected) return;
     root = document.getElementById('wish-rp-root');
-    if (!root) { root = document.createElement('div'); root.id = 'wish-rp-root'; root.className = 'm3-ui'; document.body.appendChild(root); }
+    if (!root) { root = document.createElement('div'); root.id = 'wish-rp-root'; root.className = 'm3-ui'; const vv = state.viewportVars; if (vv) { root.style.setProperty('--rpcm-vvh', vv[0]); root.style.setProperty('--rpcm-vv-top', vv[1]); } document.body.appendChild(root); }
     wire(root);
   }
   function render() {
