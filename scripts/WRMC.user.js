@@ -4182,7 +4182,7 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
       guide+='\n[자료집 독립 처리 범위 — references에 우선 적용]\n자료집은 이미 별도 API로 일부 대화를 반영했다. memory.references의 생성·갱신 근거는 rp.references만 사용한다. rp.memory 또는 rp.shared의 나머지 과거 대화는 사건·현재상태 전용이다. rp.references가 비면 references.upsert=[]로 두고 기존 자료를 보존한다. 다른 작업 범위는 바꾸지 않는다.\n';
     }
 const deltaNotices=[];
-    let stateDelta=p.memory&&!options.rebuild&&WishEconomy.settings(room).delta&&!isManualAiProvider();
+    let stateDelta=p.memory&&!options.rebuild&&options.forceStateSnapshot!==true&&WishEconomy.settings(room).delta&&!isManualAiProvider();
     if(stateDelta){
       // Remove snapshot-only output directions, retaining all semantic preservation rules.
       const drop=['2. 그 사건 판정과 동일한','6. events에 변화가 없어도','- state는 하위 작업 B의 적용 후 전체','- 유지·갱신은 기존 ref 그대로 sections','- 모든 기존 지속 상태가 실제로 끝난 경우 sections=[]','- sections는 증분 조각이 아니라','- 내용이 바뀌지 않은 기존 섹션은 가능한 한 기존 body','- 새 지속 상태도 없고 기존 상태도 없으면 sections=[]'];
@@ -4362,11 +4362,12 @@ function applyObserve(cog,speech,data,rp,cutoff,relationshipRows=[],relationship
   }
   function stage(room,cog,packs,p,req,data) {
     coerceSpeechRegisters(data?.observe?.speech_upsert);
-    validateShape(data,req.schema);
+    // A state delta the safety check rejects is marked so the run can ask once for the full state instead.
+    try{validateShape(data,req.schema);}catch(error){if(req.stateDelta&&String(error?.diagnostic?.path||'').startsWith('응답.memory.state'))error.code='WISH_DELTA_REJECTED';throw error;}
     if(data.schema_version!=='1'||Object.keys(data).some(k=>!['schema_version',...(p.memory?['memory']:[]),...(p.observe?['observe']:[])].includes(k)))throw Error('통합 응답 버전·묶음 오류');
     if(req.stateDelta){
       if(!WishEconomy.settings(room).delta||JSON.stringify(inventory(room,cog,packs))!==JSON.stringify(req.db))throw Error('변경분 요청 이후 기준 자료 또는 설정이 바뀌었습니다.');
-      data=copy(data);data.memory.state=wishExpandStateDelta(req.db,data.memory.state,wishTurnText(p.mem),req.stateDeltaToken);
+      data=copy(data);try{data.memory.state=wishExpandStateDelta(req.db,data.memory.state,wishTurnText(p.mem),req.stateDeltaToken);}catch(error){if(!error.code)error.code='WISH_DELTA_REJECTED';throw error;}
     }
     data=copy(data); // Filtering a rejected row must never mutate the provider/import input.
     const next=copy(room),newPacks=[],db=copy(req.db),notices=[...(req.correctionNotices||[])],rejectedQuotes=[],heldAdds=[],cogHeldAdds=[];let newCog=null,preservationNotice='';
@@ -4590,7 +4591,8 @@ const p=plan(list,{...u,settings:settings(room)},force==='retry'||retrying?(u.fa
         // 이 과정에서 같은 방의 옛 임의-ID 자동팩도 삭제 없이 한 번 안전 병합된다.
         if(p.memory)await ensureAutoLorePack(room);
         const packs=writableLorePacksForRoom(room);
-        const signature=rawSignature(room,cog,packs),settingsAtStart=JSON.stringify(loadAiSettings()),req=request(room,cog,packs,p,{compactReadOnly:true,continuityReference:{memory:p.memory?continuityReference(list,p.mem):undefined,observe:p.observe?continuityReference(list,p.obs):undefined}});
+        const requestOptions={compactReadOnly:true,continuityReference:{memory:p.memory?continuityReference(list,p.mem):undefined,observe:p.observe?continuityReference(list,p.obs):undefined}};
+        const signature=rawSignature(room,cog,packs),settingsAtStart=JSON.stringify(loadAiSettings()),req=request(room,cog,packs,p,requestOptions);
         const kind=p.memory&&p.observe?'all':p.memory?'memory':'observe';
         jobKind=kind;
         // Bounds fail visibly; they never silently clip history or launch hidden split/repair calls.
@@ -4612,7 +4614,20 @@ const p=plan(list,{...u,settings:settings(room)},force==='retry'||retrying?(u.fa
         const result=manualResult||await callAiProvider(providerSettings,requestSystem,req.prompt,{taskKind:'extract',responseMimeType:'application/json',operationLabel:unifiedStage,timeoutMs:UNIFIED_TIMEOUT_MS});
         unifiedStage='통합 정리 응답 해석 중';renderModalIfIdle();const data=WLOG.parseJson(result.text,'기억·인물 통합 정리',result.diagnostic);
         req.holdContext={bundle:'unified',jobCreatedAt:nowIso(),segmentIndex:null,segmentCount:null};
-        unifiedStage='통합 결과 형식·참조 확인 중';renderModalIfIdle();const staged=stage(room,cog,packs,p,req,data);const heldN=(staged.relationshipHeldAdds?.length||0)+(staged.cognitionHeldAdds?.length||0);if(heldN>WishHeld.HELD_JOB_MAX)(staged.notices||=[]).push('이번 정리에서 보류 제안이 '+heldN+'건 생겼습니다. 모두 저장하며 장부 용량을 넘는 분은 대기열에 보관합니다.');staged.room.unified.retry=null;if(chunked)staged.room.unified.status+=isManualAiProvider()?' · 남은 대화는 다음 [함께 정리]로':' · 밀린 대화를 나눠 정리 중';
+        unifiedStage='통합 결과 형식·참조 확인 중';renderModalIfIdle();let staged;
+        try{staged=stage(room,cog,packs,p,req,data);}catch(error){
+          // Exactly one full-state request after a rejected delta; any other failure, or a second failure, stops as before.
+          if(!req.stateDelta||manualResult||error?.code!=='WISH_DELTA_REJECTED')throw error;
+          WLOG.notice('절약 모드 변경분이 안전 검사를 통과하지 못해 이번 한 번은 현재상태 전체 방식으로 다시 요청했습니다. ('+error.message+')','warn',{operation:'기억·인물 통합 정리',stage:'절약 변경분 → 전체 상태 1회 재요청'});
+          const full=request(room,cog,packs,p,{...requestOptions,forceStateSnapshot:true}),fullSystem=full.guide+'\n[응답 스키마]\n'+JSON.stringify(full.schema);
+          try{WishMemorySafety.wire(fullSystem,full.prompt);}catch(e){if(e?.code==='WISH_REQUEST_SIZE')e.message+=' · '+wishRequestSizeMessage(full.requestSizes);throw e;}
+          unifiedStage='절약 변경분 검사 실패 · 전체 상태 방식으로 1회 재요청 중';renderModalIfIdle();
+          const retry=await callAiProvider(providerSettings,fullSystem,full.prompt,{taskKind:'extract',responseMimeType:'application/json',operationLabel:unifiedStage,timeoutMs:UNIFIED_TIMEOUT_MS});
+          unifiedStage='통합 정리 응답 해석 중';renderModalIfIdle();const retryData=WLOG.parseJson(retry.text,'기억·인물 통합 정리',retry.diagnostic);
+          full.holdContext={bundle:'unified',jobCreatedAt:nowIso(),segmentIndex:null,segmentCount:null};
+          unifiedStage='통합 결과 형식·참조 확인 중';renderModalIfIdle();staged=stage(room,cog,packs,p,full,retryData);
+        }
+        const heldN=(staged.relationshipHeldAdds?.length||0)+(staged.cognitionHeldAdds?.length||0);if(heldN>WishHeld.HELD_JOB_MAX)(staged.notices||=[]).push('이번 정리에서 보류 제안이 '+heldN+'건 생겼습니다. 모두 저장하며 장부 용량을 넘는 분은 대기열에 보관합니다.');staged.room.unified.retry=null;if(chunked)staged.room.unified.status+=isManualAiProvider()?' · 남은 대화는 다음 [함께 정리]로':' · 밀린 대화를 나눠 정리 중';
         const latestHistory=await fetchAllRoomMessages(apiChatIdOf(room)),latest=stableFrame([...latestHistory].reverse());
         if(ExternalReplay.changed(apiChatIdOf(room),replayEpoch))return false;
         const manifest=sourceManifestOf([...frame.stable].reverse());
@@ -5194,12 +5209,13 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
     if(data?.version===2)return SCHEMA;
     throw Error('지원하지 않는 재구축 버전입니다. 새 지침 + TXT로 처리해 주세요.');
   }
+  // Without a source (s=null) only the file itself is checked, so a broken file fails before the whole conversation is read.
   function validateExternal(data,s,only=false){
     const expected=only?'wish-relationship-rebuild':'wish-rp-rebuild-2.3';
     if(data?.format!==expected)throw Error(only?'관계 전용 JSON을 선택해 주세요.':'전체 재구축 전용 JSON을 선택해 주세요.');
     coerceSpeechRegisters(data?.speech);
     U3.validateShape(data,externalSchema(data));
-    if(data.source.last_message_id!==s.anchorMessageId)throw Error('재구축 원문 기준이 현재 대화와 다릅니다. 새 TXT를 받아 주세요.');
+    if(s&&data.source.last_message_id!==s.anchorMessageId)throw Error('재구축 원문 기준이 현재 대화와 다릅니다. 새 TXT를 받아 주세요.');
     if(only&&data.version!==1||!only&&![1,2].includes(data.version))throw Error('재구축 버전 오류');
   }
   function relationResolver(cg){const resolve=personResolver((cg.actors||[]).filter(a=>!a.archived));return name=>cg.actors.find(a=>a.id===resolve(name));}
@@ -5411,7 +5427,7 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
     return staged;
   }
   async function importData(r,data,only=false){return await WLOG.run('재구축 JSON 검증·미리보기',async()=>guard(r,async check=>{
-    if(r.pending)throw Error('주입을 해제한 뒤 가져와 주세요.');const s=await source(r);check();validateExternal(data,s,only);if(!only){await ensureAutoLorePack(r);check();}
+    if(r.pending)throw Error('주입을 해제한 뒤 가져와 주세요.');validateExternal(data,null,only);const s=await source(r);check();validateExternal(data,s,only);if(!only){await ensureAutoLorePack(r);check();}
     const c=await bridge().snapshotRaw(apiChatIdOf(r)),ps=packs(r);check();
     let draft;try{draft=only?onlyRelationshipStage(r,c,s,data):externalStage(r,c,ps,s,data);}catch(e){return WishImportPeople.open(r,data,c,e,only);}
     return openRelationshipReview(r,{draft,sourceHash:s.hash,anchor:s.anchorMessageId,basis:basis(r,c,ps)},{only,legacy:!only&&data.version===1,cog:c,packs:ps});
@@ -10834,6 +10850,8 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
         return openReview(r,'lore',data,draft,s,after.c,after.ps);
       }
       if(data?.format!=='wish-partial-rebuild')throw Error('전체·기억·자료집·인물 재구축 JSON을 선택해 주세요.');
+      // Check the file before reading the whole conversation; stage() repeats this against the source.
+      coerceSpeechRegisters(data?.speech);U3.validateShape(data,schema(data.scope));
       return locked(r,async check=>{
         if(r.pending)throw Error('주입을 해제한 뒤 가져와 주세요.');
         const s=await source(r),{c,ps}=await snapshot(r);check();
@@ -14223,7 +14241,8 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       const gate={token:crypto.randomUUID(),epoch,socket,kind:parsed.event,at:Date.now(),baseline:generationFrontier(baselineFrame),req:{ackId:(/^42(?:\/[^,]+,)?(\d*)\[/.exec(typeof data==='string'?data:'')||[])[1]||'',ids:Object.fromEntries(GATE_REQUEST_ID_KEYS.map(k=>[k,parsed.payload?.[k]??parsed.payload?.data?.[k]]).filter(([,v])=>(typeof v==='string'&&v)||typeof v==='number').map(([k,v])=>[k,String(v)]))},...(replay?{replayToken:replay.token,replayReady:false,replacementUserId:''}:{})};
       recordSocketDiag({dir:'out',event:parsed.event,rid,ackId:gate.req.ackId,shape:socketPayloadShape(parsed.payload)});
       generationGates.set(rid,gate);scheduleRecovery(APP.activePollMs);
-      try{sendAttempted=true;previousSend.call(socket,data);}catch(error){deleteGenerationGateIfCurrent(rid,gate);throw error;}
+      // Mark the send only after the native call returns; a throwing send must still restore the manual-choice mark.
+      try{previousSend.call(socket,data);sendAttempted=true;}catch(error){deleteGenerationGateIfCurrent(rid,gate);throw error;}
       gate.sentAt=Date.now();if(parsed.event==='send'&&typeof text==='string')gate.draft=text;
       if(parsed.event==='reroll')WishHistory.invalidate(rid);
       // Do not add storage latency to the actual WebSocket send.
