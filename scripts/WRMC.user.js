@@ -2268,8 +2268,8 @@ const WLOG=(()=>{
   function carryMessageCaches(prev,next){
     if(!prev?.length)return;const old=new Map(prev.map(m=>[String(messageIdOf(m)),m]));
     for(const m of next){const o=old.get(String(messageIdOf(m)));if(!o||!m||typeof m!=='object')continue;
-      const h=wishSourceManifestCache.get(o);if(h)wishSourceManifestCache.set(m,h.slice());
-      const t=automationTurnTextCache.get(o);if(t)automationTurnTextCache.set(m,t);}
+      const raw=messageTextOf(m),h=wishSourceManifestCache.get(o);if(h)wishSourceManifestCache.set(m,h.map(e=>e&&e.text===raw?{...e,text:raw}:undefined));
+      const t=automationTurnTextCache.get(o);if(t&&t.raw===raw)automationTurnTextCache.set(m,{...t,raw});}
   }
   function sourceManifestOf(messages,{preserveStatusFences=false}={}) {
     return messages.map(m=>{
@@ -8653,7 +8653,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
       rid=String(rid);if(ticket.scope!==scope(rid)||generationPending(rid)||ExternalReplay.pending(rid)||(records.get(rid)?.seq||0)>ticket.seq)return;
       const newest=[...oldestFirst].reverse(),chars=newest.reduce((n,m)=>n+messageTextOf(m).length,0);
       if(chars>MAX_CHARS){records.delete(rid);donors.delete(rid);return;}
-      const messages=snapshot(newest);carryMessageCaches(records.get(rid)?.messages||donors.get(rid),messages);donors.delete(rid);
+      const messages=snapshot(newest);carryMessageCaches(records.get(rid)?.messages||donors.get(rid),messages);donors.clear();
       // Records from an older route can never be served again (scope includes routeEpoch); free them now.
       for(const [k,v] of records)if(v.scope!==scope(k))records.delete(k);
       records.delete(rid);records.set(rid,{messages,ids:new Set(newest.map(m=>String(messageIdOf(m)))),chars,scope:ticket.scope,seq:ticket.seq,verifiedAt:Date.now(),host:String(oldestFirst.wishReadHost||'')});
