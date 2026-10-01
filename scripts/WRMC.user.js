@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽 Wish RP Manager Core
 // @namespace    local.rp.context.manager
-// @version      1.5.0
+// @version      1.5.1
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @description  Crack RP용 컨텍스트 주입·인지·자동 장기기억·자료집·전체 재구축을 하나로 관리합니다.
@@ -36,7 +36,7 @@
   // Koofr WebDAV backup/restore is optional and manual only (no timers, startup requests or shared server).
   // Core 1.5.0: Firebase gets an optional App Check debug token (required by Firebase AI Logic from 2026-11-02), exchanged on demand without background timers.
   // New provider 'vertex': a Vertex AI service account JSON is signed in-browser (RS256) into a 1-hour access token kept in memory only and renewed 5 minutes early.
-  // UI polish: quiet buttons share the normal button look, delete-type buttons are red-tinted, several dialogs are tidied,
+  // Core 1.5.1 UI polish: quiet buttons share the normal button look, delete-type buttons are red-tinted, several dialogs are tidied,
   // and folds that remember being open build their contents only while open (no new timers or continuous animations).
   // Core 1.4.0: external AI mode (provider '외부 AI 복붙', no API key): [함께 정리] copies a request and [답 붙여넣기] applies the answer.
   // In that mode API-only buttons/options are disabled, and AI candidate selection, embeddings and state-delta requests are off; automatic runs only notify.
@@ -56,7 +56,7 @@
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '1.4.0';
+  const SCRIPT_VERSION = '1.5.1';
   const EDITION = 'core';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const RUNTIME_ATTR = 'data-wish-rp-runtime';
@@ -15035,10 +15035,10 @@ pre.m3-block.tall{max-height:none;min-height:340px}
 #wish-rp-root .wp-save-error{color:var(--m3-bad);font-size:11px}
 #wish-rp-root .wp-rel-dh{flex-wrap:wrap}
 #wish-rp-root .wp-rel-dh b{min-width:100px;overflow-wrap:anywhere}
-/* 1.5.0 UI 다듬기 */
+/* 1.5.1 UI 다듬기 */
 /* 설정: 자동으로 정해지는 숫자(기억 정리 주기)는 입력칸 테두리 없이 */
 #wish-rp-root .m3-step:has(input[readonly]){border-color:transparent;background:transparent}
-/* 팝업 아래 버튼 줄: PC에서 크기 통일 (전체 재구축은 자체 디자인 유지, 모바일은 1.5.0 그대로) */
+/* 팝업 아래 버튼 줄: PC에서 크기 통일 (전체 재구축은 자체 디자인 유지, 모바일은 기존 그대로) */
 @media (min-width:521px){#wish-rp-root .m3-sheet:not(.m3-native-sheet)>footer .m3-btn{padding:8px 13px;font-size:12.5px;min-height:34px;justify-content:center}}
 /* 2차 결과 비교: 닫기는 줄이 바뀌어도 오른쪽 끝 */
 #wish-rp-root .m3-sheet>footer>.m3-btn[data-act=secondaryApply]+.m3-btn[data-act=closeDlg]{margin-left:auto}
