@@ -14415,6 +14415,93 @@ pre.m3-block.tall{max-height:none;min-height:340px}
 #wish-rp-root .m3-pagehead>.m3-actions>.m3-btn{flex:none;padding-left:8px;padding-right:8px}
 #wish-rp-root .m3-pagehead>.m3-actions>.m3-btn:last-child{margin-left:auto}
 }
+/* ===== 모바일 화면 다듬기 2 (WUI_CSS 맨 끝에 붙임 · 패널 안은 패널 폭 기준 @container, 팝업은 화면 폭 기준 @media) ===== */
+@container (max-width:490px){
+/* 관계·감정선: 방향 머리줄 이름이 한 글자씩 세로로 쪼개지지 않게. 자리가 모자랄 때만 배지·편집이 다음 줄로, 편집은 오른쪽 */
+#wish-rp-root .wp-rel-dh>b{flex:1 1 auto;display:block;word-break:keep-all}
+#wish-rp-root .wp-rel-dh>.m3-btn{margin-left:auto}
+/* 백업·복원: 버튼 네 개를 2x2로 (로컬 데이터 정리 혼자 다음 줄에 남지 않게) */
+#wish-rp-root [data-key="backup"] .m3-card-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+#wish-rp-root [data-key="backup"] .m3-card-actions>.m3-btn{justify-content:center;margin:0}
+/* 카드 제목: 한글 낱말 중간에서 줄이 끊기지 않게 */
+#wish-rp-root .m3-card-head .m3-t>b,#wish-rp-root .m3-panel[data-key^="ft-"]>.m3-row:first-child>b{word-break:keep-all;overflow-wrap:anywhere}
+/* 확인 탭 주입 항목: 긴 날짜로그 제목을 두 줄까지 */
+#wish-rp-root .m3-irow .m3-t>b{white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;word-break:keep-all;overflow-wrap:anywhere}
+}
+@container (max-width:420px){
+/* 인물·인지 카드: 제목은 첫 줄 전체, 종류·선택 배지와 주입 방식은 둘째 줄 (선택 상자는 오른쪽) */
+#wish-rp-root .m3-panel[data-key^="ft-"]>.m3-row:first-child{flex-wrap:wrap;row-gap:8px}
+#wish-rp-root .m3-panel[data-key^="ft-"]>.m3-row:first-child>b{order:-1;flex:1 0 100%}
+#wish-rp-root .m3-panel[data-key^="ft-"]>.m3-row:first-child>select{margin-left:auto}
+}
+@container (max-width:400px){
+/* 머리줄: 줄이 바뀔 때 끝에 가운뎃점만 매달리지 않게 저장 상태를 따로 한 줄로 */
+#wish-rp-root .m3-sub-line>.m3-save{flex-basis:100%}
+#wish-rp-root .m3-sub-line>span:has(+.m3-save){display:none}
+}
+@container (max-width:380px){
+/* 기타·OOC 도구줄: 주입이 혼자 다음 줄로 떨어지지 않게 (아이콘은 그대로, 여백·간격만 줄임) */
+#wish-rp-root [data-key="mem-extra"] .m3-toolbar>.m3-actions{gap:4px}
+#wish-rp-root [data-key="mem-extra"] .m3-toolbar>.m3-actions>.m3-btn{padding-left:6px;padding-right:6px;gap:4px}
+/* 그래도 넘치는 아주 좁은 폰에서는 주입 토글을 다음 줄 오른쪽 끝으로 */
+#wish-rp-root [data-key="mem-extra"] .m3-toolbar>.m3-actions>.m3-choice{margin-left:auto}
+}
+/* 날짜로그 도구줄: 350~375px에서는 중복 N이 있어도 한 줄에 들어가므로 억지 줄바꿈을 풀어 줌 (원본의 @container (max-width:375px) logbar 줄을 지워도 같음) */
+@container (min-width:350px) and (max-width:375px){
+#wish-rp-root .m3-logbar:has(.m3-dupwarn){flex-wrap:nowrap}
+#wish-rp-root .m3-logbar:has(.m3-dupwarn) .m3-actions.m3-grow{flex-basis:auto}
+}
+/* 터치 화면: 인지 카드 주입 방식 선택 상자(24px)와 날짜로그 더보기 버튼(27px)을 30px로 */
+@media (pointer:coarse){
+#wish-rp-root .m3-select.mini{min-height:30px}
+#wish-rp-root .m3-logbar .m3-more-btn{min-height:30px}
+}
+/* ---- 팝업 (패널 밖이라 화면 폭 기준) ---- */
+@media (max-width:400px){
+/* 팝업 아래 버튼 줄: 여백을 조금 줄여 주 버튼이 혼자 다음 줄 왼쪽으로 밀리지 않게, 그래도 밀리면 오른쪽으로 */
+#wish-rp-root .m3-sheet:not(.m3-native-sheet)>footer{column-gap:5px;padding-left:12px;padding-right:12px;justify-content:flex-end}
+#wish-rp-root .m3-sheet:not(.m3-native-sheet)>footer>.m3-btn:not(.mini){padding-left:10px;padding-right:10px}
+/* 날짜 표기 정리: 제목을 넓게, 연·월·일 칸은 제목 아래 */
+#wish-rp-root .m3-dn-row{grid-template-columns:auto minmax(0,1fr);row-gap:7px}
+#wish-rp-root .m3-dn-row>.m3-cbx{grid-row:span 2}
+#wish-rp-root .m3-dn-row>.m3-dn-in{grid-column:2}
+}
+@media (max-width:560px){
+/* 날짜 표기 정리: 블록 제목이 낱말 중간에서 끊기지 않게 */
+#wish-rp-root .m3-dn-row .m3-t>b{word-break:keep-all;overflow-wrap:anywhere}
+}
+@media (max-width:520px){
+/* 다른 방 복사 · 원본 방: 방 이름 줄은 한 줄 전체, 버튼 두 개는 그 아래 */
+#wish-rp-root .m3-row:has(>[data-act="roomCopyNames"])>.m3-muted.m3-grow{flex:1 0 100%}
+/* 무엇을 갱신할까요: 설명이 버튼 끝에서 잘리지 않게 줄바꿈 */
+#wish-rp-root .m3-opt>.m3-t{flex:1 1 auto;min-width:0}
+#wish-rp-root .m3-opt small{white-space:normal;word-break:keep-all}
+/* 오류 상세 · 실패·주의 기록: 다음 줄로 넘어간 실패 단계가 가운뎃점으로 시작하지 않게 */
+#wish-rp-root .wp-err-meta>span:nth-child(3){flex-basis:100%}
+#wish-rp-root .wp-err-meta>span:nth-child(3)::before{content:none}
+}
+@media (max-width:480px){
+/* 날짜 표기 정리 위쪽: 연도·적용 / 전체 선택·선택 해제 두 줄 (선택 해제 혼자 남지 않게) */
+#wish-rp-root .m3-row:has(>[data-act="dnYear"]){display:grid;grid-template-columns:auto auto;justify-content:start;justify-items:start;gap:8px}
+/* Koofr 백업 목록: 연결 카드 버튼 네 개를 2x2로 */
+#wish-rp-root [data-key="cloud-head"]>.m3-card-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+#wish-rp-root [data-key="cloud-head"]>.m3-card-actions>.m3-btn{justify-content:center}
+}
+@media (max-width:440px){
+/* 긴 값이 들어가는 두 칸 입력(사건 제목·자료 이름·부르는 말·모델): 한 칸씩 전체 폭으로 */
+#wish-rp-root .m3-sheet .m3-grid2:has(>.m3-fld>:is([data-bind$=".title"],[data-bind$=".name"],[data-bind$=".address"],[data-bind$=".model"])){grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:420px){
+/* 외부 AI로 진행 · 요청문 보내기: 외부 AI로 재구축 줄과 같은 방식 (아이콘 유지, 여백·간격·글자만 줄여 한 줄에, 아주 좁은 폰에서는 줄바꿈) */
+#wish-rp-root [data-key="manual-send"]>.m3-actions{gap:4px}
+#wish-rp-root [data-key="manual-send"]>.m3-actions>.m3-btn{padding-left:6px;padding-right:6px;gap:4px;font-size:11px}
+/* 로컬 Wish 데이터 정리: 백업 버튼은 한 줄 전체, 선택 버튼 두 개는 아래 반씩 */
+#wish-rp-root .m3-dialog-body>.m3-row:has(>[data-act="fileBackup"]){display:grid;grid-template-columns:1fr 1fr;gap:8px}
+#wish-rp-root .m3-dialog-body>.m3-row>[data-act="fileBackup"]{grid-column:1/-1}
+#wish-rp-root .m3-dialog-body>.m3-row:has(>[data-act="fileBackup"])>.m3-btn{justify-content:center}
+}
+/* (모든 폭) 무엇을 갱신할까요: 색이 채워진 선택지 위 설명 글씨 대비 (회색 → 버튼 글씨색 78%) */
+#wish-rp-root .m3-opt.primary small{color:inherit;opacity:.78}
 `;
 /* =====================================================================
    Wish 청묵 UI 모듈 (WUI) — 화면 전용. 이 함수 전체를 그대로 붙여 넣는다.
@@ -15385,7 +15472,9 @@ svg.ic-calendar rect:last-of-type,svg.ic-relation circle,svg.ic-wallet{transform
 .dcard.del .dtx{color:var(--m3-muted);text-decoration:line-through;text-decoration-color:color-mix(in srgb,var(--m3-danger) 60%,transparent)}
 .same{font-size:11.5px;color:var(--m3-muted);text-align:center;padding:10px;border:1px dashed var(--m3-line);border-radius:9px;margin-top:4px}
 .scope{display:flex;gap:8px;align-items:flex-start;margin-top:12px;padding:9px 11px;border-radius:9px;background:var(--m3-card2);font-size:11px;line-height:1.6;color:var(--m3-muted)}
-.scope svg.ic{margin-top:2px}`;
+.scope svg.ic{margin-top:2px}
+/* 터치 화면: 필터 칩·구분 버튼을 30px로 */
+@media (pointer:coarse){:host .chipb,:host .seg button{min-height:30px}}`;
   const APPROVED_TEMPLATES={
 cost:`<div class="m3-shell">
  <div class="m3-head"><span class="hd-ic"></span><div class="hd-t"><strong>AI 사용량</strong><small>이 브라우저 · 모든 방 합산 · 최근 12개월</small></div>
