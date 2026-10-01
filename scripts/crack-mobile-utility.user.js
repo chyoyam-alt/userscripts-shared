@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.5.14
-// @description  라디오존데 복구(CDN 직접 조회·신규 모델 자동 추가·GM.xmlHttpRequest 호환). 허브 SVG 복원, 모델 맨 왼쪽 배치 및 전환 버튼 간격 수정. 미니사이드바 다크/라이트·소설/채팅 전환. 코드블록 자동 줄바꿈, 라이트 테마 코드·보조 글자 대비 수정, 테마 판별 통일, DOM·캐시·라디오존데 반복 처리 최적화. 모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
+// @version      4.6.0
+// @description  4.6.0: 9/30 크랙 개편 대응(분기 방 배지·전송 감지·초안 정리·캐릭터 채팅·유저노트 길게 눌러 선택), 긴 방·홈·방 이동 반복 작업과 메모리 누수 최적화, 라디오존데 복구(CDN 직접 조회·신규 모델 자동 추가·GM.xmlHttpRequest 호환)와 줄 간격 고정, 미니사이드바 문체 변경, 정보바 숫자 애니메이션, 전체화면·입력창 펼치기 SVG 아이콘. 허브 SVG 복원, 모델 맨 왼쪽 배치 및 전환 버튼 간격 수정. 미니사이드바 다크/라이트·소설/채팅 전환. 코드블록 자동 줄바꿈, 라이트 테마 코드·보조 글자 대비 수정, 테마 판별 통일, DOM·캐시·라디오존데 반복 처리 최적화. 모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       Assistant
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/crack-mobile-utility.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/crack-mobile-utility.user.js
@@ -32,7 +32,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.5.14';
+    const VERSION = '4.6.0';
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
     const CMU_RUNTIME_KEY = '__CRACK_MOBILE_UTILITY_RUNTIME__';
     const runtimeRoot = document.documentElement;
@@ -258,6 +258,7 @@
         radiosonde: true,
         radiosondeLatency: true,
         dashboard: true,
+        dashboardNumberAnimation: true,
         dashboardSidebar: true,
         badgeChars: true,
         badgeTime: true,
@@ -538,15 +539,6 @@
         document.head.appendChild(style);
         CMU_RESOURCES.styles.add(style);
     }
-    function readLS(key, fallback = null) {
-        try {
-            const v = localStorage.getItem(key);
-            return v == null ? fallback : v;
-        }
-        catch (_) {
-            return fallback;
-        }
-    }
     function normalizeLogCaptureRules(value) {
         let source = value;
         if (typeof source === 'string') {
@@ -744,6 +736,9 @@
     function isEpisodePath() {
         return /^\/stories\/[^/?#]+\/episodes\/[^/?#]+/.test(location.pathname || '');
     }
+    function cmuIsCharacterChatPath(path = location.pathname || '') {
+        return /^\/characters\/[^/?#]+\/chats\/[^/?#]+/.test(path);
+    }
     function isChatRoomPath() {
         const path = location.pathname || '';
         return /\/stories\/[^/?#]+\/episodes\/[^/?#]+/.test(path) || /\/episodes\/[^/?#]+/.test(path) || /\/chats?\/[^/?#]+/.test(path);
@@ -827,7 +822,8 @@
         const room = cmuRoomData(chatId);
         for (const msg of rows || []) {
             const id = messageIdOf(msg);
-            if (!id || (msg.chatId && String(msg.chatId) !== chatId)) continue;
+            // Branched rooms return inherited messages with the source room's chatId; rows come from this room's URL.
+            if (!id) continue;
             const previous = room.messages.get(id);
             room.messages.delete(id);
             room.messages.set(id, { ...previous, ...msg });
@@ -868,7 +864,7 @@
         try {
             const url = new URL(String(value || ''), location.href);
             if (!['crack-api.wrtn.ai', 'contents-api.wrtn.ai'].includes(url.hostname)) return null;
-            const match = url.pathname.match(/^\/(?:crack-gen|character-chat)\/v3\/chats\/([^/]+)\/messages(?:\/([^/]+))?\/?$/);
+            const match = url.pathname.match(/^\/(?:crack-gen|character-chat)\/(?:v3\/chats|character-chats)\/([^/]+)\/messages(?:\/([^/]+))?\/?$/);
             if (!match) return null;
             method = String(method || 'GET').toUpperCase();
             if (!['GET', 'PATCH', 'DELETE'].includes(method)) return null;
@@ -925,13 +921,20 @@
         if (!force && cached && Date.now() - cached.at < (cursor ? 60000 : 1600)) return cached.page;
         if (room.inflight.has(key)) return room.inflight.get(key);
         const task = (async () => {
-            const url = `https://crack-api.wrtn.ai/crack-gen/v3/chats/${encodeURIComponent(chatId)}/messages?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
+            // Character chats (/characters/:id/chats/:chatId) use their own endpoint; v3/chats answers 404 there.
+            const resource = cmuIsCharacterChatPath() ? 'character-chats' : 'v3/chats';
+            // The head page is re-read on room entry and after generations; long messages make 100 rows ~280KB.
+            // Deeper pages (dashboard turn scans) keep 100 rows to limit the number of requests.
+            const limit = cursor ? 100 : 40;
+            const url = `https://crack-api.wrtn.ai/crack-gen/${resource}/${encodeURIComponent(chatId)}/messages?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
             // This layer deduplicates by revision; URL-only reuse could return a pre-edit response.
             const json = cmuAssertPayload(await apiGet(url, { roomId: chatId, dedupe: false }));
             if (!shouldRun() || getChatId() !== chatId) throw new Error('Room changed');
             if (room.revision !== revision) throw new Error('Message changed during request');
             if (!Array.isArray(json.data?.messages)) throw new Error('Invalid message page');
-            const page = { arr: json.data.messages, cursor: json.data.nextCursor || '', hasNext: json.data.hasNext === true };
+            // Character chat pages omit hasNext; a cursor means more pages.
+            const page = { arr: json.data.messages, cursor: json.data.nextCursor || '',
+                hasNext: json.data.hasNext === true || (json.data.hasNext === undefined && !!json.data.nextCursor) };
             cmuRememberMessages(chatId, page.arr);
             room.pages.set(cursor, { at: Date.now(), page });
             while (room.pages.size > 4) room.pages.delete(room.pages.keys().next().value);
@@ -1087,43 +1090,6 @@
         // Promise-style managers may resolve without invoking callbacks.
         Promise.resolve(result).then(res => { if (res && res.status !== undefined) wrapped.onload(res); }, err => wrapped.onerror(err));
         return { abort() { settled = true; try { result?.abort?.(); } catch (_) { } } };
-    }
-    function gmGetJson(url, timeoutMs = 15000) {
-        if (!shouldRun())
-            return Promise.reject(new Error('runtime disposed'));
-        return new Promise((resolve, reject) => {
-            if (!cmuGmXhrAvailable()) {
-                fetch(url, { headers: { accept: 'application/json' } })
-                    .then(res => {
-                    if (!res.ok)
-                        throw new Error(`HTTP ${res.status}`);
-                    return res.json();
-                })
-                    .then(resolve, reject);
-                return;
-            }
-            cmuGmXhr({
-                method: 'GET',
-                url,
-                timeout: timeoutMs,
-                headers: { Accept: 'application/json' },
-                onload: (res) => {
-                    const status = Number(res.status) || 0;
-                    if (status && (status < 200 || status >= 300)) {
-                        reject(new Error(`HTTP ${status}`));
-                        return;
-                    }
-                    try {
-                        resolve(JSON.parse(res.responseText));
-                    }
-                    catch (err) {
-                        reject(err);
-                    }
-                },
-                onerror: () => reject(new Error('network error')),
-                ontimeout: () => reject(new Error('timeout')),
-            });
-        });
     }
     function sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
@@ -1766,7 +1732,8 @@
       fill: none !important;
       stroke: currentColor !important;
     }
-    #${ID.settingsButton}.cmu-native-toolbar-btn svg {
+    #${ID.settingsButton}.cmu-native-toolbar-btn svg,
+    #${ID.fullscreenButton}.cmu-native-toolbar-btn svg {
       width: 16px !important;
       height: 16px !important;
       color: hsl(var(--line-gray-2, 0 0% 62%)) !important;
@@ -1777,12 +1744,7 @@
       justify-content: center !important;
       width: 16px !important;
       height: 16px !important;
-      line-height: 1 !important;
-      font-size: 15px !important;
-      font-weight: 700 !important;
-      color: hsl(var(--line-gray-2, 0 0% 62%)) !important;
       pointer-events: none !important;
-      transform: translateY(-.5px);
     }
 
     #${ID.composerExpandButton}.cmu-composer-expand-overlay {
@@ -1830,6 +1792,14 @@
     }
     #${ID.composerExpandButton}.cmu-composer-expand-overlay.cmu-composer-expand-visible {
       display: inline-flex !important;
+    }
+    #${ID.composerExpandButton}.cmu-composer-expand-overlay svg {
+      display: block !important;
+      width: 16px !important;
+      height: 16px !important;
+      fill: none !important;
+      stroke: currentColor !important;
+      pointer-events: none !important;
     }
     #${ID.composerExpandButton}.cmu-composer-expand-overlay:hover,
     #${ID.composerExpandButton}.cmu-composer-expand-overlay:focus-visible {
@@ -2779,6 +2749,22 @@
     body[data-theme="dark"] #chud-infobar,
     html[data-theme="dark"] #chud-infobar { color: rgba(255,255,255,.58); }
 
+    #chud-info-text .chud-num { display: inline-block; }
+    #chud-info-text .chud-num.chud-num-up { animation: chud-num-up .55s cubic-bezier(.2,.75,.3,1); }
+    #chud-info-text .chud-num.chud-num-down { animation: chud-num-down .55s cubic-bezier(.2,.75,.3,1); }
+    @keyframes chud-num-up {
+      0% { transform: translateY(40%) scale(1.14); opacity: .55; }
+      60% { transform: translateY(-8%) scale(1.06); opacity: 1; }
+      100% { transform: none; }
+    }
+    @keyframes chud-num-down {
+      0% { transform: translateY(-40%) scale(1.14); opacity: .55; }
+      60% { transform: translateY(8%) scale(1.06); opacity: 1; }
+      100% { transform: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #chud-info-text .chud-num { animation: none !important; }
+    }
     #chud-info-text {
       display: flex;
       align-items: center;
@@ -2879,7 +2865,8 @@
       .chud-part { padding: 1px; }
     }
 
-    .crack-ui-empty-send-blocked {
+    /* The same button turns into ■ stop while generating; never dim the stop state. */
+    .crack-ui-empty-send-blocked:not(:has(path[d^="M6 6h12v12H6"])) {
       opacity: .50 !important;
       cursor: not-allowed !important;
       filter: grayscale(.22) !important;
@@ -2887,6 +2874,9 @@
     .crack-ui-empty-send-blocked svg { pointer-events: none !important; }
 
     .igx-inline-overlay-host { position: relative !important; }
+    .igx-inline-overlay-host.igx-inline-overlay-pad { padding-top: 28px !important; }
+    /* 7px from the padding edge leaves a 6px visual gap above the box's 1px border. */
+    #igx-live-popup.inline.igx-anchor-shell { top: auto !important; bottom: calc(100% + 7px) !important; }
     #igx-live-popup {
       --bg-main: rgba(20, 20, 20, .92);
       --border-main: rgba(255, 255, 255, .12);
@@ -3917,6 +3907,21 @@
         }, true);
         syncNow();
     }
+    // The site's dialog scroll lock (react-remove-scroll, body[data-scroll-locked]) cancels touchmove at a text
+    // field's scroll edge, which breaks long-press selection in the user note and other dialogs on phones.
+    // Stop those moves on <body>: React (#__next) has already handled them, only the document-level lock is skipped.
+    function cmuReleaseDialogTextTouch(event) {
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest('textarea, [contenteditable="true"]') && target.closest('[role="dialog"]') &&
+            document.body?.hasAttribute('data-scroll-locked'))
+            event.stopPropagation();
+    }
+    function installCmuDialogTextTouchRelease() {
+        if (!document.body)
+            return;
+        cmuListen(document.body, 'touchmove', cmuReleaseDialogTextTouch, { passive: true });
+        addStyle(`[role="dialog"] :is(textarea, [contenteditable="true"]) { overscroll-behavior: contain; }`);
+    }
     function isInsideKnownPopup(el) {
         if (!(el instanceof Element))
             return false;
@@ -3975,6 +3980,19 @@
         ].filter(Boolean).join(' ');
         return /메시지|message/i.test(attrs);
     }
+    // Empty composer shows ▶ (autoplay), typed composer shows → (send); ■ (stop) is never a send button.
+    const CMU_SEND_ICON_SELECTOR = 'path[d^="M18.77 11.13"], path[d^="M18.38 12.88"]';
+    const CMU_STOP_ICON_SELECTOR = 'path[d^="M6 6h12v12H6"]';
+    function cmuHasSendIcon(btn) {
+        if (!(btn instanceof HTMLButtonElement) || btn.querySelector(CMU_STOP_ICON_SELECTOR))
+            return false;
+        if (btn.querySelector(CMU_SEND_ICON_SELECTOR))
+            return true;
+        // Icon paths change between releases; the trailing submit button of the composer action row is the send button.
+        const row = btn.parentElement;
+        return btn.type === 'submit' && !!row?.classList.contains('justify-between') && row.lastElementChild === btn &&
+            !btn.closest('[id^="cmu-"], [id^="chud-"]') && !!btn.previousElementSibling?.querySelector?.('button');
+    }
     function isRawSendButton(btn) {
         if (!(btn instanceof HTMLButtonElement))
             return false;
@@ -3983,7 +4001,7 @@
         const label = `${btn.getAttribute('aria-label') || ''} ${btn.title || ''} ${btn.textContent || ''}`;
         if (/전송|보내기|send/i.test(label))
             return true;
-        return !!btn.querySelector('path[d^="M18.77 11.13"]');
+        return cmuHasSendIcon(btn);
     }
     function hasRawSendButtonNear(el) {
         if (!(el instanceof Element))
@@ -4035,6 +4053,12 @@
     function findChatInput(force = false) {
         if (!force && cmuCachedInputUsable(cmuCachedChatInput))
             return cmuCachedChatInput;
+        // Only chat rooms have a composer; elsewhere every miss used to rescan the page.
+        if (!isChatRoomPath()) {
+            if (cmuCachedChatInput)
+                invalidateCmuChatInputCache();
+            return null;
+        }
         const prioritySelectors = [
             '.__chat_input_textarea',
             'p[data-placeholder*="메시지"], p[data-placeholder*="Message"], p[data-placeholder*="message"]',
@@ -4112,7 +4136,9 @@
                 candidates.push(btn);
         };
         document.querySelectorAll('button[aria-label]').forEach(add);
-        document.querySelectorAll('path[d^="M18.77 11.13"]').forEach(path => add(path.closest('button')));
+        document.querySelectorAll(CMU_SEND_ICON_SELECTOR).forEach(path => add(path.closest('button')));
+        // The send button has no type attribute (submit by default), so match structure, not [type].
+        document.querySelectorAll('main .justify-between > button:last-child').forEach(add);
         if (!candidates.length) {
             cmuCachedSendButtonAt = now;
             return null;
@@ -4289,9 +4315,11 @@
         return btn;
     }
     const COMPOSER_EXPAND_STYLE_PROPS = ['height', 'max-height', 'overflow-y'];
+    // Arrow glyphs turn into emoji on iOS; use stroke icons like the toolbar.
+    const composerExpandSvg = d => `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="${d}"></path></svg>`;
     const COMPOSER_EXPAND_ICONS = Object.freeze({
-        expand: '↗',
-        collapse: '↙',
+        expand: composerExpandSvg('M7 17 17 7M8 7h9v9'),
+        collapse: composerExpandSvg('M17 7 7 17M16 17H7V8'),
     });
     function snapshotComposerExpandStyles(target) {
         const snapshot = {};
@@ -4440,7 +4468,7 @@
         const nextState = expanded ? 'collapse' : 'expand';
         if (btn.dataset.cmuComposerExpandState !== nextState) {
             btn.dataset.cmuComposerExpandState = nextState;
-            btn.textContent = COMPOSER_EXPAND_ICONS[nextState];
+            btn.innerHTML = COMPOSER_EXPAND_ICONS[nextState];
             const label = expanded ? '입력창 원래 크기로' : '입력창 펼치기';
             btn.title = label;
             btn.setAttribute('aria-label', label);
@@ -4625,7 +4653,7 @@
         btn.classList.remove('cmu-composer-expand-visible');
         btn.tabIndex = -1;
         btn.setAttribute('aria-hidden', 'true');
-        btn.textContent = COMPOSER_EXPAND_ICONS.expand;
+        btn.innerHTML = COMPOSER_EXPAND_ICONS.expand;
         btn.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); });
         btn.addEventListener('click', e => {
             e.preventDefault();
@@ -5929,27 +5957,6 @@
             return !childText;
         });
         return leaves.sort((a, b) => String(b.textContent || '').length - String(a.textContent || '').length)[0] || null;
-    }
-    function lcNormalizeBlockNode(node) {
-        if (!node)
-            return null;
-        if (node.nodeType === Node.TEXT_NODE) {
-            const txt = String(node.textContent || '').replace(/\r\n?/g, '\n');
-            if (!txt)
-                return null;
-            const p = document.createElement('p');
-            p.style.whiteSpace = 'pre-wrap';
-            p.textContent = txt;
-            return p;
-        }
-        if (!(node instanceof HTMLElement))
-            return null;
-        if (node.tagName === 'IMG') {
-            const wrap = document.createElement('div');
-            wrap.appendChild(node.cloneNode(true));
-            return wrap;
-        }
-        return node.cloneNode(true);
     }
     function lcCaptureImageSource(img) {
         if (!(img instanceof HTMLImageElement))
@@ -7388,7 +7395,7 @@
         { id: 'message', icon: Q_ICONS.message, label: '길게 누르기', keys: ['messageLongPressMenu'] },
         { id: 'theme', icon: Q_ICONS.theme, label: '테마', keys: ['themeSkin'] },
         { id: 'radiosonde', icon: Q_ICONS.radio, label: '라존데', keys: ['radiosonde'] },
-        { id: 'dashboard', icon: Q_ICONS.dash, label: '대시보드', keys: ['dashboard', 'dashboardSidebar'] },
+        { id: 'dashboard', icon: Q_ICONS.dash, label: '대시보드', keys: ['dashboard', 'dashboardNumberAnimation', 'dashboardSidebar'] },
         { id: 'badge', icon: Q_ICONS.badge, label: '배지', keys: ['badgeChars', 'badgeTime', 'modelIcon', 'answerCost'] },
         { id: 'nativemodel', icon: Q_ICONS.filter, label: '모델', keys: ['nativeModelFilter', 'outputModelFilter'] },
         { id: 'capture', icon: Q_ICONS.capture, label: '로그 캡처', keys: ['logCapture'] }
@@ -7557,14 +7564,19 @@
             return false;
         }
     }
+    // innerWidth/clientWidth force a synchronous layout and this runs on many hot paths; measure once per resize.
+    let cmuViewportWidthCache = 0;
     function cmuViewportWidth() {
+        if (cmuViewportWidthCache)
+            return cmuViewportWidthCache;
         const values = [
             window.innerWidth,
             document.documentElement?.clientWidth,
             window.visualViewport?.width,
             window.screen?.width,
         ].map(Number).filter(v => Number.isFinite(v) && v > 0);
-        return values.length ? Math.min(...values) : (window.innerWidth || 0);
+        cmuViewportWidthCache = values.length ? Math.min(...values) : (window.innerWidth || 0);
+        return cmuViewportWidthCache;
     }
     function isCmuEdgeMenuViewport() {
         return isMobileLike() && cmuViewportWidth() <= 820;
@@ -7674,9 +7686,12 @@
                 continue;
             const state = String(panel.getAttribute('data-state') || '');
             const cls = String(panel.className || '');
-            const text = cmuEdgeText(panel).slice(0, 600);
             const hasList = !!panel.querySelector?.('[data-testid="virtuoso-scroller"], [data-virtuoso-scroller="true"], [role="tablist"]');
-            if (panel.getAttribute('role') === 'dialog' && state === 'open' && hasList && (cls.includes('md:hidden') || panel.closest('[data-radix-popper-content-wrapper]')) && /에피소드|보관함|파티챗/.test(text))
+            if (panel.getAttribute('role') !== 'dialog' || state !== 'open' || !hasList || !(cls.includes('md:hidden') || panel.closest('[data-radix-popper-content-wrapper]')))
+                continue;
+            // Read the tab labels instead of innerText of the whole (layout-forcing) chat list.
+            const tabs = panel.querySelector('[role="tablist"]')?.textContent || '';
+            if (/에피소드|보관함|파티챗/.test(tabs) || /에피소드|보관함|파티챗/.test(cmuEdgeText(panel).slice(0, 600)))
                 return panel;
         }
         return null;
@@ -7769,6 +7784,14 @@
         if (cachedCmuRoomPanel?.isConnected && scoreCmuRoomPanel(cachedCmuRoomPanel) >= 10) {
             observeCmuRoomPanelState(cachedCmuRoomPanel);
             return cachedCmuRoomPanel;
+        }
+        // The room panel is rebuilt on every room change; try its known class before scoring every div in <main>.
+        const known = document.querySelector('main .border-l.border-outline_tertiary');
+        if (known && scoreCmuRoomPanel(known) >= 10) {
+            cachedCmuRoomPanel = known;
+            CMU_DOM_WATCH.roomPanelMissUntil = 0;
+            observeCmuRoomPanelState(known);
+            return known;
         }
         const root = document.querySelector('main') || document;
         if (CMU_DOM_WATCH.roomPanelSearchRoot === root && Date.now() < CMU_DOM_WATCH.roomPanelMissUntil)
@@ -7948,12 +7971,13 @@
     }
     function syncCmuEdgeMenuOpenState() {
         try {
-            if (syncCmuUserNoteDialogState())
-                return;
+            // Edge menus and the user note only exist in chat rooms; skip the dialog scan elsewhere.
             if (!(shouldRun() && isChatRoomPath() && isCmuEdgeMenuViewport())) {
                 document.documentElement.classList.remove('cmu-mobile-chat-list-open', 'cmu-mobile-room-panel-open', 'cmu-chat-list-height-fixed');
                 return;
             }
+            if (syncCmuUserNoteDialogState())
+                return;
             releaseCmuMobileChatListStaleMarkers();
             syncCmuMobileChatListOpenState();
             syncCmuRightRoomMenuOpenState();
@@ -8521,14 +8545,20 @@
     }
     function renderFullscreenRow() {
         const supported = isCmuFullscreenSupported();
-        return qSwitch('fullscreenButton', '전체화면 버튼 표시', supported ? '톱니 옆 ⛶/✕ 빠른 전환 버튼 표시' : '현재 브라우저/기기에서 Fullscreen API 미지원', { disabled: !supported, forceOffWhenDisabled: true });
+        return qSwitch('fullscreenButton', '전체화면 버튼 표시', supported ? '톱니 옆에 전체화면 켜기/끄기 버튼 표시' : '현재 브라우저/기기에서 Fullscreen API 미지원', { disabled: !supported, forceOffWhenDisabled: true });
     }
+    // Text glyphs (⛶ ✕) fall back to emoji fonts on iOS/Android; draw the same stroke icons as the gear.
+    const CMU_FULLSCREEN_ICON = Object.freeze({
+        enter: 'M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4',
+        exit: 'M9 4v4a1 1 0 0 1-1 1H4M20 9h-4a1 1 0 0 1-1-1V4M15 20v-4a1 1 0 0 1 1-1h4M4 15h4a1 1 0 0 1 1 1v4',
+    });
     function setCmuFullscreenToolbarIcon(btn) {
         if (!(btn instanceof HTMLButtonElement))
             return;
         const active = isCmuFullscreenActive();
-        const icon = active ? '✕' : '⛶';
-        btn.innerHTML = `<span class="cmu-fullscreen-icon" aria-hidden="true">${icon}</span>`;
+        const path = active ? CMU_FULLSCREEN_ICON.exit : CMU_FULLSCREEN_ICON.enter;
+        if (btn.querySelector('.cmu-fullscreen-icon path')?.getAttribute('d') !== path)
+            btn.innerHTML = `<span class="cmu-fullscreen-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" focusable="false" style="fill:none!important;stroke:currentColor!important;"><path d="${path}"></path></svg></span>`;
         btn.title = active ? '전체화면 해제' : '전체화면 전환';
         btn.setAttribute('aria-label', active ? '전체화면 해제' : '전체화면 전환');
         btn.setAttribute('aria-pressed', active ? 'true' : 'false');
@@ -8713,7 +8743,7 @@
     const SIDE_PART_LABELS = [
         ['modelButton', '모델'], ['themeButton', '다크/라이트'], ['episodeModeButton', '소설/채팅'],
         ['guideButton', '가이드'], ['profileButton', '프로필'], ['profileBoxButton', '프로필 박스'], ['noteButton', '노트'],
-        ['outputButton', '출력'], ['summaryButton', '요약'], ['imageButton', '이미지'], ['archiveButton', '보관함'],
+        ['proseStyleButton', '문체'], ['outputButton', '출력'], ['summaryButton', '요약'], ['imageButton', '이미지'], ['archiveButton', '보관함'],
         ['roomBackgroundButton', '이미지 테마'], ['scenePainterButton', '모바일 삽화'], ['wishManagerButton', 'Wish RP'], ['sceneBlurButton', 'CSP 테마'],
         ['startButton', '시작'], ['loreButton', '로어'], ['translatorButton', '번역'], ['aiSummaryButton', 'AI 요약'], ['gameHudButton', '게임 HUD']
     ];
@@ -8725,6 +8755,7 @@
         profileButton: 'profile',
         profileBoxButton: 'profileBox',
         noteButton: 'note',
+        proseStyleButton: 'proseStyle',
         outputButton: 'output',
         summaryButton: 'summary',
         imageButton: 'image',
@@ -8893,7 +8924,7 @@
         ${qSwitch('mobileRightMenuButton', '우측 메뉴 버튼', '모바일 오른쪽 손잡이로 방 설정 패널 열기')}
         ${qSwitch('composerExpandButton', '입력창 펼치기 버튼', '스크롤이 생기면 입력창 오른쪽 위에 표시')}
         ${qSwitch('inputCharacterCounter', '입력 글자수 표시', '전송 버튼 위쪽 · 2,000자 경고')}
-        ${qSwitch('emptySendGuard', '빈 메시지 전송 막기')}
+        ${qSwitch('emptySendGuard', '빈 입력 ▶ 자동진행 막기', '빈 입력창의 ▶는 크래커를 쓰는 스토리 자동진행이라 실수로 누르지 않게 막음')}
       `)}
 
       <div class="sec">채팅창 임시 저장</div>
@@ -8961,6 +8992,7 @@
       ${qCard(`
         ${qSwitch('dashboard', '정보바 표시', '턴수 · 누적 사용 · 잔여 · 차감', { group: 'g-info' })}
         ${qChipWrap('g-info', renderDashboardPartRows(), !!settings.dashboard)}
+        ${qSwitch('dashboardNumberAnimation', '숫자 변화 애니메이션', '값이 바뀔 때만 잠깐 올라가는 효과 · 기기의 동작 줄이기 설정을 따름', { dep: 'dashboard' })}
       `)}
       ${sideSection}
     `);
@@ -9646,12 +9678,21 @@
         const global = findChatInput();
         return global && isButtonInsideChatComposer(btn) ? global : null;
     }
+    // classList.add/remove and dataset writes record a mutation even when nothing changes; this runs per keystroke
+    // and every record wakes the input counter's placement observer, so only write real changes.
+    function setEmptySendGuardButtonState(btn, blocked) {
+        const guard = settings.emptySendGuard ? '1' : '0';
+        if (btn.dataset.crackUiEmptySendGuard !== guard)
+            btn.dataset.crackUiEmptySendGuard = guard;
+        if (btn.dataset.crackUiEmptySendBlocked !== (blocked ? '1' : '0'))
+            btn.dataset.crackUiEmptySendBlocked = blocked ? '1' : '0';
+        if (btn.classList.contains('crack-ui-empty-send-blocked') !== blocked)
+            btn.classList.toggle('crack-ui-empty-send-blocked', blocked);
+    }
     function clearEmptySendGuardButton(btn) {
         if (!(btn instanceof HTMLElement))
             return;
-        btn.classList.remove('crack-ui-empty-send-blocked');
-        btn.dataset.crackUiEmptySendGuard = settings.emptySendGuard ? '1' : '0';
-        btn.dataset.crackUiEmptySendBlocked = '0';
+        setEmptySendGuardButtonState(btn, false);
     }
     function updateEmptySendGuardState() {
         const btn = getSendButton();
@@ -9678,14 +9719,7 @@
         });
         if (!btn)
             return;
-        btn.dataset.crackUiEmptySendGuard = settings.emptySendGuard ? '1' : '0';
-        btn.dataset.crackUiEmptySendBlocked = blocked ? '1' : '0';
-        if (blocked) {
-            btn.classList.add('crack-ui-empty-send-blocked');
-        }
-        else {
-            clearEmptySendGuardButton(btn);
-        }
+        setEmptySendGuardButtonState(btn, blocked);
     }
     function scheduleEmptySendGuardUiUpdate() {
         if (!scheduleEmptySendGuardUiUpdate._raf) {
@@ -9700,14 +9734,13 @@
     function isSendButton(btn) {
         if (!(btn instanceof HTMLButtonElement))
             return false;
+        // Cheap label/icon checks first: pairing a button with the composer walks nine ancestors per button.
+        const label = `${btn.getAttribute('aria-label') || ''} ${btn.title || ''}`;
+        if (!/전송|보내기|send/i.test(label) && !cmuHasSendIcon(btn))
+            return false;
         if (btn.closest(`#${ID.panel}, [role="dialog"], [data-radix-popper-content-wrapper], [data-radix-dialog-content], [data-radix-dialog-content-wrapper]`))
             return false;
-        if (!findChatInputForSendButton(btn))
-            return false;
-        const label = `${btn.getAttribute('aria-label') || ''} ${btn.title || ''}`;
-        if (/전송|보내기|send/i.test(label))
-            return true;
-        return !!btn.querySelector('path[d^="M18.77 11.13"]');
+        return !!findChatInputForSendButton(btn);
     }
     function bindEmptySendGuard() {
         if (document.documentElement.dataset.cmuSendGuardBound === '1')
@@ -10509,6 +10542,7 @@
         profileButton: true,
         profileBoxButton: true,
         noteButton: true,
+        proseStyleButton: true,
         outputButton: true,
         summaryButton: true,
         imageButton: true,
@@ -10792,6 +10826,8 @@
         summary: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="15" height="15" class="chud-btn-icon"><path d="M16.25 10.8a5.39 5.39 0 1 0 .02 10.78 5.39 5.39 0 0 0-.02-10.78m0 9.16a3.78 3.78 0 1 1 0-7.57 3.78 3.78 0 0 1 0 7.57"></path><path d="M17.02 13.43h-1.5v3.12l2.02 1.55.91-1.2-1.43-1.09z"></path><path d="M6.8 19.54v-3.29h-3V4.15h14.9V9.5h1.6V3.85c0-.72-.58-1.3-1.3-1.3H3.5c-.72 0-1.3.58-1.3 1.3v12.7c0 .72.58 1.3 1.3 1.3h1.7v3.2a.9.9 0 0 0 .89.89q.3 0 .58-.21l3.35-2.81-1.03-1.22z"></path><path d="M16.5 6.72H6v1.6h10.5zM11 10.03H6v1.6h5z"></path></svg>',
         image: '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" class="chud-btn-icon"><path d="m11.7 6.08 6.36 3.67-6.36 3.67z"></path><path fill-rule="evenodd" d="M6.71 3.91c0-.94.76-1.7 1.7-1.7H20.1c.94 0 1.7.76 1.7 1.7V15.6c0 .94-.76 1.7-1.7 1.7h-2.81v2.8c0 .94-.76 1.7-1.7 1.7H3.9a1.7 1.7 0 0 1-1.7-1.7V8.41c0-.94.76-1.7 1.7-1.7h2.81zm1.7-.1a.1.1 0 0 0-.1.1V15.6q0 .1.1.1H20.1a.1.1 0 0 0 .1-.1V3.91a.1.1 0 0 0-.1-.1zm0 13.49h7.28v2.8a.1.1 0 0 1-.1.1H3.9a.1.1 0 0 1-.1-.1V8.41q0-.1.1-.1h2.81v7.29c0 .94.76 1.7 1.7 1.7" clip-rule="evenodd"></path></svg>',
         archive: '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" class="chud-btn-icon"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>',
+        // Site's own "문체 변경" icon from the room panel (2026-10-01).
+        proseStyle: '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" class="chud-btn-icon"><path d="m17.83 7.17 1.07 3.2 3.2 1.07a.6.6 0 0 1 0 1.13l-3.2 1.07-1.07 3.2a.6.6 0 0 1-1.13 0l-1.07-3.2-3.2-1.07a.6.6 0 0 1 0-1.13l3.2-1.07 1.07-3.2a.6.6 0 0 1 1.13 0M3.14 13.28a1.28 1.28 0 1 0 0-2.56 1.28 1.28 0 0 0 0 2.56m5.11 0a1.28 1.28 0 1 0 0-2.56 1.28 1.28 0 0 0 0 2.56"></path></svg>',
         external: '<svg class="chud-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3h7v7"/><path d="M10 14 21 3"/><path d="M21 14v7H3V3h7"/></svg>',
         roomBackground: '<svg width="15.5" height="15.5" viewBox="0 0 24 24" fill="currentColor" class="chud-btn-icon chud-room-bg-icon" aria-hidden="true"><path d="M4.2 4.2c0-.88.72-1.6 1.6-1.6h12.4c.88 0 1.6.72 1.6 1.6v15.6c0 .88-.72 1.6-1.6 1.6H5.8c-.88 0-1.6-.72-1.6-1.6zm1.6 0v15.6h12.4V4.2z"></path><path d="M7.4 16.7 10.2 13l2 2.35 2.7-3.45 2.1 4.8z"></path><circle cx="9.1" cy="8.1" r="1.45"></circle></svg>',
         sceneBlur: '<svg width="15.5" height="15.5" viewBox="0 0 24 24" fill="currentColor" class="chud-btn-icon chud-scene-blur-icon" aria-hidden="true"><path d="M4.2 4.2c0-.88.72-1.6 1.6-1.6h12.4c.88 0 1.6.72 1.6 1.6v15.6c0 .88-.72 1.6-1.6 1.6H5.8c-.88 0-1.6-.72-1.6-1.6zm1.6 0v15.6h12.4V4.2z"></path><path d="M8.1 8.2h7.8v1.45H8.1zm0 3.05h7.8v1.45H8.1zm0 3.05h4.6v1.45H8.1z" opacity=".65"></path><path d="M17.4 13.1c1.52 1.44 2.35 2.67 2.35 3.74a2.35 2.35 0 1 1-4.7 0c0-1.07.83-2.3 2.35-3.74"></path></svg>',
@@ -10846,9 +10882,15 @@
         catch (_) { }
         return window;
     }
+    let cmuExternalThemeCheckedAt = 0;
     function detectCmuExternalThemeProvider() {
         if (cmuExternalThemeProvider)
             return cmuExternalThemeProvider;
+        // Asked per message group; a theme that loads later is still picked up within two seconds
+        // (and immediately when its DOM markers appear, which clears this timestamp).
+        if (Date.now() - cmuExternalThemeCheckedAt < 2000)
+            return '';
+        cmuExternalThemeCheckedAt = Date.now();
         const w = getPublicWindow();
         const hasFlag = (name) => {
             try {
@@ -10904,8 +10946,9 @@
     }
     function findExternalClickable(patterns, visibleOnly = false) {
         const regs = patterns.map(p => p instanceof RegExp ? p : new RegExp(String(p).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
-        for (const el of document.querySelectorAll('button, [role="button"], a')) {
-            if (isOwnElement(el) || el.closest('[data-message-group-id], [contenteditable="true"]')) continue;
+        // Let the selector engine skip message buttons; long rooms hold thousands of them.
+        for (const el of document.querySelectorAll(':is(button, [role="button"], a):not([data-message-group-id] *):not([contenteditable="true"] *)')) {
+            if (isOwnElement(el)) continue;
             const text = getClickableLabelLite(el);
             if (!text || text.length > 120 || !regs.some(re => re.test(text))) continue;
             if (!visibleOnly || visibleClickable(el)) return el;
@@ -11275,7 +11318,8 @@
     function refreshSideAvailability(force = false) {
         const now = Date.now();
         const age = now - Number(DASH_SIDE.availableAt || 0);
-        if (DASH_SIDE.available && age < (force ? 1500 : 4000)) {
+        // Late extensions are caught by their ready events and the route probes; routine checks can be sparse.
+        if (DASH_SIDE.available && age < (force ? 1500 : 15000)) {
             return DASH_SIDE.available;
         }
         DASH_SIDE.availableAt = now;
@@ -11287,6 +11331,8 @@
             profileButton: true,
             profileBoxButton: isProfileBoxInstalledLite(),
             noteButton: true,
+            // Character chats have no prose style presets.
+            proseStyleButton: !cmuIsCharacterChatPath(),
             outputButton: true,
             summaryButton: true,
             startButton: true,
@@ -11448,22 +11494,36 @@
         showToast('AI 요약 준비 중 · 잠시 후 자동으로 열림');
         return true;
     }
+    let cmuSideAvailabilitySignature = '';
     function refreshIntegratedSideButtonsLite() {
         try {
             DASH_SIDE.availableAt = 0;
-            refreshSideAvailability(true);
+            // Seven route-change probes wait for late extensions; rebuild the composer blocks only when one appeared.
+            const signature = JSON.stringify(refreshSideAvailability(true));
+            if (signature === cmuSideAvailabilitySignature && document.getElementById(ID.dashboardSidebar)?.isConnected)
+                return false;
+            cmuSideAvailabilitySignature = signature;
             ensureInlineBlocks();
             applySideVisible();
+            return true;
         }
-        catch (_) { }
+        catch (_) {
+            return true;
+        }
     }
     cmuListen(document, 'crack-ai-summary:ready', refreshIntegratedSideButtonsLite);
     cmuListen(document, 'wish-rp-manager:ready', refreshIntegratedSideButtonsLite);
+    let cmuSideRouteProbeToken = 0;
     function scheduleIntegratedSideButtonsRouteRefreshLite() {
+        if (!settings.dashboardSidebar)
+            return;
+        // Extensions are already loaded on in-app navigation; stop probing after two unchanged results.
+        const token = ++cmuSideRouteProbeToken;
+        let unchanged = 0;
         [0, 120, 320, 700, 1300, 2200, 3600].forEach(ms => setTimeout(() => {
-            if (!isChatRoomPath())
+            if (token !== cmuSideRouteProbeToken || unchanged >= 2 || !isChatRoomPath())
                 return;
-            refreshIntegratedSideButtonsLite();
+            unchanged = refreshIntegratedSideButtonsLite() ? 0 : unchanged + 1;
         }, ms));
     }
     function getStartSettingTriggerLite() {
@@ -11657,6 +11717,7 @@
                 profileButton: makeSideButton('profileButton', 'chud-profile-btn', '대화 프로필', SIDE_ICON.profile, () => clickFirst([/대화\s*프로필/], '대화 프로필')),
                 profileBoxButton: makeSideButton('profileBoxButton', 'chud-profile-box-btn', '프로필 박스', SIDE_ICON.profileBox, openProfileBoxLite),
                 noteButton: makeSideButton('noteButton', 'chud-note-btn', '유저 노트', SIDE_ICON.note, () => clickFirst([/유저\s*노트/], '유저 노트')),
+                proseStyleButton: makeSideButton('proseStyleButton', 'chud-prose-style-btn', '문체 변경', SIDE_ICON.proseStyle, () => clickFirst([/문체\s*변경/], '문체 변경')),
                 outputButton: makeSideButton('outputButton', 'chud-output-btn', '답변 길이 및 생각 조절', SIDE_ICON.output, openNativeOutputSettings),
                 summaryButton: makeSideButton('summaryButton', 'chud-summary-btn', '요약 메모리', SIDE_ICON.summary, openSummaryMemoryLite),
                 imageButton: makeSideButton('imageButton', 'chud-image-btn', '이미지 ON/OFF', SIDE_ICON.image, openNativeSituationImageToggleLite),
@@ -11675,7 +11736,7 @@
             buttons.profileButton.dataset.sideKey = 'nativeProfileButton';
             buttons.profileBoxButton.dataset.cpmExternalProfileLauncher = 'true';
             DASH_SIDE.btns = buttons;
-            content.append(buttons.modelButton, buttons.themeButton, buttons.episodeModeButton, buttons.guideButton, buttons.profileButton, buttons.profileBoxButton, buttons.noteButton, buttons.outputButton, buttons.summaryButton, buttons.imageButton, buttons.archiveButton, buttons.roomBackgroundButton, buttons.scenePainterButton, buttons.wishManagerButton, buttons.sceneBlurButton, buttons.startButton, buttons.loreButton, buttons.translatorButton, buttons.aiSummaryButton, buttons.gameHudButton);
+            content.append(buttons.modelButton, buttons.themeButton, buttons.episodeModeButton, buttons.guideButton, buttons.profileButton, buttons.profileBoxButton, buttons.noteButton, buttons.proseStyleButton, buttons.outputButton, buttons.summaryButton, buttons.imageButton, buttons.archiveButton, buttons.roomBackgroundButton, buttons.scenePainterButton, buttons.wishManagerButton, buttons.sceneBlurButton, buttons.startButton, buttons.loreButton, buttons.translatorButton, buttons.aiSummaryButton, buttons.gameHudButton);
             bar.append(content);
         }
         if (bar.parentElement !== shell)
@@ -11683,7 +11744,6 @@
         DASH_SIDE.el = bar;
         refreshSideAvailability();
         applySideVisible();
-        applyDashboardLayout(shell, input);
     }
     function removeDashboardSidebar() {
         document.getElementById(ID.dashboardSidebar)?.remove();
@@ -11754,9 +11814,15 @@
             bar.style.removeProperty('visibility');
         }
     }
+    const DASH_BAR_SCROLL = new WeakMap();
     function applyDashboardBarScroll(bar, scrollTop) {
         if (!bar || !DASH_SCROLL.shell || bar.parentElement !== DASH_SCROLL.shell)
             return;
+        // Layout passes re-run this without scrolling; skip identical style writes.
+        const key = `${scrollTop}|${bar.style.top}`;
+        if (DASH_BAR_SCROLL.get(bar) === key && bar.style.transform)
+            return;
+        DASH_BAR_SCROLL.set(bar, key);
         const baseTop = parseFloat(bar.style.top) || 0;
         const height = Math.max(1, bar.offsetHeight || 1);
         const clippedTop = Math.max(0, scrollTop - baseTop);
@@ -11887,7 +11953,10 @@
             return;
         }
         let bar = document.getElementById(ID.dashboard);
+        // Composer re-renders call this repeatedly; only a new/moved bar, a room change or missing data needs a fetch.
+        let needsUpdate = !DASH.state.logs;
         if (!bar) {
+            needsUpdate = true;
             bar = document.createElement('div');
             bar.id = ID.dashboard;
             bar.addEventListener('pointerdown', () => { DASH.touchHold = true; }, true);
@@ -11920,14 +11989,20 @@
         else {
             DASH.textSpan = bar.querySelector('#chud-info-text');
         }
-        if (bar.parentElement !== shell)
+        if (bar.parentElement !== shell) {
             shell.insertBefore(bar, shell.firstChild || null);
+            needsUpdate = true;
+        }
         DASH.el = bar;
         const currentChatId = getChatId();
-        if (currentChatId && DASH.state.chatId && DASH.state.chatId !== currentChatId)
-            clearDashboardForRoom(currentChatId);
-        applyDashboardLayout(shell, input);
-        scheduleDashboardUpdate(true);
+        if (currentChatId && DASH.state.chatId !== currentChatId) {
+            if (DASH.state.chatId)
+                clearDashboardForRoom(currentChatId);
+            needsUpdate = true;
+        }
+        // ensureInlineBlocks applies the shared layout once after the sidebar and the info bar.
+        if (needsUpdate)
+            scheduleDashboardUpdate(true);
     }
     function syncDashMenu() {
         const visible = getDashVisible();
@@ -11953,33 +12028,9 @@
         return role === 'assistant' || role === 'char' || role === 'character' || role === 'bot' || role === 'ai';
     }
     function isRawPrologueMessage(msg) {
+        if (msg?.isIntroMessage === true)
+            return true;
         return /prologue|opening|intro/i.test(String(msg?.type || msg?.messageType || msg?.source || msg?.subType || msg?.message?.type || ''));
-    }
-    function pickRawMessageArray(json) {
-        const candidates = [
-            json?.data?.messages,
-            json?.messages,
-            json?.data?.items,
-            json?.items,
-            json?.data?.list,
-            json?.list,
-            json?.data,
-        ];
-        for (const v of candidates) {
-            if (Array.isArray(v))
-                return v;
-        }
-        return [];
-    }
-    function pickRawMessageCursor(json) {
-        const data = json?.data && typeof json.data === 'object' ? json.data : json;
-        return data?.nextCursor
-            || data?.next_cursor
-            || data?.next
-            || data?.cursor
-            || json?.nextCursor
-            || json?.next_cursor
-            || '';
     }
     async function fetchRawMessagePage(chatId, cursor = '') {
         return cmuSharedMessagePage(chatId, cursor);
@@ -12251,11 +12302,19 @@
         DASH_LOGS_INFLIGHT.set(chatId, task);
         return task;
     }
+    // Boot, late boots and composer re-renders each schedule a dashboard update; reuse one balance read.
+    const DASH_BALANCE = { at: 0, value: null };
     async function fetchBalance() {
+        if (getDashVisible().cracker === false)
+            return DASH.state.balance;
+        if (DASH_BALANCE.at && Date.now() - DASH_BALANCE.at < 10000)
+            return DASH_BALANCE.value;
         try {
             const json = await apiGet('https://crack-api.wrtn.ai/crack-cash/crackers');
             const q = json?.data?.quantity;
-            return typeof q === 'number' ? q : null;
+            DASH_BALANCE.value = typeof q === 'number' ? q : null;
+            DASH_BALANCE.at = Date.now();
+            return DASH_BALANCE.value;
         }
         catch (_) {
             return null;
@@ -12334,6 +12393,8 @@
     }
     function clearDashboardForRoom(chatId) {
         DASH.state.chatId = chatId || '';
+        // Numbers of the previous room must not count into the next room's values.
+        DASH_NUM.prev = {};
         DASH.state.logs = null;
         DASH.state.balance = null;
         DASH.state.cumulative = 0;
@@ -12423,9 +12484,10 @@
         const domGroups = justMoved ? 0 : document.querySelectorAll('div[data-message-group-id]').length;
         const turns = logs ? Math.max(0, Number(logs.officialTurnCount ?? logs.userTurnCount) || 0) : (justMoved ? null : Math.max(0, Math.floor(domGroups / 2) - 1));
         const parts = [];
-        const turnText = turns == null ? '—' : `${dashFmt(turns)}${logs?.complete === false ? '+' : ''}`;
-        const turnSummary = `${DASH_ICON.clock}<span style="font-weight:700;">${turnText}</span>턴`;
-        let turnDetail = `${DASH_ICON.clock}<span style="opacity:.75;margin-right:2px;">진행</span><span style="font-weight:700;">${turnText}</span>턴`;
+        // A DOM-based estimate is shown until the message scan finishes; don't animate from it.
+        const turnNum = turns == null ? '—' : dashNum('turn', turns, !!logs, logs?.complete === false ? '+' : '');
+        const turnSummary = `${DASH_ICON.clock}${turnNum}턴`;
+        let turnDetail = `${DASH_ICON.clock}<span style="opacity:.75;margin-right:2px;">진행</span>${turnNum}턴`;
         const hints = logs?.complete === false ? ['일부 집계'] : [];
         if (logs?.userTurnCount > 0)
             hints.push(`유저 ${dashFmt(logs.userTurnCount)}개`);
@@ -12439,14 +12501,14 @@
             turnDetail += `&nbsp;<span style="opacity:.75;">(${hints.join(' · ')})</span>`;
         parts.push({ key: 'turn', summaryHtml: turnSummary, detailHtml: turnDetail });
         const cum = DASH.state.cumulative;
-        const cumSummary = `${DASH_ICON.bittenCracker}<span style="font-weight:700;">${dashFmt(cum)}</span>개`;
-        const cumDetail = `${DASH_ICON.bittenCracker}<span style="opacity:.75;margin-right:2px;">누적 사용 크래커 · 추정 포함</span><span style="font-weight:700;">${dashFmt(cum)}</span>개`;
+        const cumSummary = `${DASH_ICON.bittenCracker}${dashNum('cumulative', cum)}개`;
+        const cumDetail = `${DASH_ICON.bittenCracker}<span style="opacity:.75;margin-right:2px;">누적 사용 크래커 · 추정 포함</span>${dashNum('cumulative', cum)}개`;
         parts.push({ key: 'cumulative', summaryHtml: cumSummary, detailHtml: cumDetail });
         const bal = DASH.state.balance;
         if (bal !== null && bal !== undefined) {
             const b = Number(bal) || 0;
-            const balSummary = `${DASH_ICON.cracker}<span style="font-weight:700;">${dashFmt(b)}</span>개`;
-            const balDetail = `${DASH_ICON.cracker}<span style="opacity:.75;margin-right:2px;">잔여</span><span style="font-weight:700;">${dashFmt(b)}</span>개`;
+            const balSummary = `${DASH_ICON.cracker}${dashNum('cracker', b)}개`;
+            const balDetail = `${DASH_ICON.cracker}<span style="opacity:.75;margin-right:2px;">잔여</span>${dashNum('cracker', b)}개`;
             parts.push({ key: 'cracker', summaryHtml: balSummary, detailHtml: balDetail });
         }
         else {
@@ -12454,7 +12516,7 @@
         }
         const diff = DASH.state.lastDiff || 0;
         if (diff > 0) {
-            const html = `<span style="display:inline-flex;align-items:center;"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="margin-right:2px;flex-shrink:0;"><polygon points="4,8 20,8 12,18"></polygon></svg><span style="font-weight:700;">${dashFmt(diff)}</span>개</span>`;
+            const html = `<span style="display:inline-flex;align-items:center;"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="margin-right:2px;flex-shrink:0;"><polygon points="4,8 20,8 12,18"></polygon></svg>${dashNum('deducted', diff)}개</span>`;
             parts.push({ key: 'deducted', summaryHtml: html, detailHtml: html });
         }
         const vis = parts.filter(p => visible[p.key] !== false);
@@ -12463,6 +12525,60 @@
             return;
         textSpan.innerHTML = html || '<span class="chud-part">대시보드 대기중…</span>';
         DASH.lastHtml = html;
+        animateDashboardNumbers(textSpan);
+    }
+    // Count-up on change only: a few frames of text updates plus a transform-only bump; nothing runs while idle.
+    const DASH_NUM = { prev: {}, frame: 0 };
+    function dashNum(key, value, exact = true, suffix = '') {
+        const n = Math.max(0, Number(value) || 0);
+        return `<span class="chud-num" data-num-key="${key}" data-num="${n}"${exact ? '' : ' data-num-estimate="1"'}${suffix ? ` data-num-suffix="${suffix}"` : ''} style="font-weight:700;">${dashFmt(n)}${suffix}</span>`;
+    }
+    function dashNumberAnimationWanted() {
+        if (settings.dashboardNumberAnimation === false || document.hidden)
+            return false;
+        try {
+            return !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+        }
+        catch (_) {
+            return true;
+        }
+    }
+    function animateDashboardNumbers(root) {
+        if (DASH_NUM.frame) {
+            cancelAnimationFrame(DASH_NUM.frame);
+            DASH_NUM.frame = 0;
+        }
+        const animate = dashNumberAnimationWanted();
+        const jobs = [];
+        const seen = new Set();
+        for (const el of root.querySelectorAll('.chud-num[data-num-key]')) {
+            const key = el.dataset.numKey;
+            const to = Number(el.dataset.num);
+            if (!Number.isFinite(to) || el.dataset.numEstimate === '1')
+                continue;
+            const from = DASH_NUM.prev[key];
+            if (!seen.has(key))
+                DASH_NUM.prev[key] = to;
+            seen.add(key);
+            if (!animate || from === undefined || from === to)
+                continue;
+            el.classList.add(to > from ? 'chud-num-up' : 'chud-num-down');
+            jobs.push({ el, from, to, suffix: el.dataset.numSuffix || '' });
+        }
+        if (!jobs.length)
+            return;
+        const start = performance.now();
+        const duration = 450;
+        const step = now => {
+            const t = Math.min(1, (now - start) / duration);
+            const eased = 1 - Math.pow(1 - t, 3);
+            for (const job of jobs) {
+                if (job.el.isConnected)
+                    job.el.textContent = dashFmt(Math.round(job.from + (job.to - job.from) * eased)) + job.suffix;
+            }
+            DASH_NUM.frame = t < 1 ? requestAnimationFrame(step) : 0;
+        };
+        DASH_NUM.frame = requestAnimationFrame(step);
     }
     function getOrCreateDashTabId() {
         try {
@@ -12512,19 +12628,6 @@
                 return Math.abs(v);
         }
         return 0;
-    }
-    function objectIdTime(id) {
-        if (!/^[a-f0-9]{24}$/i.test(String(id || '')))
-            return 0;
-        const sec = parseInt(String(id).slice(0, 8), 16);
-        return Number.isFinite(sec) && sec > 0 ? sec * 1000 : 0;
-    }
-    function getHistoryRecordTime(rec) {
-        const raw = rec?.date || rec?.createdAt || rec?.created_at || rec?.updatedAt || rec?.timestamp || rec?.time || '';
-        const t = new Date(raw).getTime();
-        if (Number.isFinite(t) && t > 0)
-            return t;
-        return objectIdTime(rec?._id || rec?.id || rec?.historyId || rec?.transactionId || '');
     }
     function makeHistoryKey(rec) {
         const id = rec?._id || rec?.id || rec?.historyId || rec?.transactionId || '';
@@ -12642,6 +12745,7 @@
             else
                 expireDashboardRoomStats(chatId);
         }
+        DASH_BALANCE.at = 0;
         if (getChatId() === chatId)
             scheduleDashboardUpdate(true);
 
@@ -13338,9 +13442,16 @@
         finally { RS.discoveryPromise = null; }
     }
 
-  async function fetchYameStatus() {
-    return igxRequestJson(null, { url: RS.yameStatus + '?t=' + Date.now(), envelope: false });
-  }
+    // The status server takes seconds to answer and measures every 5 minutes; room changes reuse a recent answer.
+    const YAME_CACHE = { at: 0, value: null, promise: null };
+    async function fetchYameStatus({ force = false } = {}) {
+        if (!force && YAME_CACHE.value && Date.now() - YAME_CACHE.at < 30000) return YAME_CACHE.value;
+        if (YAME_CACHE.promise) return YAME_CACHE.promise;
+        YAME_CACHE.promise = igxRequestJson(null, { url: RS.yameStatus + '?t=' + Date.now(), envelope: false })
+            .then(value => { YAME_CACHE.value = value; YAME_CACHE.at = Date.now(); return value; })
+            .finally(() => { YAME_CACHE.promise = null; });
+        return YAME_CACHE.promise;
+    }
     function normalizeYamePayload(payload) {
         const normalized = new Map();
         if (!payload || !Array.isArray(payload.models)) return normalized;
@@ -13413,7 +13524,7 @@
             const igxModels = models.filter(model => model.source !== 'yame');
 
             const yameTask = yameModels.length
-                ? fetchYameStatus().then(value => {
+                ? fetchYameStatus({ force: manual }).then(value => {
                     if (igxCanRequest()) {
                       const records = normalizeYamePayload(value);
                       for (const model of yameModels) {
@@ -13601,7 +13712,9 @@
         if (BADGE.apiPromise) return BADGE.apiPromise;
         const task = Promise.resolve().then(async () => {
             // The same first page serves statistics, badges, draft confirmation and copy.
-            if (force || !room.first || Date.now() - room.firstAt > 1600)
+            // Pages the site loads (scrolling up) are already remembered through the response hook, so a cache reset
+            // alone must not re-download the head page; unknown new messages take the forced refresh path instead.
+            if (force || !room.first || Date.now() - room.firstAt > 60000)
                 await cmuSharedMessagePage(chatId, '', force);
             const messages = [...room.messages.values()].sort((a, b) => messageIdOf(b).localeCompare(messageIdOf(a)));
             const idMap = new Map(messages.map((msg, index) => [messageIdOf(msg), { msg, index }]));
@@ -15361,6 +15474,10 @@
         const gdToken = apiToken ? null : cmiGdTokenFor(resolved?.messageId || '');
         const token = apiToken || gdToken || null;
         if (!token) {
+            // A DOM-only pass runs before every API refresh; keep the resolved icon instead of flashing it.
+            const old = group.querySelector('.cmi-model-badge');
+            if (resolved?.source === 'dom' && old && old.dataset.messageId === String(resolved.messageId || ''))
+                return;
             cmiClearModelIcon(group);
             return;
         }
@@ -15459,21 +15576,7 @@
         const map = cmiGdLoadMap();
         return map[messageId] || null;
     }
-    const CMI_DELETE_API_RE = /\/crack-gen\/v\d+\/chats\/([^/?#]+)\/messages\/([^/?#]+)/i;
     const CMI_DELETE_META = Symbol('cmuModelDeleteMeta');
-    function cmiParseDeleteRequest(method, url) {
-        if (String(method || '').toUpperCase() !== 'DELETE')
-            return null;
-        const match = String(url || '').match(CMI_DELETE_API_RE);
-        if (!match)
-            return null;
-        try {
-            return { chatId: decodeURIComponent(match[1]), messageId: decodeURIComponent(match[2]) };
-        }
-        catch (_) {
-            return { chatId: match[1], messageId: match[2] };
-        }
-    }
     function cmiRecordSuccessfulDeletion(chatId, messageId) {
         chatId = String(chatId || '').trim();
         messageId = String(messageId || '').trim();
@@ -16555,7 +16658,7 @@
             document.getElementById('chud-info-menu')?.remove();
             document.getElementById('igx-live-popup')?.remove();
         }
-        if (settings.dashboardSidebar)
+        if (settings.dashboardSidebar && isChatRoomPath())
             refreshSideAvailability(late);
         ensureInlineBlocks();
         if (!late)
@@ -16642,7 +16745,8 @@
         return node instanceof Element && !!(node.matches?.('#sgb-bg-root, #sgb-bg-style') || node.querySelector?.('#sgb-bg-root, #sgb-bg-style'));
     }
     function cmuNodeMayAffectSideAvailability(node) {
-        if (!settings.dashboardSidebar || !(node instanceof Element) || node.closest?.('[data-message-group-id], ' + CMU_ROUTER_POPUP_SELECTOR))
+        // Older messages loading into the chat scroller never add extension launchers.
+        if (!settings.dashboardSidebar || !(node instanceof Element) || !isChatRoomPath() || node.closest?.('.stick-to-bottom, [data-message-group-id], ' + CMU_ROUTER_POPUP_SELECTOR))
             return false;
         if (observedScope?.contains?.(node) || cmuCachedChatInput?.contains?.(node))
             return false;
@@ -16715,7 +16819,7 @@
         const popupDirty = CMU_DOM_ROUTER.popupDirty;
         const themeDirty = CMU_DOM_ROUTER.themeDirty;
         const nativeModelDirty = CMU_DOM_ROUTER.nativeModelDirty;
-        const sideDirty = CMU_DOM_ROUTER.sideDirty && settings.dashboardSidebar;
+        const sideDirty = CMU_DOM_ROUTER.sideDirty && settings.dashboardSidebar && isChatRoomPath();
         const statDirty = CMU_DOM_ROUTER.statDirty;
         const groups = Array.from(CMU_DOM_ROUTER.messageGroups);
         const markdowns = Array.from(CMU_DOM_ROUTER.markdownNodes);
@@ -16998,6 +17102,7 @@
             for (const node of roots) {
                 if (cmuNodeTouchesExternalThemeMarker(node)) {
                     cmuExternalThemeProvider = '';
+                    cmuExternalThemeCheckedAt = 0;
                     CMU_DOM_ROUTER.themeDirty = true;
                     dirty = true;
                 }
@@ -17109,11 +17214,16 @@
         if (CMU_THEME_STATE.quoteWraps instanceof Map)
             CMU_THEME_STATE.quoteWraps.clear();
     }
+    // True until the first sweep, then only after CMU decorates again; non-chat pages skip the 30-attribute scan.
+    let cmuThemeDecorationsDirty = true;
     function clearThemeDecorations() {
         if (isCmuExternalThemeActive()) {
             clearCmuOwnedThemeDecorations();
             return;
         }
+        if (!cmuThemeDecorationsDirty)
+            return;
+        cmuThemeDecorationsDirty = false;
         const names = [
             'data-cmu-theme-message-group', 'data-cmu-theme-novel-group', 'data-cmu-theme-bubble', 'data-cmu-theme-bubble-fallback', 'data-cmu-theme-input-host', 'data-cmu-theme-input-box', 'data-cmu-theme-codeblock', 'data-cmu-theme-codeblock-head', 'data-cmu-theme-codeblock-body', 'data-cmu-theme-radiosonde-skin', 'data-cmu-theme-radiosonde-head', 'data-cmu-theme-radiosonde-part',
             'data-sgb-message-group', 'data-sgb-novel-group', 'data-sgb-bubble-parent', 'data-sgb-bubble', 'data-sgb-bubble-fallback', 'data-sgb-edit-bubble', 'data-sgb-edit-box', 'data-sgb-input-host', 'data-sgb-input-box', 'data-sgb-codeblock', 'data-sgb-codeblock-head', 'data-sgb-codeblock-body', 'data-sgb-radiosonde-skin', 'data-sgb-radiosonde-head', 'data-sgb-radiosonde-barline', 'data-sgb-radiosonde-part'
@@ -17337,11 +17447,12 @@
         }
         catch (_) { }
     }
-    function cmuPruneStaleQuoteWraps() {
+    // Records hold the original text nodes, which keep a left room's message DOM alive; prune on route changes too.
+    function cmuPruneStaleQuoteWraps(force = false) {
         const wraps = CMU_THEME_STATE.quoteWraps;
-        if (!(wraps instanceof Map) || wraps.size < 400) return;
+        if (!(wraps instanceof Map) || (!force && wraps.size < 60)) return;
         const now = Date.now();
-        if (now - (CMU_THEME_STATE.lastQuotePruneAt || 0) < 2000) return;
+        if (!force && now - (CMU_THEME_STATE.lastQuotePruneAt || 0) < 2000) return;
         CMU_THEME_STATE.lastQuotePruneAt = now;
         for (const [groupId, record] of wraps) {
             const nodes = Array.isArray(record?.insertedNodes) ? record.insertedNodes : [];
@@ -17478,15 +17589,13 @@
             });
         });
     }
-    function decorateThemeCodeblocks() {
-        document.querySelectorAll('main .wrtn-codeblock, main pre').forEach(decorateThemeCodeblock);
-    }
     function decorateThemeSkin() {
         applyState();
         if (!themeSkinEnabled()) {
             clearThemeDecorations();
             return;
         }
+        cmuThemeDecorationsDirty = true;
         decorateThemeBubbles();
         decorateThemeInputAndRadiosondeBorderless();
         decorateThemeQuotes();
@@ -17494,6 +17603,7 @@
     function decorateThemeSubset(groups) {
         if (!themeSkinEnabled())
             return;
+        cmuThemeDecorationsDirty = true;
         for (const group of groups || []) {
             if (!(group instanceof HTMLElement) || !group.isConnected)
                 continue;
@@ -17540,6 +17650,7 @@
     function decorateThemeQuotesSubset(markdowns) {
         if (!themeSkinEnabled() || Date.now() < Number(CMU_THEME_STATE.quoteHealUntil || 0))
             return;
+        cmuThemeDecorationsDirty = true;
         cmuPruneStaleQuoteWraps();
         for (const md of markdowns || []) {
             if (!(md instanceof HTMLElement) || !md.isConnected || md.closest('.not-wrtn-markdown, #igx-live-popup, #chud-sidebar, #chud-infobar'))
@@ -17651,10 +17762,39 @@
         return null;
     }
     let rsInlineHost = null;
+    const RS_LINE_GAP = 6;
+    function findRsShellAnchor() {
+        const composer = findRsComposerElement();
+        const shell = composer && findComposerShell(composer);
+        if (!(shell instanceof HTMLElement) || shell === composer || !shell.isConnected)
+            return null;
+        const css = getComputedStyle(shell);
+        return css.overflowX === 'visible' && css.overflowY === 'visible' ? shell : null;
+    }
     function clearRsInlineHost() {
         if (rsInlineHost?.isConnected)
-            rsInlineHost.classList.remove('igx-inline-overlay-host');
+            rsInlineHost.classList.remove('igx-inline-overlay-host', 'igx-inline-overlay-pad');
         rsInlineHost = null;
+    }
+    // Keep the line a fixed gap above the composer box. The site's padding above the composer varies (story 14-16px,
+    // character chat none), so add room when needed and place the line from the composer's actual top.
+    function syncRsHostSpacing(host, popup) {
+        const composer = findRsComposerElement();
+        const wrapper = composer && (findComposerShell(composer) || composer.parentElement);
+        if (!(wrapper instanceof HTMLElement) || host === wrapper) {
+            host.classList.remove('igx-inline-overlay-pad');
+            popup?.style.removeProperty('top');
+            return;
+        }
+        const lineHeight = popup?.getBoundingClientRect().height || 20;
+        let offset = wrapper.getBoundingClientRect().top - host.getBoundingClientRect().top;
+        if (offset < lineHeight + RS_LINE_GAP && !host.classList.contains('igx-inline-overlay-pad')) {
+            host.classList.add('igx-inline-overlay-pad');
+            offset = wrapper.getBoundingClientRect().top - host.getBoundingClientRect().top;
+        }
+        const top = `${Math.max(0, Math.round(offset - lineHeight - RS_LINE_GAP))}px`;
+        if (popup && popup.style.getPropertyValue('top') !== top)
+            popup.style.setProperty('top', top, 'important');
     }
     function applyRadiosondeTheme() {
         const popup = document.getElementById('igx-live-popup');
@@ -17681,7 +17821,10 @@
             restartRsAutoTimer();
             return;
         }
-        const host = findRsInlineHost();
+        // Prefer the composer box itself: a line pinned 6px above it stays put when the site's scroll-to-bottom row
+        // above the box appears or collapses. Fall back to the outer area when the box clips its overflow.
+        const shellAnchor = findRsShellAnchor();
+        const host = shellAnchor || findRsInlineHost();
         if (!host)
             return;
         if (rsInlineHost !== host) {
@@ -17704,6 +17847,9 @@
             <button class="igx-btn btn-refresh" type="button" title="갱신" aria-label="라디오존데 갱신">↻</button>
           </div>
         </div>`;
+            // The line lives inside the composer box; keep its taps from reaching the box (and focusing the input).
+            for (const type of ['pointerdown', 'mousedown', 'click'])
+                popup.addEventListener(type, event => event.stopPropagation());
         }
         popup.classList.add('inline');
         bindRadiosondeRefreshButton(popup);
@@ -17711,6 +17857,14 @@
         if (popup.parentNode !== host) {
             host.appendChild(popup);
             renderRsLine();
+        }
+        popup.classList.toggle('igx-anchor-shell', host === shellAnchor);
+        if (host === shellAnchor) {
+            popup.style.removeProperty('top');
+            host.classList.remove('igx-inline-overlay-pad');
+        }
+        else {
+            syncRsHostSpacing(host, popup);
         }
         if (!RS.discovered) {
             RS.discovered = true;
@@ -17751,7 +17905,10 @@
         if (previous?.key === key && previous.first === line.firstChild && line.childElementCount === models.length)
             return;
         const frag = document.createDocumentFragment();
-        const scrollLeft = line.scrollLeft;
+        // Reading scrollLeft here forces a layout on every render; remember the user's own scrolling instead.
+        if (!line.onscroll)
+            line.onscroll = () => { RS.lineScrollLeft = line.scrollLeft; };
+        const scrollLeft = RS.lineScrollLeft || 0;
         for (const model of models) {
             const data = RS.last.get(model.slug) || { status: 'unknown', score: '—', lat: '—' };
             const item = document.createElement('span');
@@ -17766,7 +17923,8 @@
         }
         line.replaceChildren(frag);
         CMU_RS_LINE_RENDER.set(line, { key, first: line.firstChild });
-        line.scrollLeft = scrollLeft;
+        if (scrollLeft)
+            line.scrollLeft = scrollLeft;
     }
     function handleSameChatSelfClick(event) {
         if (!event || event.defaultPrevented)
@@ -17877,6 +18035,8 @@
         DASH_SIDE.available = null;
         DASH_SIDE.availableAt = 0;
         resetAnimatedThumbRouteState();
+        // The previous room's DOM is detached once React swaps the chat area.
+        setTimeout(() => cmuPruneStaleQuoteWraps(true), 1500);
         scheduleInject('route');
         scheduleIntegratedSideButtonsRouteRefreshLite();
         scheduleMobileChatListPopoverLayoutSettle();
@@ -17890,6 +18050,7 @@
     }
     let cmuViewportFrame = 0;
     cmuListen(window, 'resize', () => {
+        cmuViewportWidthCache = 0;
         if (cmuViewportFrame) return;
         cmuViewportFrame = requestAnimationFrame(() => {
         cmuViewportFrame = 0;
@@ -17984,6 +18145,7 @@
     cmiInstallDeleteHooks();
     applyState();
     installCmuUserNoteStateWatch();
+    installCmuDialogTextTouchRelease();
     cmuResumeGlobalGestures('initial');
     bindEmptySendGuard();
     ensureSettingsPanelSilent();
