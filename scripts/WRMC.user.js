@@ -36,6 +36,8 @@
   // Koofr WebDAV backup/restore is optional and manual only (no timers, startup requests or shared server).
   // Core 1.5.0: Firebase gets an optional App Check debug token (required by Firebase AI Logic from 2026-11-02), exchanged on demand without background timers.
   // New provider 'vertex': a Vertex AI service account JSON is signed in-browser (RS256) into a 1-hour access token kept in memory only and renewed 5 minutes early.
+  // UI polish: quiet buttons share the normal button look, delete-type buttons are red-tinted, several dialogs are tidied,
+  // and folds that remember being open build their contents only while open (no new timers or continuous animations).
   // Core 1.4.0: external AI mode (provider '외부 AI 복붙', no API key): [함께 정리] copies a request and [답 붙여넣기] applies the answer.
   // In that mode API-only buttons/options are disabled, and AI candidate selection, embeddings and state-delta requests are off; automatic runs only notify.
   // Panel smoothness: identical redraws skip HTML parsing/diffing, off-screen cards skip layout/paint, and invisible infinite dot animations are removed.
@@ -14285,7 +14287,7 @@ const WUI_CSS = `
 .m3-held-title{display:inline-flex;flex-direction:column;gap:3px;max-width:100%;vertical-align:top}
 .m3-held-title b,.m3-held-title small{overflow-wrap:anywhere}.m3-held-title small{font-size:11px;color:var(--m3-muted,#959eaf);font-weight:400}
 .m3-held-meta{display:flex;flex-wrap:wrap;gap:5px 14px;font-size:11px;color:var(--m3-muted,#959eaf);margin:8px 0}
-.m3-held-field{margin:10px 0}.m3-held-field>b{font-size:12px}.m3-held-row pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;margin:6px 0;padding:9px;border-radius:6px;background:rgba(128,138,158,.06);font:inherit;font-size:12px}
+.m3-held-row pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;margin:6px 0;padding:9px;border-radius:6px;background:rgba(128,138,158,.06);font:inherit;font-size:12px}
 .m3-held-row summary{cursor:pointer;overflow-wrap:anywhere}.m3-held-row .m3-card-actions{justify-content:flex-end}.m3-held-queue-item>.m3-cbx{margin-bottom:6px}
 
 /* ── 1. 토큰 (3.3.47 청묵 값) · 크랙 body[data-theme] 우선, 없으면 OS 설정 ── */
@@ -14500,11 +14502,11 @@ html.rpcm-mobile-keyboard-open #wish-rp-root{top:var(--rpcm-vv-top,0px);bottom:a
 .m3-btn svg.ic{width:15px;height:15px}
 .m3-btn:hover{background:var(--m3-card2)!important;color:var(--m3-fg);border-color:var(--m3-accent-line)!important;transform:translateY(-1px)}
 .m3-btn:active{transform:scale(.96)}
-.m3-btn.quiet{border-color:transparent!important;background:transparent!important}
-.m3-btn.quiet:hover{background:var(--m3-card2)!important}
 .m3-btn.m3-reset-action{color:var(--m3-danger)}
-.m3-btn.danger{color:var(--m3-danger);border-color:transparent!important;background:transparent!important}
-.m3-btn.danger:hover{background:color-mix(in srgb,var(--m3-danger) 12%,transparent)!important}
+.m3-btn.danger{color:var(--m3-danger);border-color:color-mix(in srgb,var(--m3-danger) 45%,transparent)!important;background:color-mix(in srgb,var(--m3-danger) 8%,transparent)!important}
+.m3-btn.danger:hover:not(:disabled){background:color-mix(in srgb,var(--m3-danger) 16%,transparent)!important}
+.m3-native-model .m3-btn.quiet{border-color:transparent!important;background:transparent!important}
+.m3-native-model .m3-btn.quiet:hover{background:var(--m3-card2)!important}
 .m3-btn.mini{padding:5px 10px;font-size:11.5px}
 .m3-btn.primary{color:var(--m3-accent-ink);font-weight:600;border-color:transparent!important;background:transparent!important;isolation:isolate;padding:9px 15px}
 .m3-btn.primary.mini{padding:6px 12px}
@@ -14800,7 +14802,6 @@ html.rpcm-mobile-keyboard-open #wish-rp-root{top:var(--rpcm-vv-top,0px);bottom:a
 .m3-native-alert,.m3-native-message{padding:11px 13px;border-radius:9px;background:var(--m3-card2);overflow-wrap:anywhere}
 .m3-native-alert{color:var(--m3-danger);border-left:3px solid var(--m3-danger)}
 .m3-native-message{color:var(--m3-fg2)}
-.m3-native-reread{display:flex;justify-content:flex-end;margin-top:-5px}
 .m3-native-footer{display:flex;align-items:center;gap:8px;width:100%}
 .m3-native-footer>span{margin-right:auto;color:var(--m3-fg2);font-size:11px}
 @media(max-width:480px){.m3-native-sheet>header{padding:17px 16px 13px}.m3-native-sheet>.m3-dialog-body{padding:15px 16px}.m3-native-sheet>footer{padding:12px 16px}.m3-native-partition{align-items:flex-start;flex-direction:column;gap:9px}.m3-native-controls{width:100%}.m3-native-controls input{flex:1}.m3-native-footer>span{display:none}.m3-native-footer{justify-content:flex-end}.m3-native-steps{font-size:10px;gap:4px}.m3-native-steps span{gap:4px}.m3-native-metrics b{font-size:17px}}
@@ -14891,11 +14892,6 @@ pre.m3-block.tall{max-height:none;min-height:340px}
 .wq-row.is-off{opacity:.55;background:var(--m3-card2)}
 .wq-row .m3-t b{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .wq-row .m3-t small{display:block;font-size:10.5px;color:var(--m3-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.m3-lr-row{border-top:1px solid var(--m3-line2);padding:10px 0}
-.m3-lr-row:first-child{border-top:0}
-.m3-lr-row .m3-t b{font-size:12.5px}
-.m3-lr-row .m3-t small{display:block;font-size:11px;color:var(--m3-muted)}
-.m3-lr-ctl{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
 .m3-dn-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 0;border-top:1px solid var(--m3-line2)}
 .m3-dn-row:first-child{border-top:0}
 .m3-dn-in{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--m3-muted)}
@@ -14954,7 +14950,6 @@ pre.m3-block.tall{max-height:none;min-height:340px}
 .m3-ui .m3-choice{padding:3px 10px;font-size:11.5px;border:1px dashed var(--m3-line);background-color:transparent;background-image:linear-gradient(var(--m3-accent-soft),var(--m3-accent-soft));background-repeat:no-repeat;background-size:0% 100%}
 .m3-ui .m3-choice.is-on{background-size:100% 100%;border:1px solid var(--m3-accent-line)}
 .m3-choice.is-on>i{opacity:1}
-.m3-lr-ctl .m3-choice{font-size:11px}
 /* ── 5-B. 버튼·아이콘 모션 (wfx) ── */
 @media (hover:hover){.m3-ui :is(.m3-btn,.m3-ico,.m3-inject,.m3-hit,.m3-opt,.m3-nav button,.m3-bottomnav button):hover{--fx:1}}
 .m3-ui :is(.m3-btn,.m3-ico,.m3-inject,.m3-hit,.m3-opt,.m3-nav button,.m3-bottomnav button):is(:focus-visible,:active){--fx:1}
@@ -15040,6 +15035,119 @@ pre.m3-block.tall{max-height:none;min-height:340px}
 #wish-rp-root .wp-save-error{color:var(--m3-bad);font-size:11px}
 #wish-rp-root .wp-rel-dh{flex-wrap:wrap}
 #wish-rp-root .wp-rel-dh b{min-width:100px;overflow-wrap:anywhere}
+/* 1.5.0 UI 다듬기 */
+/* 설정: 자동으로 정해지는 숫자(기억 정리 주기)는 입력칸 테두리 없이 */
+#wish-rp-root .m3-step:has(input[readonly]){border-color:transparent;background:transparent}
+/* 팝업 아래 버튼 줄: PC에서 크기 통일 (전체 재구축은 자체 디자인 유지, 모바일은 1.5.0 그대로) */
+@media (min-width:521px){#wish-rp-root .m3-sheet:not(.m3-native-sheet)>footer .m3-btn{padding:8px 13px;font-size:12.5px;min-height:34px;justify-content:center}}
+/* 2차 결과 비교: 닫기는 줄이 바뀌어도 오른쪽 끝 */
+#wish-rp-root .m3-sheet>footer>.m3-btn[data-act=secondaryApply]+.m3-btn[data-act=closeDlg]{margin-left:auto}
+#wish-rp-root .wp-foot-l{display:flex;flex-wrap:wrap;gap:6px}
+@media (max-width:520px){#wish-rp-root .wp-foot-l{flex-basis:100%}}
+/* 테두리가 생긴 조용한 버튼끼리 붙지 않게 (간격 없는 패널 안 버튼만) */
+#wish-rp-root .m3-panel>.m3-btn+.m3-btn{margin-left:6px}
+/* 실패·주의 기록 */
+#wish-rp-root .wp-err{padding:13px 14px}
+#wish-rp-root .wp-err-head{display:flex;align-items:center;gap:8px}
+#wish-rp-root .wp-err-head b{flex:1;font-size:13.5px}
+#wish-rp-root .wp-err.is-fail .wp-err-head .m3-tag{color:var(--m3-danger);border-color:color-mix(in srgb,var(--m3-danger) 40%,transparent);background:color-mix(in srgb,var(--m3-danger) 10%,transparent)}
+#wish-rp-root .wp-err-meta{display:flex;flex-wrap:wrap;gap:2px 10px;margin-top:3px;font-size:11.5px;color:var(--m3-muted)}
+#wish-rp-root .wp-err-meta span+span::before{content:"·";margin-right:10px;opacity:.6}
+#wish-rp-root .wp-err-msg{margin:8px 0 10px;color:var(--m3-fg);line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere}
+#wish-rp-root .wp-err-fix{border:1px solid var(--m3-line);border-radius:10px;overflow:hidden;background:var(--m3-card)}
+#wish-rp-root .wp-err-fix>summary{display:flex;align-items:center;gap:8px;padding:8px 11px;cursor:pointer;list-style:none;font-size:12.5px;color:var(--m3-fg2)}
+#wish-rp-root .wp-err-fix>summary::-webkit-details-marker{display:none}
+#wish-rp-root .wp-err-fix>summary:hover{background:var(--m3-hi)}
+#wish-rp-root .wp-err-fix>summary[aria-disabled="true"]{cursor:default}
+#wish-rp-root .wp-err-fix>summary[aria-disabled="true"]:hover{background:none}
+#wish-rp-root .wp-err-fix>summary:focus-visible,#wish-rp-root .wp-ip-fold>summary:focus-visible{outline-offset:-2px;border-radius:8px}
+#wish-rp-root .wp-err-cat{font-size:11px;font-weight:650;padding:2px 8px;border-radius:999px;background:var(--m3-accent-soft);color:var(--m3-accent);border:1px solid var(--m3-accent-line)}
+#wish-rp-root .wp-err-sum{flex:1;font-weight:600}
+#wish-rp-root .wp-err-chev{width:15px;height:15px;color:var(--m3-muted);transition:transform .25s}
+#wish-rp-root .wp-err-fix[open] .wp-err-chev{transform:rotate(180deg)}
+#wish-rp-root .wp-err-body{display:flex;flex-direction:column;gap:6px;padding:2px 10px 10px}
+#wish-rp-root .wp-err-row{display:grid;grid-template-columns:68px minmax(0,1fr);gap:10px;align-items:baseline;padding:8px 10px;border-radius:8px;background:var(--m3-card2)}
+#wish-rp-root .wp-err-row>span{font-size:11.5px;font-weight:650;color:var(--m3-fg2)}
+#wish-rp-root .wp-err-row>p{margin:0;font-size:12.5px;line-height:1.6;color:var(--m3-fg);white-space:pre-wrap;overflow-wrap:anywhere}
+#wish-rp-root .wp-err-row.is-next{background:var(--m3-accent-soft);box-shadow:inset 3px 0 0 var(--m3-accent)}
+#wish-rp-root .wp-err-row.is-next>span{color:var(--m3-accent)}
+#wish-rp-root .wp-err-chips{display:flex;flex-wrap:wrap;gap:4px;padding-top:2px}
+#wish-rp-root .wp-err-chips span{font-size:10.5px;padding:2px 7px;border-radius:6px;border:1px solid var(--m3-line);color:var(--m3-muted);overflow-wrap:anywhere}
+@media (max-width:520px){#wish-rp-root .wp-err-row{grid-template-columns:1fr;gap:2px}}
+/* 2차 결과 비교: 제목 줄 */
+#wish-rp-root .wp-sec-head{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:28px;margin-bottom:6px}
+/* 보류 대기열: 상자 겹침 줄이기 (페이지 목록은 한 건씩 카드 유지) */
+#wish-rp-root .m3-held-queue-item{display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:10px;align-items:start;padding:4px 12px}
+#wish-rp-root .m3-held-queue-item>.m3-cbx{border:0!important;background:none!important;padding:10px!important;margin:3px -10px 0!important;min-height:0;box-shadow:none!important;overflow:visible;border-radius:0!important;grid-template-columns:18px;gap:0}
+#wish-rp-root .m3-held-queue-item>.m3-cbx>span:not(.m3-box){position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+#wish-rp-root .m3-held-queue-item>.m3-held-row{border:0;margin:0;padding:0}
+#wish-rp-root .m3-held-row>.m3-fold2{border:0;margin:0;border-radius:0}
+#wish-rp-root .m3-held-row>.m3-fold2>summary{padding:10px 2px}
+#wish-rp-root .m3-held-row>.m3-fold2>.m3-fb{padding-left:2px;padding-right:2px}
+#wish-rp-root .m3-held-row .m3-card-actions{padding:0 2px}
+#wish-rp-root .m3-held-row .m3-card-actions:empty{display:none}
+/* 보류 제안 본문 */
+#wish-rp-root .m3-held-meta{display:flex;flex-wrap:wrap;gap:2px 12px;font-size:11.5px;color:var(--m3-muted)}
+#wish-rp-root .m3-held-meta+.m3-muted{margin:2px 0 8px;font-size:11.5px}
+#wish-rp-root .wp-hb{display:flex;flex-direction:column;gap:5px}
+#wish-rp-root .wp-hb-row{display:grid;grid-template-columns:88px minmax(0,1fr);gap:10px;align-items:baseline;padding:7px 10px;border-radius:8px;background:var(--m3-card2)}
+#wish-rp-root .wp-hb-row>span{font-size:11.5px;font-weight:650;color:var(--m3-fg2)}
+#wish-rp-root .wp-hb-row>p{margin:0;font-size:12.5px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--m3-fg);max-height:360px;overflow:auto}
+#wish-rp-root .wp-hb-row.is-main{background:var(--m3-accent-soft);box-shadow:inset 3px 0 0 var(--m3-accent)}
+#wish-rp-root .wp-hb-row.is-main>span{color:var(--m3-accent)}
+#wish-rp-root .wp-hb-raw{margin:8px 0 2px}
+#wish-rp-root .wp-hb-raw pre{margin:0;font-size:11.5px}
+@media (max-width:520px){#wish-rp-root .wp-hb-row{grid-template-columns:1fr;gap:2px}}
+/* 가져오기 · 인물 연결 */
+#wish-rp-root .wp-ip-head .m3-muted+.m3-muted{margin-top:4px}
+#wish-rp-root .wp-ip-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;margin:10px 0}
+#wish-rp-root .wp-ip-grid>.m3-panel{margin:0;min-width:0}
+#wish-rp-root .wp-ip-label{font-size:12px;color:var(--m3-fg2);margin-bottom:6px}
+#wish-rp-root .wp-ip-list{max-height:280px;overflow:auto;display:flex;flex-direction:column}
+#wish-rp-root .wp-ip-occ+.wp-ip-occ{border-top:1px solid var(--m3-line2)}
+#wish-rp-root .wp-ip-occ>.wp-ip-t{display:flex;flex-direction:column;padding:8px 2px}
+#wish-rp-root .wp-ip-t b{font-size:13px;font-weight:650}
+#wish-rp-root .wp-ip-t small{font-size:11.5px;color:var(--m3-muted);overflow-wrap:anywhere}
+#wish-rp-root .wp-ip-fold>summary{display:flex;align-items:center;gap:8px;padding:8px 2px;cursor:pointer;list-style:none}
+#wish-rp-root .wp-ip-fold>summary::-webkit-details-marker{display:none}
+#wish-rp-root .wp-ip-fold>summary .wp-ip-t{flex:1;display:flex;flex-direction:column;min-width:0}
+#wish-rp-root .wp-ip-fold>summary::after{content:"";flex:none;box-sizing:border-box;width:5px;height:5px;margin:0 5px 2px;border:solid var(--m3-muted);border-width:0 1px 1px 0;transform:rotate(45deg);transition:transform .25s}
+#wish-rp-root .wp-ip-fold[open]>summary::after{transform:translateY(1.5px) rotate(225deg)}
+#wish-rp-root .wp-ip-fold>p{margin:0 2px 10px;padding:8px 10px;border-radius:8px;background:var(--m3-card2);font-size:12.5px;line-height:1.6;color:var(--m3-fg2);white-space:pre-wrap;overflow-wrap:anywhere}
+#wish-rp-root .wp-ip-map{display:flex;align-items:center;gap:6px;margin:6px 0}
+#wish-rp-root .wp-ip-map>span{flex:none}
+#wish-rp-root .wp-ip-arrow{font-style:normal;color:var(--m3-muted)}
+#wish-rp-root .wp-ip-text{box-sizing:border-box;width:100%;min-height:200px;resize:vertical;padding:9px 11px;border-radius:8px;border:1px solid var(--m3-line);background:var(--m3-card2)!important;color:var(--m3-fg2);font:400 12px/1.65 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;box-shadow:none}
+#wish-rp-root .wp-ip-report{margin:0 0 10px}
+@media (max-width:600px){#wish-rp-root .wp-ip-grid{grid-template-columns:minmax(0,1fr)}}
+/* 인지 정보 편집 · 주입 로그 고르기: 중간 폭 팝업 */
+#wish-rp-root .m3-sheet.wp-sheet-md{width:min(700px,100%)}
+#wish-rp-root .wp-fact-top{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr) minmax(0,1.15fr);gap:0 10px}
+#wish-rp-root .wp-know{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);column-gap:18px}
+#wish-rp-root .wp-know>.m3-krow{min-width:0;border-top:1px solid var(--m3-line2)}
+#wish-rp-root .wp-know .m3-krow b{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:600px){#wish-rp-root .wp-fact-top{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}#wish-rp-root .wp-fact-top>.m3-fld:first-child{grid-column:1/-1}#wish-rp-root .wp-know{grid-template-columns:minmax(0,1fr)}}
+/* 날짜로그 도구줄: 패널이 좁으면 버튼 이름을 줄이고 줄바꿈 (화면 폭이 아니라 패널 폭 기준) */
+#wish-rp-root .wp-lp-pre{font-style:normal}
+@container (max-width:490px){
+#wish-rp-root .wp-lp-pre{display:none}
+#wish-rp-root .m3-logbar .m3-actions.m3-grow{flex:1 0 auto;min-width:0}
+#wish-rp-root .m3-logbar .m3-actions.m3-grow>*{flex:none}
+#wish-rp-root .m3-logbar .m3-actions.m3-grow>.m3-btn>svg{display:none}
+#wish-rp-root .m3-logbar>.m3-choice{margin-left:auto}
+}
+@container (max-width:349px){#wish-rp-root .m3-logbar{flex-wrap:wrap}#wish-rp-root .m3-logbar .m3-actions.m3-grow{flex-basis:100%}}
+@container (max-width:375px){#wish-rp-root .m3-logbar:has(.m3-dupwarn){flex-wrap:wrap}#wish-rp-root .m3-logbar:has(.m3-dupwarn) .m3-actions.m3-grow{flex-basis:100%}}
+/* 주입 로그 고르기 */
+#wish-rp-root .wp-lr-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px 12px;padding:9px 2px}
+#wish-rp-root .wp-lr-row+.wp-lr-row{border-top:1px solid var(--m3-line2)}
+#wish-rp-root .wp-lr-t{min-width:0;display:flex;flex-direction:column}
+#wish-rp-root .wp-lr-t b,#wish-rp-root .wp-lr-t small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#wish-rp-root .wp-lr-t b{font-size:12.5px}
+#wish-rp-root .wp-lr-t small{font-size:11px;color:var(--m3-muted)}
+#wish-rp-root .wp-lr-ctl{display:flex;gap:4px}
+#wish-rp-root .wp-lr-ctl .m3-choice{padding:3px 9px;font-size:11px}
+@media (max-width:600px){#wish-rp-root .wp-lr-row{grid-template-columns:minmax(0,1fr)}#wish-rp-root .wp-lr-t b{white-space:normal;overflow-wrap:anywhere}}
 `;
 /* =====================================================================
    Wish 청묵 UI 모듈 (WUI) — 화면 전용. 이 함수 전체를 그대로 붙여 넣는다.
@@ -15310,7 +15418,7 @@ function createWishUI(AD) {
     for(const b of V.logs.blocks){const k=b.undated||!b.date||b.date==='날짜 미상'?'날짜 미상':b.date;if(!g.has(k))g.set(k,[]);g.get(k).push(b);}
     const groups=[...g].filter(([d])=>d!=='날짜 미상').reverse().concat([...g].filter(([d])=>d==='날짜 미상'));
     const dupN=Number(V.logs.dupDates)||0,moreOpen=S.openSet.has('log-more');
-    return `<div class="m3-toolbar m3-logbar"><div class="m3-actions m3-grow">${`${btn('달력','logCalendar',{cls:'mini',icon:'calendar'})}`}${btn('주입 로그 고르기','logPick',{cls:'mini',icon:'pin',feat:'logPick'})}${dupN&&has('dedupe')?`<button type="button" class="m3-dupwarn" data-act="logDedupe" title="중복 날짜 정리">${ic('alert')}<span>중복 <b>${dupN}</b></span></button>`:''}</div>${chip('주입','logs.inject',V.logs.inject)}<details class="m3-more" data-key="log-more" data-open="log-more"${moreOpen?' open':''}><summary class="m3-btn mini m3-more-btn" aria-label="정리 도구">${ic('more')}</summary><div class="m3-more-menu" role="menu"><div class="m3-more-h">정리 도구</div>${btn('원문 편집','raw',{arg:'log',cls:'mini',icon:'edit'})}${btn('날짜 표기 정리','logNorm',{cls:'mini',icon:'date',feat:'dateNorm'})}${btn('중복 날짜 정리'+(dupN?' · '+dupN+'개':''),'logDedupe',{cls:'mini',icon:'merge',feat:'dedupe'})}</div></details></div>
+    return `<div class="m3-toolbar m3-logbar"><div class="m3-actions m3-grow">${`${btn('달력','logCalendar',{cls:'mini',icon:'calendar'})}`}${btn('<i class="wp-lp-pre">주입 </i>로그 고르기','logPick',{cls:'mini',icon:'pin',feat:'logPick'})}${dupN&&has('dedupe')?`<button type="button" class="m3-dupwarn" data-act="logDedupe" title="중복 날짜 정리">${ic('alert')}<span>중복 <b>${dupN}</b></span></button>`:''}</div>${chip('주입','logs.inject',V.logs.inject)}<details class="m3-more" data-key="log-more" data-open="log-more"${moreOpen?' open':''}><summary class="m3-btn mini m3-more-btn" aria-label="정리 도구">${ic('more')}</summary><div class="m3-more-menu" role="menu"><div class="m3-more-h">정리 도구</div>${btn('원문 편집','raw',{arg:'log',cls:'mini',icon:'edit'})}${btn('날짜 표기 정리','logNorm',{cls:'mini',icon:'date',feat:'dateNorm'})}${btn('중복 날짜 정리'+(dupN?' · '+dupN+'개':''),'logDedupe',{cls:'mini',icon:'merge',feat:'dedupe'})}</div></details></div>
     ${groups.map(([d,bs])=>`<section class="m3-date-group" data-key="dg-${esc(d)}"><div class="m3-date-head"><b>${esc(d)}</b><small>${bs.length}블록</small></div>${bs.map(b=>card('lg-'+b.id,esc(String(b.title).replace(/^\d+\.\d+\/\d+\s+/,'')),fmt(b.size)+'자',(S.openSet.has('lg-'+b.id)?logWhyBox(b)+`<p>${esc(b.body)}</p>`:''),btn('편집','lgEdit',{arg:b.id,cls:'mini',icon:'edit'})+btn('삭제','lgDel',{arg:b.id,cls:'danger mini'}),logBadges(b))).join('')}</section>`).join('')||empty('날짜로그가 비어 있습니다.')}`;
   }
     function heldHeader(domain,title='보류 제안'){
@@ -15320,12 +15428,13 @@ function createWishUI(AD) {
     return `<section class="m3-panel m3-held-summary" data-key="held-summary-${domain}"><div class="m3-row"><b class="m3-grow">${esc(title)} ${fmt(n)}건</b>${group.usage>=.5?tag('정리 권장'):''}${domain==='F'&&n?btn('목록 비우기','heldDiscard',{arg:JSON.stringify([domain,'*']),cls:'quiet mini'}):''}</div>${n?'<p class="m3-muted">아직 주입·AI 기억에 반영되지 않은 제안입니다.</p>':''}${m?`<div class="m3-row m3-topgap"><span class="m3-muted m3-grow">대기 ${fmt(m)}건 · 장부 용량 초과로 보관 중(주입·AI 0자)</span>${btn('대기열 보기','heldQueueOpen',{arg:domain,cls:'mini',icon:'list'})}</div>${why?'<p class="m3-muted">'+esc(why)+'</p>':''}`:''}${V.held.error?'<p class="m3-error">대기열 확인 실패 · '+esc(V.held.error)+'</p>':''}</section>`;
   }
   function heldBody(domain,r){
-    const v=WishHeld.heldView(domain,r),p=v.proposal,field=(label,value)=>`<div class="m3-held-field"><b>${esc(label)}</b><pre>${esc(String(value??''))}</pre></div>`;
-    let text='';
-    if(domain==='F')text=field('종류 · 제목',(L.lore[p.type]||p.type||'자료')+' · '+String(p.title||''))+field('고정 제안',p.anchor?'켜기':'끄기')+field('별칭',(p.aliases||[]).join(' · '))+field('검색어',(p.keywords||[]).join(' · '))+field('제안 전문',p.full)+`<details><summary>짧은 요약 · 한 줄 요약</summary>${field('짧은 요약',p.compact)}${field('한 줄 요약',p.micro)}</details>`;
-    else if(domain==='A'){const c=v.checked||{};text=field('현재 관계 제안',c.current)+field('새 전환',c.milestone)+field('남은 쟁점',({keep:'기존 유지',clear:'해제',replace:'교체'})[c.unresolvedAction]+' · '+String(c.unresolved||''))+field('근거 전문',(c.evidence||[]).map(e=>(e.role||'')+': '+String(e.quote||'')).join('\n\n'));}
-    else text=field('변경 제안',v2ReviewDescription(r,V.held?.cog))+field(r.kind==='speech'?'호칭·말투 제안':'AI가 제안한 인지 본문',r.kind==='speech'?[p.address,p.register,p.note].filter(Boolean).join('\n'):p.content)+(r.group?'<p class="m3-muted">제안 묶음 · '+esc(r.group)+'</p>':'');
-    return text+`<details><summary>원본 제안 전체</summary><pre>${esc(JSON.stringify(p,null,2))}</pre></details>`;
+    const v = WishHeld.heldView(domain, r), p = v.proposal, rows = [];
+    const add = (label, value, cls = '') => { const t = String(value ?? '').trim(); if (t) rows.push(`<div class="wp-hb-row ${cls}"><span>${esc(label)}</span><p>${esc(t)}</p></div>`); };
+    if (domain === 'F') { add('종류 · 제목', (L.lore[p.type] || p.type || '자료') + ' · ' + String(p.title || ''), 'is-main'); add('고정 제안', p.anchor ? '켜기' : '끄기'); add('별칭', (p.aliases || []).join(' · ')); add('검색어', (p.keywords || []).join(' · ')); add('제안 전문', p.full); add('짧은 요약', p.compact); add('한 줄 요약', p.micro); }
+    else if (domain === 'A') { const c = v.checked || {}, act = { keep: '기존 유지', clear: '해제', replace: '교체' }[c.unresolvedAction] || ''; add('현재 관계 제안', c.current, 'is-main'); add('새 전환', c.milestone); add('남은 쟁점', [act, c.unresolved].filter(Boolean).join(' · ')); add('근거', (c.evidence || []).map(e => { const who = e.role === 'user' ? 'USER' : e.role === 'assistant' ? 'CHAR/서술' : ''; return (who ? who + ' · ' : '') + String(e.quote || ''); }).join('\n\n')); }
+    else { add('변경 제안', v2ReviewDescription(r, V.held?.cog), 'is-main'); add(r.kind === 'speech' ? '호칭·말투 제안' : '인지 본문 제안', r.kind === 'speech' ? [p.address, p.register, p.note].filter(Boolean).join('\n') : p.content); if (r.group) add('제안 묶음', r.group); }
+    const k = 'held-raw-' + r.id;
+    return `<div class="wp-hb">${rows.join('')}</div><details class="m3-fold2 wp-hb-raw" data-open="${esc(k)}"${S.openSet.has(k) ? ' open' : ''}><summary>원본 제안 전체${ic('chev')}</summary>${S.openSet.has(k) ? `<div class="m3-fb"><pre>${esc(JSON.stringify(p, null, 2))}</pre></div>` : ''}</details>`;
   }
   function heldRow(domain,r,key,options={}){
     const v=WishHeld.heldView(domain,r),open=S.openSet.has(key),orphan=WishHeldUI.orphan(domain,r),message=WishHeldUI.message(state.currentRoom,r),missing=message==='기준 메시지 없음';
@@ -15611,7 +15720,7 @@ vExternalRebuild(run||ExternalBundles.busy())+
   }
   function roomNameDialogView(d){
     const local=d.draft.mode==='local';
-    return sheet(d,{title:local?'Wish 표시 이름':'크랙 채팅방 이름 변경',desc:d.story?'작품·캐릭터: '+esc(d.story):'실제 방 ID: '+esc(shortId(apiChatIdOf(d.room))),body:`${d.busy?`<p class="m3-muted">서버 확인 중…</p>`:''}${d.error?`<div class="m3-status m3-warning"><span>${esc(d.error)}</span></div>`:''}${field('이름',inp(D(d,'title'),d.draft.title||'','채팅방 이름'))}<p class="m3-muted">${local?'현재는 Wish 안의 표시 이름만 바꿉니다. 실제 크랙 제목 변경으로 표시하지 않습니다.':'확인 후 실제 채팅방 title만 변경합니다. 작품·캐릭터 이름, 기억·대사·자료 본문은 수정하지 않습니다.'}</p><div class="m3-actions">${btn('서버 이름 다시 확인','roomNameReload',{arg:d.id,cls:'mini',icon:'refresh',dis:d.busy})}${!d.confirmed?btn('Wish 표시 이름만 사용','roomNameLocal',{arg:d.id,cls:'quiet mini',dis:d.busy}):''}${d.confirmed?btn('서버 이름으로 표시','roomNameUseServer',{arg:d.id,cls:'quiet mini',dis:d.busy}):''}</div>`,foot:`${SP}${closeBtn(d,'취소')}${btn(d.busy?'처리 중…':local?'표시 이름 저장':'크랙 제목 변경','roomNameSave',{arg:d.id,cls:'primary',dis:d.busy||(!local&&!d.confirmed)})}`});
+    return sheet(d,{title:local?'Wish 표시 이름':'크랙 채팅방 이름 변경',desc:d.story?'작품·캐릭터: '+esc(d.story):'실제 방 ID: '+esc(shortId(apiChatIdOf(d.room))),body:`${d.busy?`<p class="m3-muted">서버 확인 중…</p>`:''}${d.error?`<div class="m3-status m3-warning"><span>${esc(d.error)}</span></div>`:''}${field('이름',inp(D(d,'title'),d.draft.title||'','채팅방 이름'))}<p class="m3-muted">${local?'현재는 Wish 안의 표시 이름만 바꿉니다. 실제 크랙 제목 변경으로 표시하지 않습니다.':'확인 후 실제 채팅방 title만 변경합니다. 작품·캐릭터 이름, 기억·대사·자료 본문은 수정하지 않습니다.'}</p>`,foot:`<span class="wp-foot-l">${btn('서버 이름 다시 확인','roomNameReload',{arg:d.id,cls:'quiet mini',icon:'refresh',dis:d.busy})}${!d.confirmed?btn('Wish 표시 이름만 사용','roomNameLocal',{arg:d.id,cls:'quiet mini',dis:d.busy}):''}${d.confirmed?btn('서버 이름으로 표시','roomNameUseServer',{arg:d.id,cls:'quiet mini',dis:d.busy}):''}</span>${SP}${closeBtn(d,'취소')}${btn(d.busy?'처리 중…':local?'표시 이름 저장':'크랙 제목 변경','roomNameSave',{arg:d.id,cls:'primary',dis:d.busy||(!local&&!d.confirmed)})}`});
   }
   function loreSplitDialogView(d){
     const q=String(d.draft.query||'').trim().toLowerCase(),all=d.pack.entries.map((e,i)=>({key:'e'+i,title:e.name,body:loreTextAtLevel(e,'full'),type:e.type})),rows=all.filter(r=>!q||(r.title+'\n'+r.body).toLowerCase().includes(q)),n=all.filter(r=>d.draft.pick[r.key]).length;
@@ -16325,22 +16434,19 @@ diff:`<div class="m3-shell">
     },
 
     importPeople(d){
-      const x=d.draft,isNew=x.target==='new',selected=d.candidates.find(p=>p.id===x.target);
-      const choices=[['','연결할 인물 선택'],...d.candidates.map(p=>[p.id,`${p.name} · ${p.isPlayer?'PC':'CHAR'} · ${p.origin}`]),['new','새 인물 직접 등록'],['skip','이 이름이 들어간 항목만 빼고 가져오기']];
-      return sheet(d,{title:'가져오기 · 인물 연결',wide:true,desc:'이름 연결을 확인한 뒤 기존·변경 후 비교로 넘어갑니다.',body:`
-        <section class="m3-panel"><div class="m3-panel-head"><b>${esc(d.personName||'(빈 이름)')}</b>${tag(d.ambiguous?'이름 중복':'연결 필요')}</div><p class="m3-muted">${d.ambiguous?'같은 이름·별칭에 여러 인물이 연결됩니다. 누구를 뜻하는지 선택해 주세요.':'JSON에서 이 이름을 사용했지만, 가져올 인물 목록과 연결되지 않았습니다. 채팅에 등장하지 않는다는 뜻은 아닙니다.'}</p></section>
-        <style>.m3-import-people-grid>section{min-width:0;overflow-wrap:anywhere}.m3-import-issue{padding:10px 0;border-bottom:1px solid var(--border,rgba(140,150,180,.18))}.m3-import-issue code{display:block;margin-top:6px;user-select:text}.m3-import-issue pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}.m3-import-report{box-sizing:border-box;width:100%;min-height:200px;resize:vertical;background:transparent;color:inherit;border:1px solid var(--border,rgba(140,150,180,.25));border-radius:8px;padding:12px;font:inherit}@media(max-width:600px){.m3-import-people-grid{grid-template-columns:minmax(0,1fr)!important}}</style><div class="m3-grid2 m3-import-people-grid"><section class="m3-panel"><b>사용된 위치 · ${d.occurrences.length}곳</b><div style="max-height:280px;overflow:auto">${d.occurrences.slice(0,80).map(r=>`<div class="m3-import-issue"><b>${esc(r.label)}</b><code>${esc(r.jsonPath)}</code><p class="m3-muted">입력값: ${esc(JSON.stringify(r.value))}</p>${r.context?`<details><summary>해당 항목 내용</summary><pre>${esc(r.context)}</pre></details>`:''}</div>`).join('')}${d.occurrences.length>80?`<p class="m3-muted">외 ${d.occurrences.length-80}곳 · 같은 이름의 모든 참조에 적용</p>`:''}</div></section>
-        <section class="m3-panel">${field('연결할 인물',selc(D(d,'target'),x.target,choices,'m3-select',` aria-label="연결할 인물"${d.busy?' disabled':''}`))}
-        ${selected?`<p class="m3-muted">${esc(selected.aliases.length?'별칭: '+selected.aliases.join(', '):'등록된 별칭 없음')}</p><p>가져올 결과의 <b>${esc(d.personName||'(빈 이름)')}</b> → <b>${esc(selected.name)}</b></p>`:''}
-        ${x.target==='skip'?`<p class="m3-muted">인지의 알고 있음·모름 목록에서는 이 이름만 빼고, 관계·호칭·은폐는 이 이름이 들어간 항목만 빼고 가져옵니다. 나머지는 그대로 가져옵니다.</p>`:''}
-        ${isNew?field('인물 이름',inp(D(d,'name'),x.name,'이름'))+field('별칭 · 선택',inp(D(d,'aliases'),x.aliases,'쉼표로 구분'))+field('인물 구분',selc(D(d,'role'),x.role,[['char','CHAR'],['pc','PC']])):''}
-        <p class="m3-muted">관계·호칭·인지·은폐의 연결 이름만 수정합니다. 대사와 quote 원문은 바꾸지 않습니다. 새 인물의 성격·관계나 근거 문장을 자동 생성하지 않습니다.</p></section></div>
-        <section class="m3-panel"><b>수정 방법</b><p class="m3-muted">${esc(d.advice)}</p><details><summary>오류 상세 · 선택해서 복사</summary><p class="m3-muted">아래 내용에는 인물 이름과 해당 항목의 RP 내용이 포함됩니다. 공유 전 확인해 주세요. 전체 위치를 표시하며 배열 번호는 0부터 시작합니다.</p><textarea class="m3-import-report" readonly aria-label="가져오기 오류 상세" spellcheck="false">${esc(d.report)}</textarea></details></section>
-        <p class="m3-muted">현재 방에는 아직 저장하지 않습니다. 다음 비교 화면에서 최종 적용해야 반영됩니다.</p>${d.error?`<p class="m3-error" role="alert">${esc(d.error)}</p>`:''}`,
-        foot:`${SP}${closeBtn(d,'취소')}${btn(d.busy?'확인 중…':x.target==='skip'?'빼고 계속':'연결 후 계속','importPeopleContinue',{arg:d.id,cls:'primary',icon:'check',dis:d.busy||!x.target})}`});
+      const x = d.draft, isNew = x.target === 'new', selected = d.candidates.find(p => p.id === x.target);
+      const choices = [['', '연결할 인물 선택'], ...d.candidates.map(p => [p.id, `${p.name} · ${p.isPlayer ? 'PC' : 'CHAR'} · ${p.origin}`]), ['new', '새 인물 직접 등록'], ['skip', '이 이름이 들어간 항목만 빼고 가져오기']];
+      const occ = d.occurrences.slice(0, 80).map((r, i) => { const k = 'ip-occ-' + d.id + '-' + i, open = S.openSet.has(k); return `<div class="wp-ip-occ">${r.context ? `<details class="wp-ip-fold" data-open="${esc(k)}"${open ? ' open' : ''}><summary><span class="wp-ip-t"><b>${esc(r.label)}</b><small>${esc(r.jsonPath)} · 입력값 ${esc(JSON.stringify(r.value))}</small></span></summary>${open ? `<p>${esc(r.context)}</p>` : ''}</details>` : `<span class="wp-ip-t"><b>${esc(r.label)}</b><small>${esc(r.jsonPath)} · 입력값 ${esc(JSON.stringify(r.value))}</small></span>`}</div>`; }).join('');
+      const rk = 'ip-report-' + d.id, ropen = S.openSet.has(rk);
+      const body = `<section class="m3-panel wp-ip-head"><div class="m3-panel-head"><b>${esc(d.personName || '(빈 이름)')}</b>${tag(d.ambiguous ? '이름 중복' : '연결 필요')}</div><p class="m3-muted">${d.ambiguous ? '같은 이름·별칭에 여러 인물이 연결됩니다. 누구를 뜻하는지 선택해 주세요.' : 'JSON에서 이 이름을 사용했지만, 가져올 인물 목록과 연결되지 않았습니다. 채팅에 등장하지 않는다는 뜻은 아닙니다.'}</p><p class="m3-muted"><b>수정 방법</b> · ${esc(d.advice)}</p></section>
+<div class="wp-ip-grid"><section class="m3-panel"><div class="wp-ip-label">사용된 위치 · ${d.occurrences.length}곳</div><div class="wp-ip-list">${occ}${d.occurrences.length > 80 ? `<p class="m3-muted">외 ${d.occurrences.length - 80}곳 · 같은 이름의 모든 참조에 적용</p>` : ''}</div></section>
+<section class="m3-panel">${field('연결할 인물', selc(D(d, 'target'), x.target, choices, 'm3-select', ` aria-label="연결할 인물"${d.busy ? ' disabled' : ''}`))}${selected ? `<p class="m3-muted">${esc(selected.aliases.length ? '별칭: ' + selected.aliases.join(', ') : '등록된 별칭 없음')}</p><p class="wp-ip-map"><span class="m3-muted">가져올 결과의</span><b>${esc(d.personName || '(빈 이름)')}</b><i class="wp-ip-arrow">→</i><b>${esc(selected.name)}</b></p>` : ''}${x.target === 'skip' ? `<p class="m3-muted">인지의 알고 있음·모름 목록에서는 이 이름만 빼고, 관계·호칭·은폐는 이 이름이 들어간 항목만 빼고 가져옵니다. 나머지는 그대로 가져옵니다.</p>` : ''}${isNew ? `<div class="m3-grid2">${field('인물 이름', inp(D(d, 'name'), x.name, '이름'))}${field('인물 구분', selc(D(d, 'role'), x.role, [['char', 'CHAR'], ['pc', 'PC']]))}</div>${field('별칭 · 선택', inp(D(d, 'aliases'), x.aliases, '쉼표로 구분'))}` : ''}<p class="m3-muted">관계·호칭·인지·은폐의 연결 이름만 수정합니다. 대사와 quote 원문은 바꾸지 않습니다. 새 인물의 성격·관계나 근거 문장을 자동 생성하지 않습니다.</p></section></div>
+<details class="m3-fold2 wp-ip-report" data-open="${esc(rk)}"${ropen ? ' open' : ''}><summary>오류 상세 · 선택해서 복사${ic('chev')}</summary>${ropen ? `<div class="m3-fb"><p class="m3-muted">아래 내용에는 인물 이름과 해당 항목의 RP 내용이 포함됩니다. 공유 전 확인해 주세요. 전체 위치를 표시하며 배열 번호는 0부터 시작합니다.</p><textarea class="wp-ip-text" readonly aria-label="가져오기 오류 상세" spellcheck="false">${esc(d.report)}</textarea></div>` : ''}</details>
+<p class="m3-muted">현재 방에는 아직 저장하지 않습니다. 다음 비교 화면에서 최종 적용해야 반영됩니다.</p>${d.error ? `<p class="m3-error" role="alert">${esc(d.error)}</p>` : ''}`;
+      return sheet(d, { title: '가져오기 · 인물 연결', wide: true, desc: '이름 연결을 확인한 뒤 기존·변경 후 비교로 넘어갑니다.', body, foot: `${SP}${closeBtn(d, '취소')}${btn(d.busy ? '확인 중…' : x.target === 'skip' ? '빼고 계속' : '연결 후 계속', 'importPeopleContinue', { arg: d.id, cls: 'primary', icon: 'check', dis: d.busy || !x.target })}` });
     },
 
-    relationshipPreflight(d){return sheet(d,{title:'재구축 가져오기 전 확인',body:`<div class="m3-status m3-warning">${ic('alert')}<span>${esc(d.message)}</span></div><p class="m3-muted">파일 선택과 적용 때 모두 검사합니다. 주입이나 기존 자료를 자동으로 바꾸지 않습니다.</p>`,foot:`${SP}${closeBtn(d,'확인')}`});},
+    relationshipPreflight(d){return sheet(d,{title:'재구축 가져오기 전 확인',body:`<div class="m3-status m3-warning m3-bottomgap">${ic('alert')}<span>${esc(d.message)}</span></div><p class="m3-muted">파일 선택과 적용 때 모두 검사합니다. 주입이나 기존 자료를 자동으로 바꾸지 않습니다.</p>`,foot:`${SP}${closeBtn(d,'확인')}`});},
     relationshipReview(d){
       const fields=d.editFields||[],categories=['전체',...new Set(fields.map(f=>f.category))],visible=fields.filter(f=>d.draft.category==='전체'||f.category===d.draft.category),groups=[];
       for(const field of visible){let g=groups.find(g=>g.category===field.category&&g.title===field.title);if(!g){g={key:field.key,category:field.category,title:field.title,fields:[]};groups.push(g);}g.fields.push(field);}
@@ -16386,7 +16492,7 @@ diff:`<div class="m3-shell">
       };
       const compare=v=>{
         const r=v.rows[0],multiple=v.rows.length>1;
-        return `<div class="m3-secondary-compare"><section><b>저장 원문 · 그대로 유지</b><pre>${esc(v.source)}</pre></section><section><b>${r.restore?'원문 사용으로 되돌리기':'외부 AI의 표현 제안'}</b>${r.mode==='editable'?btn(d.draft.editing?.[r.id]?'편집 마침':'편집','secondaryToggleEdit',{arg:d.id+'|'+r.id,icon:d.draft.editing?.[r.id]?'check':'edit',cls:'mini',dis:d.busy}):''}${r.mode==='editable'&&d.draft.editing?.[r.id]?ta(D(d,'edit.'+r.id),Object.hasOwn(d.draft.edit||{},r.id)?d.draft.edit[r.id]:v.next,'최종 표현을 직접 수정',130,` class="m3-review-text" aria-label="${esc(r.title+' · 최종 표현')}"${d.busy?' disabled':''}`):`<pre>${esc(Object.hasOwn(d.draft.edit||{},r.id)?d.draft.edit[r.id]:v.next)}</pre>`}</section></div>${r.issues?.length?`<div class="m3-copy-item-body m3-error"><b>검사 차단${multiple?' · 동일 표현 전체':''}</b><br>${r.issues.map(esc).join('<br>')}</div>`:''}${r.warnings?.length?`<div class="m3-secondary-caution"><b>직접 대조할 사항</b><br>${r.warnings.map(esc).join('<br>')}</div>`:''}`;
+        return `<div class="m3-secondary-compare"><section><div class="wp-sec-head"><b>저장 원문 · 그대로 유지</b></div><pre>${esc(v.source)}</pre></section><section><div class="wp-sec-head"><b>${r.restore?'원문 사용으로 되돌리기':'외부 AI의 표현 제안'}</b>${r.mode==='editable'?btn(d.draft.editing?.[r.id]?'편집 마침':'편집','secondaryToggleEdit',{arg:d.id+'|'+r.id,icon:d.draft.editing?.[r.id]?'check':'edit',cls:'mini',dis:d.busy}):''}</div>${r.mode==='editable'&&d.draft.editing?.[r.id]?ta(D(d,'edit.'+r.id),Object.hasOwn(d.draft.edit||{},r.id)?d.draft.edit[r.id]:v.next,'최종 표현을 직접 수정',130,` class="m3-review-text" aria-label="${esc(r.title+' · 최종 표현')}"${d.busy?' disabled':''}`):`<pre>${esc(Object.hasOwn(d.draft.edit||{},r.id)?d.draft.edit[r.id]:v.next)}</pre>`}</section></div>${r.issues?.length?`<div class="m3-copy-item-body m3-error"><b>검사 차단${multiple?' · 동일 표현 전체':''}</b><br>${r.issues.map(esc).join('<br>')}</div>`:''}${r.warnings?.length?`<div class="m3-secondary-caution"><b>직접 대조할 사항</b><br>${r.warnings.map(esc).join('<br>')}</div>`:''}`;
       };
       const body=visible.slice(0,limit).map(g=>{
         const open=!!d.draft.open[g.id],status=SecondaryRebuild.reviewPickState(g.rows,d.draft.pick),isSame=g.variants.length===1,r=g.rows[0];
@@ -16398,7 +16504,7 @@ diff:`<div class="m3-shell">
       }).join('');
       return sheet(d,{title:'2차 재구축 결과 비교',desc:esc(d.job.label)+' · 사건·팩·원문은 교체하지 않습니다',wide:true,
         body:`<div class="m3-status m3-warning m3-bottomgap">${ic('alert')}<span><b>구조 검사와 의미 검토는 다릅니다.</b><br>ID·누락·보호 표현·수량 표기를 검사했습니다. 숫자가 같아도 주체·대상이 뒤바뀔 수 있습니다. 선택하지 않은 본문의 기존 압축 설정은 유지합니다. 원문 유지 제안을 선택하면 해당 압축본만 해제합니다.<br>적용할 때도 주입이 해제되어 있어야 하며, 생성·자동 정리·복원이 진행 중이면 적용하지 않습니다.</span></div>${overview}<div class="m3-copy-filter">${inp(D(d,'query'),d.draft.query||'','제목·원문·압축 표현 검색')}${selc(D(d,'category'),d.draft.category||'all',[['all','모든 분류'],...audit.map(c=>[c.category,c.label])],'m3-select')}${selc(D(d,'filter'),d.draft.filter,[['changes','변경 제안'],['all','전체 본문'],['kept','원문 유지 제안'],['issues','차단·주의 사항']],'m3-select')}</div><div class="m3-toolbar m3-secondary-toolbar"><span class="m3-muted m3-grow">필터 ${visible.length}개 항목 · 표시 ${Math.min(limit,visible.length)}개<br>선택 ${pickedCards}개 항목 / ${picked.length}개 표현 · ${fmt(saved)}자 절약</span>${btn('전체 선택','secondaryPick',{arg:d.id+'|all',cls:'mini',dis:d.busy})}${btn('선택 해제','secondaryPick',{arg:d.id+'|none',cls:'quiet mini',dis:d.busy})}</div><p class="m3-muted m3-secondary-selection-note">전체 선택은 검색·분류·더보기와 관계없이 이번 결과의 적용 가능한 모든 표현을 선택합니다. 차단·보호 항목은 제외됩니다. 필터는 카드 찾기에만 사용하며 카드 안의 다른 표현도 함께 확인할 수 있습니다.</p>${body||empty('표시할 제안이 없습니다. 원문 유지도 정상 결과입니다.')}${visible.length>limit?btn('더 보기','secondaryMore',{arg:d.id,cls:'mini'}):''}<p class="m3-muted m3-topgap">위 절약량은 선택한 저장 표현의 합계이며 매턴 실제 주입 절약량과 다를 수 있습니다. 원문이 바뀐 압축본은 주입에 사용하지 않습니다.</p><label class="m3-secondary-consent"><input type="checkbox" data-bind="${D(d,'reviewed')}"${d.draft.reviewed?' checked':''}${d.busy?' disabled':''}><span>선택한 본문의 주체·조건·수치·예시와 주의 사항을 원문과 비교했으며, 같은 뜻의 주입용 압축본으로 사용합니다.</span></label>${d.error?`<p class="m3-error" role="alert">${esc(d.error)}</p>`:''}`,
-        foot:`${btn('수정 내용 반영','secondaryEdit',{arg:d.id,icon:'edit',dis:d.busy||!Object.keys(d.draft.edit||{}).length})}${SP}${closeBtn(d,'닫기')}${btn(d.busy?'검증·저장 중…':'선택한 표현 적용','secondaryApply',{arg:d.id,cls:'primary',icon:'check',dis:d.busy||!picked.length||!d.draft.reviewed})}`});
+        foot:`${btn('수정 내용 반영','secondaryEdit',{arg:d.id,icon:'edit',dis:d.busy||!Object.keys(d.draft.edit||{}).length})}${SP}${btn(d.busy?'검증·저장 중…':'선택한 표현 적용','secondaryApply',{arg:d.id,cls:'primary',icon:'check',dis:d.busy||!picked.length||!d.draft.reviewed})}${closeBtn(d,'닫기')}`});
     },
     secondaryManage(d){
       const summary=SecondaryRebuild.summary(d.room);
@@ -16473,7 +16579,7 @@ diff:`<div class="m3-shell">
     roomName:roomNameDialogView,
     loreSplit:loreSplitDialogView,
     /* props: { src, rooms:[{id,label,sum,diff,current}], libs:[{id,label,sum,diff,owner}], draft:{ pick:{} } } → act bkApply(dlgId) */
-    kvSettings(d){const c=d.draft,busy=WishKoofr.view().busy;return sheet(d,{title:'Koofr 연결',body:`<section class="m3-grp"><div class="m3-gt">${ic('cloud')}개인 저장소</div>${field('이메일',inp(D(d,'email'),c.email,'Koofr 가입 이메일'))}${field('앱 비밀번호',inp(D(d,'password'),c.password,'저장된 비밀번호 유지','password'),'Koofr → Preferences → Password에서 Wish용 비밀번호를 만드세요. 로그인 비밀번호와 다릅니다.')}<p class="m3-muted">저장 위치: Koofr / Wish-Core-Backups<br>연결 정보는 이 확장 프로그램에만 저장하며 백업에 포함하지 않습니다.</p><a href="https://app.koofr.net/help/webdav" target="_blank" rel="noopener noreferrer">앱 비밀번호 발급 안내</a></section><div class="m3-status ${c.test==='ok'?'m3-ok':c.test==='err'?'m3-err':''}">${ic(c.test==='ok'?'check':'cloud')}<span>${esc(c.test==='busy'?'연결 확인 중…':c.testMsg||'버튼을 누를 때만 통신합니다. 백업은 암호화하지 않은 JSON 파일입니다.')}</span></div>`,foot:`${btn('연결 테스트','kvTest',{arg:d.id,cls:'mini',dis:busy})}${SP}${closeBtn(d,'취소')}${btn('저장','kvSave',{arg:d.id,cls:'primary',dis:busy})}`});},
+    kvSettings(d){const c=d.draft,busy=WishKoofr.view().busy;return sheet(d,{title:'Koofr 연결',body:`<section class="m3-grp"><div class="m3-gt">${ic('cloud')}개인 저장소</div>${field('이메일',inp(D(d,'email'),c.email,'Koofr 가입 이메일'))}${field('앱 비밀번호',inp(D(d,'password'),c.password,'저장된 비밀번호 유지','password'),'Koofr → Preferences → Password에서 Wish용 비밀번호를 만드세요. 로그인 비밀번호와 다릅니다.')}<p class="m3-muted">저장 위치: Koofr / Wish-Core-Backups<br>연결 정보는 이 확장 프로그램에만 저장하며 백업에 포함하지 않습니다.</p></section><div class="m3-status ${c.test==='ok'?'m3-ok':c.test==='err'?'m3-err':''}">${ic(c.test==='ok'?'check':'cloud')}<span>${esc(c.test==='busy'?'연결 확인 중…':c.testMsg||'버튼을 누를 때만 통신합니다. 백업은 암호화하지 않은 JSON 파일입니다.')}</span></div>`,foot:`${btn('연결 테스트','kvTest',{arg:d.id,cls:'mini',dis:busy})}${SP}${closeBtn(d,'취소')}${btn('저장','kvSave',{arg:d.id,cls:'primary',dis:busy})}`});},
     kvRooms(d){const n=d.rows.filter(r=>d.draft.pick[r.key]).length;return sheet(d,{title:'백업할 방 선택',desc:'같은 이름이어도 방 ID로 구분합니다',body:`<div class="m3-row m3-bottomgap">${btn('현재 방만','kvRoomPick',{arg:d.id+'|current',cls:'mini'})}${btn('전체 선택','kvRoomPick',{arg:d.id+'|all',cls:'mini'})}${btn('선택 해제','kvRoomPick',{arg:d.id+'|none',cls:'quiet mini'})}</div>${d.rows.map(r=>`<label class="m3-cbx ${d.draft.pick[r.key]?'is-on':''}" data-key="kv-${r.key}"><input type="checkbox" data-bind="${D(d,'pick.'+r.key)}"${d.draft.pick[r.key]?' checked':''}><span class="m3-box"></span><span class="m3-t"><b>${esc(r.label)}${r.current?tag('현재 방','ok'):''}</b><small>${esc(r.detail)}</small></span></label>`).join('')||empty('저장된 방이 없습니다.')}<section class="m3-grp m3-topgap">${tog('공용 지침·설정도 함께 저장',D(d,'includeSettings'),d.draft.includeSettings,'선택한 방의 기억·인지·관계·연결 자료집은 항상 함께 저장합니다. API 키는 포함하지 않습니다.')}</section>`,foot:`<span class="m3-muted">${n}개 방 선택</span>${SP}${closeBtn(d,'취소')}${btn('선택한 방 백업','kvRoomAccept',{arg:d.id,cls:'primary',dis:!n})}`});},
     kvList(d){const c=WishKoofr.view(),groups=new Map();d.draft.pick||={};const selecting=!!d.draft.selecting,pick=d.draft.pick,n=c.list.filter(b=>pick[b.id]).length;
       for(const b of c.list){const key=b.deviceId||b.dev||'unknown';if(!groups.has(key))groups.set(key,{id:key,name:b.dev||'이름 없는 기기',mine:b.mine,rows:[]});groups.get(key).rows.push(b);}
@@ -16488,13 +16594,13 @@ diff:`<div class="m3-shell">
       return sheet(d, { title: '복원할 항목 선택', desc: esc(d.src || '백업'), body: `<div class="m3-row m3-bottomgap">${btn('현재 방만', 'bkPick', { arg: d.id + '|cur', cls: 'mini' })}${btn('전체 선택', 'bkPick', { arg: d.id + '|all', cls: 'mini' })}${btn('선택 해제', 'bkPick', { arg: d.id + '|none', cls: 'quiet mini' })}</div>${(d.rooms || []).length ? `<div class="m3-sechead"><b>방</b></div>${d.rooms.map(row).join('')}` : ''}${(d.libs || []).length ? `<div class="m3-sechead"><b>자료집</b></div>${d.libs.map(row).join('')}` : ''}<div class="m3-status m3-topgap">${ic('alert')}<span>${esc(d.note || '현재 숨김 주입은 먼저 안전하게 정리한 뒤 복원합니다. API 키는 백업에 들어 있지 않습니다.')}</span></div>`, foot: `<span class="m3-muted">${n}개 선택</span>${SP}${closeBtn(d, '취소')}${btn('선택 항목 복원', 'bkApply', { arg: d.id, cls: 'primary', icon: 'check', dis: !n })}` });
     },
     /* props: { draft:{ lr:{ [blockId]:{man,pin,ex} } } } — 블록 목록은 V.logs.blocks → act lrApply(dlgId) */
-    logPick(d) {
-      const rows=(d.blocks||[]).map(b=>{const date=b.isUnknown?'날짜 미상':(b.fullDate||[b.month+'월',b.day+'일'].join(' '));return {id:String(b.index),key:b.key,date,undated:date==='날짜 미상',title:b.titleText||b.key||'날짜로그',size:String(b.raw||b.body||'').length,body:b.body||b.raw||''};});
-      const lr = d.draft.lr, blocks = rows, sel = blocks.filter(b => lr[b.id] && lr[b.id].man), chars = sel.reduce((n, b) => n + (b.size || 0), 0), groups = new Map();
-      for (const b of blocks) { const k = (!b.date || b.undated) ? '날짜 미상' : (String(b.date).match(/^(.*?\d+월)/) || [0, b.date])[1]; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(b); }
-      const ch = (b, k, label) => `<button type="button" class="m3-choice ${lr[b.id] && lr[b.id][k] ? 'is-on' : ''}" data-act="lrFlip" data-arg="${d.id}|${esc(b.id)}|${k}" aria-pressed="${!!(lr[b.id] && lr[b.id][k])}"><i></i><em>${label}</em></button>`;
-      return sheet(d, { title: '주입 로그 고르기', desc: '직접 선택은 이번 주입만 · 항상 호출·자동 제외는 계속 유지', wide: true, body: `<div class="m3-status m3-bottomgap">${ic('pin')}<span>직접 선택 <b>&nbsp;${sel.length}개&nbsp;</b> · ${fmt(chars)}자 · 40,000자 안전선 안에서는 제외하지 않은 전체 후보를 포함하고, 초과 시 선별합니다.</span></div>
-      ${[...groups].map(([m, bs]) => fold('lrm-' + m, `<b>${esc(m)}</b> <span class="m3-muted">&nbsp;${bs.length}블록</span>`, bs.map(b => `<div class="m3-lr-row" data-key="lr-${esc(b.id)}"><span class="m3-t"><b>${esc(b.date || '')} · ${esc(b.title)}</b><small>${fmt(b.size)}자 · ${esc(String(b.body || '').slice(0, 46))}…</small></span><div class="m3-lr-ctl">${ch(b, 'man', '직접 선택')}${ch(b, 'pin', '항상 호출')}${ch(b, 'ex', '자동 제외')}</div></div>`).join(''))).join('')}`, foot: `${btn('직접 선택 전체 해제', 'lrClear', { arg: d.id, cls: 'quiet mini' })}${SP}${closeBtn(d, '취소')}${btn('적용', 'lrApply', { arg: d.id, cls: 'primary', icon: 'check' })}` });
+    logPick(d){
+      const rows = (d.blocks || []).map(b => { const date = b.isUnknown ? '날짜 미상' : (b.fullDate || [b.month + '월', b.day + '일'].join(' ')); return { id: String(b.index), key: b.key, date, undated: date === '날짜 미상', title: b.titleText || b.key || '날짜로그', size: String(b.raw || b.body || '').length, body: b.body || b.raw || '' }; });
+      const lr = d.draft.lr, sel = rows.filter(b => lr[b.id] && lr[b.id].man), chars = sel.reduce((n, b) => n + (b.size || 0), 0), groups = new Map();
+      for (const b of rows) { const k = b.undated ? '날짜 미상' : (String(b.date).match(/^(.*?\d+월)/) || [0, b.date])[1]; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(b); }
+      const ch = (b, k, label) => { const on = !!(lr[b.id] && lr[b.id][k]); return `<button type="button" class="m3-choice ${on ? 'is-on' : ''}" data-act="lrFlip" data-arg="${d.id}|${esc(b.id)}|${k}" aria-pressed="${on}"><i></i><em>${label}</em></button>`; };
+      const html = sheet(d, { title: '주입 로그 고르기', desc: '직접 선택은 이번 주입만 · 항상 호출·자동 제외는 계속 유지', body: `<div class="m3-status m3-bottomgap">${ic('pin')}<span>직접 선택 <b>${sel.length}개</b> · ${fmt(chars)}자 · 40,000자 안에서는 제외하지 않은 후보를 모두 넣고, 넘으면 골라 넣습니다.</span></div>${[...groups].map(([m, bs]) => fold('lrm-' + m, `<b>${esc(m)}</b> <span class="m3-muted">&nbsp;${bs.length}블록</span>`, !S.openSet.has('lrm-' + m) ? '' : bs.map(b => `<div class="wp-lr-row" data-key="lr-${esc(b.id)}"><span class="wp-lr-t" title="${esc(b.title)}"><b>${esc(b.title)}</b><small>${b.undated ? '날짜 미상 · ' : ''}${fmt(b.size)}자 · ${esc(String(b.body || '').slice(0, 60))}</small></span><div class="wp-lr-ctl">${ch(b, 'man', '직접 선택')}${ch(b, 'pin', '항상 호출')}${ch(b, 'ex', '자동 제외')}</div></div>`).join(''))).join('')}`, foot: `${btn('직접 선택 전체 해제', 'lrClear', { arg: d.id, cls: 'quiet mini' })}${SP}${closeBtn(d, '취소')}${btn('적용', 'lrApply', { arg: d.id, cls: 'primary', icon: 'check' })}` });
+      return html.replace('class="m3-sheet ', 'class="m3-sheet wp-sheet-md ');
     },
     /* props: { draft:{ year:'', dn:{ [blockId]:{sel,y,m,d} } } } → act dnApply(dlgId) */
     dateNorm(d) {
@@ -16512,7 +16618,7 @@ diff:`<div class="m3-shell">
       const name={A:'관계',C:'인지·호칭',F:'자료집'}[d.domain],selected=d.rows.filter((r,i)=>d.draft.pick['k'+i]).length,visible=d.rows.slice(0,d.draft.limit),group=V.held?.domains?.[d.domain];
       const why={'live-full':'기존 보류를 정리하면 옮길 수 있습니다','adds-too-large':'이번 결과만으로 장부 용량을 넘습니다. 필요 없는 제안을 제외하거나 내보내 주세요','combined':'일부를 정리한 뒤 옮기기를 누르세요'}[group?.reason]||'장부에 옮겨 검토하거나, 선택한 제안을 내보내고 제외할 수 있습니다.';
       const body=`<p class="m3-muted">${esc(why)} · 추가 AI 호출 없음</p>${d.large?'<p class="m3-warning">백업 크기 증가 · 내보내기 후 제외 권장</p>':''}<div class="m3-toolbar"><span class="m3-muted m3-grow">${fmt(d.rows.length)}건 중 ${selected}건 선택</span>${btn('전체 선택','heldQueuePick',{arg:d.id+'|all',cls:'quiet mini',dis:d.busy})}${btn('선택 해제','heldQueuePick',{arg:d.id+'|none',cls:'quiet mini',dis:d.busy})}</div>${visible.map((r,i)=>`<section class="m3-panel m3-held-queue-item"><label class="m3-cbx"><input type="checkbox" data-bind="${D(d,'pick.k'+i)}"${d.draft.pick['k'+i]?' checked':''}${d.busy?' disabled':''}><span class="m3-box"></span><span>이 제안 선택</span></label>${heldRow(d.domain,r,'held-queue-'+d.id+'-'+r.id,{queue:true,dialog:d})}</section>`).join('')||empty('대기 중인 제안이 없습니다.')}${d.rows.length>visible.length?btn('더 보기','heldQueueMore',{arg:d.id,cls:'quiet mini',dis:d.busy}):''}${d.error?'<p class="m3-error" role="alert">'+esc(d.error)+'</p>':''}`;
-      return sheet(d,{title:name+' 보류 대기열',desc:'장부 용량을 넘어 별도로 보관한 제안입니다. 주입과 AI 입력에는 들어가지 않습니다.',wide:true,body,foot:`${btn('선택 JSON 내보내기','heldQueueExport',{arg:d.id,cls:'mini',icon:'down',dis:d.busy||!selected})}${btn('선택 제외','heldQueueDismiss',{arg:d.id,cls:'quiet mini',dis:d.busy||!selected})}${SP}${closeBtn(d)}${btn(d.busy?'처리 중…':'장부로 옮기기','heldQueueMove',{arg:d.id,cls:'primary mini',icon:'check',dis:d.busy||!selected})}`});
+      return sheet(d,{title:name+' 보류 대기열',desc:'장부 용량을 넘어 별도로 보관한 제안입니다. 주입과 AI 입력에는 들어가지 않습니다.',wide:true,body,foot:`<span class="wp-foot-l">${btn('선택 JSON 내보내기','heldQueueExport',{arg:d.id,cls:'mini',icon:'down',dis:d.busy||!selected})}${btn('선택 제외','heldQueueDismiss',{arg:d.id,cls:'quiet mini',dis:d.busy||!selected})}</span>${SP}${closeBtn(d)}${btn(d.busy?'처리 중…':'장부로 옮기기','heldQueueMove',{arg:d.id,cls:'primary mini',icon:'check',dis:d.busy||!selected})}`});
     },
 
 nativeBundle(d) {
@@ -16536,9 +16642,8 @@ nativeBundle(d) {
       const error=x.error||(['failed','paused'].includes(j?.status)?j.message:'');
       const status=x.notice||(!error&&x.busy?j?.message:'')||(applied?'정리한 결과가 저장되었습니다.':'');
       const messages=(legacy?'<div class="m3-native-alert">이전 버전의 새 대화 작업이 남아 있습니다. 대화 읽기를 누르면 전체 정리로 새로 준비할 수 있습니다.</div>':'')+(error?'<div class="m3-native-alert" role="alert">'+esc(error)+'</div>':'')+(status?'<div class="m3-native-message" role="status">'+esc(status)+'</div>':'');
-      const reread=j?'<div class="m3-native-reread">'+btn('대화 다시 읽기','nativeBundleRead',{arg:d.id,cls:'quiet',icon:'refresh',dis:x.busy})+'</div>':'';
       const primary=x.busy?btn('현재 요청 뒤 중단','nativeBundleStop',{}):!j?btn('대화 읽기','nativeBundleRead',{arg:d.id,cls:'primary',icon:'book'}):ready?btn(remaining?(done?'이어서 AI 정리':'AI 정리 시작'):'결과 확인','nativeBundleRun',{arg:d.id,icon:'spark',dis:!!V.ai.manual&&!!remaining}):complete?btn('결과 적용','nativeBundleApply',{arg:d.id,cls:'primary',icon:'check'}):'';
-      let html=sheet(d,{title:NativeBundles.labels[d.bundle],desc:'전체 대화를 읽고, 이 묶음만 새롭게 정리해요.',body:'<div class="m3-native"><div class="m3-native-steps">'+steps+'</div>'+scope+metrics+emptyState+partition+list+result+messages+note+reread+'</div>',foot:'<div class="m3-native-footer"><span>'+(x.busy?'완료 구간은 자동 저장됩니다.':complete?'확인한 결과를 적용하세요.':applied?'저장 완료':'결과 확인 후 최종 적용')+'</span>'+btn('닫기','closeDlg',{arg:d.id,dis:x.busy})+primary+'</div>'});
+      let html=sheet(d,{title:NativeBundles.labels[d.bundle],desc:'전체 대화를 읽고, 이 묶음만 새롭게 정리해요.',body:'<div class="m3-native"><div class="m3-native-steps">'+steps+'</div>'+scope+metrics+emptyState+partition+list+result+messages+note+'</div>',foot:'<div class="m3-native-footer"><span>'+(x.busy?'완료 구간은 자동 저장됩니다.':complete?'확인한 결과를 적용하세요.':applied?'저장 완료':'결과 확인 후 최종 적용')+'</span>'+(j?btn('대화 다시 읽기','nativeBundleRead',{arg:d.id,cls:'quiet',icon:'refresh',dis:x.busy}):'')+(primary||btn('닫기','closeDlg',{arg:d.id}))+'</div>'});
       html=html.replace('class="m3-sheet ', 'class="m3-sheet m3-native-sheet ');
       if(x.busy)html=html.replace('aria-label="닫기"','aria-label="닫기" disabled');
       return html;
@@ -16609,11 +16714,12 @@ nativeBundle(d) {
     /* props: { isNew, ref, draft:{name,aliases,pc,present} } */
     eActor(d) { const x = d.draft; return sheet(d, { title: d.isNew ? '인물 추가' : `${esc(x.name)} 편집`, body: `${!d.isNew && d.ref ? `<div class="m3-toolbar">${btn('인물별 카드 보기', 'personDossier', { arg: 'actor:' + d.ref, cls: 'mini', icon: 'search' })}</div>` : ''}${field('이름', inp(D(d, 'name'), x.name || ''))}${field('별칭 · 쉼표로 구분', inp(D(d, 'aliases'), x.aliases || ''))}<div class="m3-stack">${tog('사용자 캐릭터 (PC)', D(d, 'pc'), x.pc)}${tog('지금 현장에 있음', D(d, 'present'), x.present, '현장에 있는 인물 기준으로 인지를 고릅니다')}</div>`, foot: `${!d.isNew ? delBtn(d) : ''}${SP}${closeBtn(d, '취소')}${saveBtn(d)}` }); },
     /* props: { isNew, ref, fromReview, draft:{label,type,content,mode,know:{},con:[{id,h,t,scope,pub}]} } */
-    eFact(d) {
+    eFact(d){
       const x = d.draft;
-      return sheet(d, { title: d.isNew ? '인지 정보 추가' : '인지 정보 편집', wide: true, body: `<div class="m3-grid2">${field('이름', inp(D(d, 'label'), x.label || ''))}${field('종류', selc(D(d, 'type'), x.type, Object.entries(L.fact)))}</div>${field('내용', ta(D(d, 'content'), x.content || '', '', '90'))}${field('RP 주입', selc(D(d, 'mode'), x.mode, [['auto', '자동 · 필요할 때만'], ['always', '항상 넣기'], ['exclude', '넣지 않기']]))}
-      <section class="m3-grp"><div class="m3-gt">${ic('people')}누가 알고 있나요</div>${V.cog.actors.map(a => `<div class="m3-krow"><b>${esc(a.name)}</b>${selc(D(d, 'know.' + enc(a.id)), (x.know || {})[a.id] || 'unverified', Object.entries(L.know), 'm3-select')}</div>`).join('') || '<p class="m3-muted">인물이 없습니다.</p>'}</section>
-      <section class="m3-grp"><div class="m3-gt">${ic('eye')}숨김 관계</div>${(x.con || []).map((c, i) => `<div class="m3-conrow" data-key="con-${esc(c.id || i)}"><span><b>${esc(nm(c.h))}</b> → <b>${esc(nm(c.t))}</b> · ${esc(c.scope)}</span>${btn('편집', 'conEdit', { arg: d.id + '|' + i, cls: 'quiet mini' })}${btn('삭제', 'conDel', { arg: d.id + '|' + i, cls: 'danger mini' })}</div>`).join('') || '<p class="m3-muted">없음</p>'}<div class="m3-row m3-topgap">${btn('숨김 관계 추가', 'conAdd', { arg: d.id, cls: 'mini', icon: 'plus', dis: V.cog.actors.length < 2 })}</div></section>`, foot: `${!d.isNew ? delBtn(d) : ''}${SP}${closeBtn(d, '취소')}${saveBtn(d)}` });
+      const html = sheet(d, { title: d.isNew ? '인지 정보 추가' : '인지 정보 편집', body: `<div class="wp-fact-top">${field('이름', inp(D(d, 'label'), x.label || ''))}${field('종류', selc(D(d, 'type'), x.type, Object.entries(L.fact)))}${field('RP 주입', selc(D(d, 'mode'), x.mode, [['auto', '자동 · 필요할 때만'], ['always', '항상 넣기'], ['exclude', '넣지 않기']]))}</div>${field('내용', ta(D(d, 'content'), x.content || '', '', '90'))}
+<section class="m3-grp"><div class="m3-gt">${ic('people')}누가 알고 있나요</div><div class="wp-know">${V.cog.actors.map(a => `<div class="m3-krow"><b title="${esc(a.name)}">${esc(a.name)}</b>${selc(D(d, 'know.' + enc(a.id)), (x.know || {})[a.id] || 'unverified', Object.entries(L.know), 'm3-select')}</div>`).join('') || '<p class="m3-muted">인물이 없습니다.</p>'}</div></section>
+<section class="m3-grp"><div class="m3-gt">${ic('eye')}숨김 관계</div>${(x.con || []).map((c, i) => `<div class="m3-conrow" data-key="con-${esc(c.id || i)}"><span><b>${esc(nm(c.h))}</b> → <b>${esc(nm(c.t))}</b> · ${esc(c.scope)}</span>${btn('편집', 'conEdit', { arg: d.id + '|' + i, cls: 'quiet mini' })}${btn('삭제', 'conDel', { arg: d.id + '|' + i, cls: 'danger mini' })}</div>`).join('') || '<p class="m3-muted">없음</p>'}<div class="m3-row m3-topgap">${btn('숨김 관계 추가', 'conAdd', { arg: d.id, cls: 'mini', icon: 'plus', dis: V.cog.actors.length < 2 })}</div></section>`, foot: `${!d.isNew ? delBtn(d) : ''}${SP}${closeBtn(d, '취소')}${saveBtn(d)}` });
+      return html.replace('class="m3-sheet ', 'class="m3-sheet wp-sheet-md ');
     },
     /* 내장: 숨김 관계 — 부모 eFact의 draft.con을 고친다 (어댑터 불필요) */
     eCon(d) { const x = d.draft, opts = V.cog.actors.map(a => [a.id, a.name]); return sheet(d, { title: '숨김 관계', desc: '누가 누구에게 무엇을 숨기는지', body: `<div class="m3-grid2">${field('숨기는 사람', selc(D(d, 'h'), x.h, opts))}${field('모르게 할 사람', selc(D(d, 't'), x.t, opts))}</div>${field('숨기는 범위', inp(D(d, 'scope'), x.scope || '', '예: 묻기 전에는 말하지 않음'))}${field('대신 보여주는 모습 · 선택', inp(D(d, 'pub'), x.pub || ''))}`, foot: `${SP}${closeBtn(d, '취소')}${saveBtn(d, '확인')}` }); }
@@ -16768,8 +16874,15 @@ nativeBundle(d) {
     d.leaving = true; paint(); setTimeout(() => { if(!d.leaving)return; S.dialogs = S.dialogs.filter(x => x !== d); paint(false); }, 220);
   }
   function errorDiagnosticCard(row,expanded=false){
-    const x=WLOG.describe(row),meta=[row.code,row.service||x.service,row.provider,row.model,x.httpStatus?'HTTP '+x.httpStatus:'',row.method,row.path?'위치 '+row.path:'',row.expected?'필요 '+row.expected:'',row.actual?'확인 '+row.actual:'',row.inputChars?'입력 '+fmt(row.inputChars)+'자':'',row.responseChars?'응답 '+fmt(row.responseChars)+'자':'',row.elapsedMs?'경과 '+Math.round(row.elapsedMs/1000)+'초':'',row.timeoutMs?'제한 '+Math.ceil(row.timeoutMs/1000)+'초':'',row.finishReason?'종료 사유 '+row.finishReason:''].filter(Boolean);
-    return `<section class="m3-panel m3-error-detail" data-key="error-${esc(row.id)}"><div class="m3-panel-head"><b>${esc(row.operation||'작업')}</b>${tag(row.level+(row.count>1?' · '+row.count+'회':''))}</div><p class="m3-muted">${esc(new Date(row.lastAt||row.at).toLocaleString('ko-KR'))} · v${esc(row.version)}</p>${row.stage?`<p><b>실패 단계</b> · ${esc(row.stage)}</p>`:''}<p style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(row.message)}</p><details${expanded?' open':''}><summary>${esc(x.category)} · 원인과 해결 방법</summary><div style="white-space:pre-wrap;overflow-wrap:anywhere"><p><b>원인</b><br>${esc(x.cause)}</p><p><b>다음 조치</b><br>${esc(x.next)}</p><p><b>처리 상태</b><br>${esc(x.outcome)}</p>${meta.length?`<p class="m3-muted">${meta.map(esc).join(' · ')}</p>`:''}</div></details></section>`;
+    const x = WLOG.describe(row), key = 'err-' + row.id;
+    const chips = [row.code, row.service || x.service, row.provider, row.model, x.httpStatus ? 'HTTP ' + x.httpStatus : '', row.method, row.path ? '위치 ' + row.path : '', row.expected ? '필요 ' + row.expected : '', row.actual ? '확인 ' + row.actual : '', row.inputChars ? '입력 ' + fmt(row.inputChars) + '자' : '', row.responseChars ? '응답 ' + fmt(row.responseChars) + '자' : '', row.elapsedMs ? '경과 ' + Math.round(row.elapsedMs / 1000) + '초' : '', row.timeoutMs ? '제한 ' + Math.ceil(row.timeoutMs / 1000) + '초' : '', row.finishReason ? '종료 사유 ' + row.finishReason : ''].filter(Boolean);
+    const open = expanded || S.openSet.has(key), fail = row.level !== '주의';
+    return `<section class="m3-panel m3-error-detail wp-err ${fail ? 'is-fail' : 'is-warn'}" data-key="error-${esc(row.id)}">
+<div class="wp-err-head"><b>${esc(row.operation || '작업')}</b>${tag(esc(row.level) + (row.count > 1 ? ' · ' + row.count + '회' : ''))}</div>
+<div class="wp-err-meta"><span>${esc(new Date(row.lastAt || row.at).toLocaleString('ko-KR'))}</span><span>v${esc(row.version)}</span>${row.stage ? `<span>${fail ? '실패 단계' : '단계'} · ${esc(row.stage)}</span>` : ''}</div>
+<p class="wp-err-msg">${esc(row.message)}</p>
+<details class="wp-err-fix" data-open="${esc(key)}"${open ? ' open' : ''}><summary${expanded ? ' aria-disabled="true"' : ''}><span class="wp-err-cat">${esc(x.category)}</span><span class="wp-err-sum">원인과 해결 방법</span>${expanded ? '' : ic('chev', 'wp-err-chev')}</summary>
+${open ? `<div class="wp-err-body"><div class="wp-err-row"><span>원인</span><p>${esc(x.cause)}</p></div><div class="wp-err-row is-next"><span>다음 조치</span><p>${esc(x.next)}</p></div><div class="wp-err-row"><span>처리 상태</span><p>${esc(x.outcome)}</p></div>${chips.length ? `<div class="wp-err-chips">${chips.map(c => `<span>${esc(c)}</span>`).join('')}</div>` : ''}</div>` : ''}</details></section>`;
   }
 
   function toast(text, type = 'ok', ms = 0, options = {}) {
