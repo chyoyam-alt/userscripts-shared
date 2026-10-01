@@ -2257,7 +2257,14 @@ const WLOG=(()=>{
       latestUserId:String(messageIdOf(messages.find(m=>messageRoleOf(m)==='user'))||''),
       trailingUser:messageRoleOf(messages[0])==='user'};
   }
-  const wishSourceManifestCache=new WeakMap();
+  const wishSourceManifestCache=new WeakMap(),automationTurnTextCache=new WeakMap();
+  // A full re-read makes new message objects. Carry per-message work over by id; every entry re-checks the raw text before use.
+  function carryMessageCaches(prev,next){
+    if(!prev?.length)return;const old=new Map(prev.map(m=>[String(messageIdOf(m)),m]));
+    for(const m of next){const o=old.get(String(messageIdOf(m)));if(!o||!m||typeof m!=='object')continue;
+      const h=wishSourceManifestCache.get(o);if(h)wishSourceManifestCache.set(m,h.slice());
+      const t=automationTurnTextCache.get(o);if(t)automationTurnTextCache.set(m,t);}
+  }
   function sourceManifestOf(messages,{preserveStatusFences=false}={}) {
     return messages.map(m=>{
       const id=String(messageIdOf(m)),role=messageRoleOf(m),text=messageTextOf(m),mode=preserveStatusFences?1:0;
@@ -2467,7 +2474,7 @@ const ExternalReplay=(()=>{
     for(const [key,pending] of pendingBackups)savePendingBackup(key,pending);
     const r=state.currentRoom;
     if(r&&String(apiChatIdOf(r))===rid){remap(r,oldId,newId);if(changedRooms.has(r.chatId))r._rev=changedRooms.get(r.chatId);if(r.pending){delete r.pending.observedHead;savePendingBackup(r.chatId,r.pending);}WUITurnSnapshots.delete(r);U3.invalidate(r);}
-    carrierFrameCache.delete(rid);WishHistory.invalidate(rid);
+    WishHistory.invalidate(rid);
     for(const p of lorePackCache||[])if(String(p.ownerChatId||'')===rid||String(p.ownerChatId||'').startsWith(rid+'::'))remap(p,oldId,newId);
     if(r&&String(apiChatIdOf(r))===rid)remap(state.v2Cognition,oldId,newId);
     const bridge=W.__WishCognitionBridge;
@@ -4037,13 +4044,19 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
     const legacyOff=typeof room?.automationEnabled!=='boolean'&&(room?.unified?.settings?.memoryEnabled===false||room?.autoMemory?.enabled===false);
     return {...shared,enabled,...(legacyOff?{memoryEnabled:false}:{})};
   }
+  function turnText(m){
+    const raw=messageTextOf(m),cacheable=m!==null&&typeof m==='object';let c=cacheable?automationTurnTextCache.get(m):null;
+    if(!c||c.raw!==raw){c={raw,text:stripAutomationNoise(raw,true).trim(),hints:rpSceneTimeHints(raw)};if(cacheable)automationTurnTextCache.set(m,c);}
+    return c;
+  }
   function turns(frame) {
     const list=[...frame.stable].reverse(),out=[];
     for(let i=0;i<list.length;i++)if(messageRoleOf(list[i])==='user') {
       const a=list[i+1];if(messageRoleOf(a)!=='assistant')continue;
+      const u=turnText(list[i]),x=turnText(a);
       out.push({key:String(messageIdOf(list[i])),assistantId:String(messageIdOf(a)),
-        userText:stripAutomationNoise(messageTextOf(list[i]),true).trim(),
-        assistantText:stripAutomationNoise(messageTextOf(a),true).trim(),timeHints:[...rpSceneTimeHints(messageTextOf(list[i])).map(value=>({role:'user',value})),...rpSceneTimeHints(messageTextOf(a)).map(value=>({role:'assistant',value}))]});
+        userText:u.text,
+        assistantText:x.text,timeHints:[...u.hints.map(value=>({role:'user',value})),...x.hints.map(value=>({role:'assistant',value}))]});
     }
     return out;
   }
@@ -6247,20 +6260,21 @@ function remapLogSelectionKeysByPairs(room,pairs,newBlocks){
 
   function recallDocForBlock(block) {
     const signature = `${block.key}|${block.raw.length}|${simpleHash(block.raw)}`;
-    const cached = LOG_RECALL_DOC_CACHE.get(signature);
-    if (cached) return cached;
-    const merged = `${block.events} ${block.body}`.toLowerCase();
-    const doc = {
-      block,
-      text: merged,
-      tokens: new Set(tokenizeRecallText(merged)),
-      titleLower: String(block.events || '').toLowerCase(),
-      phrases: String(block.events || '').split(/[·|｜,/]+/).map(x => x.trim().toLowerCase()).filter(x => x.length >= 2),
-    };
-    // 장기방에서도 캐시가 끝없이 커지지 않게 가볍게 상한을 둡니다.
-    if (LOG_RECALL_DOC_CACHE.size > 1800) LOG_RECALL_DOC_CACHE.clear();
-    LOG_RECALL_DOC_CACHE.set(signature, doc);
-    return doc;
+    // Cache only derived text: a cached block would keep its whole log version alive (block.body is a slice of it).
+    let parts = LOG_RECALL_DOC_CACHE.get(signature);
+    if (!parts) {
+      const merged = `${block.events} ${block.body}`.toLowerCase();
+      parts = {
+        text: merged,
+        tokens: new Set(tokenizeRecallText(merged)),
+        titleLower: String(block.events || '').toLowerCase(),
+        phrases: String(block.events || '').split(/[·|｜,/]+/).map(x => x.trim().toLowerCase()).filter(x => x.length >= 2),
+      };
+      // 장기방에서도 캐시가 끝없이 커지지 않게 가볍게 상한을 둡니다.
+      if (LOG_RECALL_DOC_CACHE.size > 1800) LOG_RECALL_DOC_CACHE.clear();
+      LOG_RECALL_DOC_CACHE.set(signature, parts);
+    }
+    return { block, ...parts };
   }
 
   function scoreRelatedLogBlocks(blocks, contextText, excludedKeys = new Set(), room = state.currentRoom, semanticScores = null) {
@@ -6698,7 +6712,7 @@ function remapLogSelectionKeysByPairs(room,pairs,newBlocks){
         if(Number(stored?._rev||0)!==Number(room._rev||0)||(stored?._epoch&&stored._epoch!==room._epoch)||(!stored&&room._epoch)){
           issue=new Error('다른 탭의 저장·초기화·복원으로 기준이 바뀌어 오래된 저장을 막았습니다. 방을 다시 열어 주세요.');tx.abort();return;
         }
-        next={...structuredClone(room),_rev:Number(room._rev||0)+1,_epoch:room._epoch||crypto.randomUUID(),updatedAt:nowIso()};
+        next={...room,_rev:Number(room._rev||0)+1,_epoch:room._epoch||crypto.randomUUID(),updatedAt:nowIso()};
         const verified=room.pending?.verified&&room.pending?.messageId?room.pending:stored?.pending?.verified&&stored?.pending?.messageId?stored.pending:null;
         if(verified&&!Number(next.lastVerifiedInjectionAt))next.lastVerifiedInjectionAt=Number(verified.verifiedAt)||Date.now();
         st.put(next);
@@ -6781,7 +6795,7 @@ function remapLogSelectionKeysByPairs(room,pairs,newBlocks){
       });
       const loreTimerKey=automaticLoreTimerKey(current),loreTimer=automaticLoreTimers.get(loreTimerKey);if(loreTimer?.timer)clearTimeout(loreTimer.timer);automaticLoreTimers.delete(loreTimerKey);
       lorePackCache=lorePackCache.filter(pack=>pack.scopeId!==autoLorePackId(current)&&!(pack.autoManaged&&pack.ownerChatId===current.chatId));state.v2LorePacks=lorePackCache;
-      clearPendingBackup(chatId);generationGates.delete(rid);carrierFrameCache.delete(rid);await bridge?.invalidateRuntime?.(rid);await bridge?.refresh?.();
+      clearPendingBackup(chatId);generationGates.delete(rid);await bridge?.invalidateRuntime?.(rid);await bridge?.refresh?.();
       if (state.currentChatId === String(chatId)) { state.v2Cognition=null; state.v2CognitionRev=-1; state.v2Editor=null; state.v2SettingsOpen={automation:false,injection:false,cognition:false}; }
     });
   }
@@ -7240,7 +7254,7 @@ function remapLogSelectionKeysByPairs(room,pairs,newBlocks){
         try{
           const plan=await roomCopyCommitLocal(d,d.preview);Object.assign(d.targetRoom,plan.target);
           for(const pack of plan.lore.writes){const i=lorePackCache.findIndex(p=>p.scopeId===pack.scopeId);if(i<0)lorePackCache.push(pack);else lorePackCache[i]=pack;}state.v2LorePacks=lorePackCache;
-          U3.invalidate(d.targetRoom);allFitRankCache.clear();clearHybridReviewResults();LORE_QUERY_VECTOR_CACHE.clear();carrierFrameCache.delete(targetRid);
+          U3.invalidate(d.targetRoom);allFitRankCache.clear();clearHybridReviewResults();LORE_QUERY_VECTOR_CACHE.clear();
           if(plan.cog.changed){const b=(typeof unsafeWindow!=='undefined'?unsafeWindow:window).__WishCognitionBridge;try{await b?.invalidateRuntime?.(targetRid);await b?.refresh?.();state.v2Cognition=await b?.getView?.(targetRid);}catch{state.v2Cognition=null;}}
           d.completed=true;d.busy=false;WUI.closeSheet(d,true);renderModalIfOpen();notify(`선택 자료 복사 완료 · 자료집 ${plan.lore.writes.length}팩/${plan.lore.entries}카드 · 관계 ${plan.stats.relationships?.added||0}방향`,'success',5500);
         }finally{memoryImportRunning=false;}
@@ -8068,7 +8082,7 @@ function remapLogSelectionKeysByPairs(room,pairs,newBlocks){
   function allFitSourceStamp(room) {
     const finish=typeof WishPerformance==='undefined'?()=>{}:WishPerformance.start('sourceStamp');
     try {
-    return JSON.stringify([WishEconomy.stamp(room),hybridRecallInputStamp(room),memoryBasis(room),room.pending?.items,room.pending?.quickRemovedItems,room.pending?.quickIncludes,room.pending?.cognitionOverrides]);
+    return [WishEconomy.stamp(room),hybridRecallInputStamp(room),memoryBasis(room),JSON.stringify([room.pending?.items,room.pending?.quickRemovedItems,room.pending?.quickIncludes,room.pending?.cognitionOverrides])].join('\u0000');
 
     } finally {finish();}
   }
@@ -8604,12 +8618,12 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     return ['기존 정리에 사용한 원문이 바뀌었습니다. 분기와 시작점을 확인해 주세요.','관계 재구축에 사용한 원문이 수정·삭제되었습니다. 관계만 재구축에서 최신 분기를 확인해 주세요.','자동 정리 기준 대화가 현재 분기에 없습니다. 시작점 또는 백업을 확인해 주세요.','기존 정리의 기준 메시지가 삭제되거나 분기 순서가 바뀌었습니다. 시작점을 확인해 주세요.','관계 재구축의 기준 메시지가 현재 방에 없거나 순서가 바뀌었습니다.'].includes(String(error?.message||error||''));
   }
   const WishHistory=(()=>{
-    const records=new Map(),flights=new Map(),revisions=new Map();let sequence=0;
+    const records=new Map(),flights=new Map(),revisions=new Map(),donors=new Map();let sequence=0;
     const MAX_CHARS=12000000,RECHECK_MS=300000;
     const scope=rid=>JSON.stringify([state.routeEpoch,localRestoreEpoch,ExternalReplay.revision(rid),revisions.get(rid)||0]);
     const begin=rid=>({scope:scope(rid),seq:++sequence});
     const readTag=(list,info)=>Object.defineProperty(list,'wishRead',{value:info});
-    function invalidate(rid){rid=String(rid||'');if(!rid)return;records.delete(rid);revisions.set(rid,(revisions.get(rid)||0)+1);while(revisions.size>8)revisions.delete(revisions.keys().next().value);}
+    function invalidate(rid){rid=String(rid||'');if(!rid)return;const old=records.get(rid);if(old){donors.delete(rid);donors.set(rid,old.messages);while(donors.size>2)donors.delete(donors.keys().next().value);}records.delete(rid);revisions.set(rid,(revisions.get(rid)||0)+1);while(revisions.size>8)revisions.delete(revisions.keys().next().value);}
     function freezeMessage(value,seen=new WeakSet()){
       if(!value||typeof value!=='object'||seen.has(value))return value;
       seen.add(value);for(const child of Object.values(value))freezeMessage(child,seen);return Object.freeze(value);
@@ -8618,8 +8632,11 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     function seed(rid,oldestFirst,ticket){
       rid=String(rid);if(ticket.scope!==scope(rid)||generationPending(rid)||ExternalReplay.pending(rid)||(records.get(rid)?.seq||0)>ticket.seq)return;
       const newest=[...oldestFirst].reverse(),chars=newest.reduce((n,m)=>n+messageTextOf(m).length,0);
-      if(chars>MAX_CHARS){records.delete(rid);return;}
-      records.delete(rid);records.set(rid,{messages:snapshot(newest),ids:new Set(newest.map(m=>String(messageIdOf(m)))),chars,scope:ticket.scope,seq:ticket.seq,verifiedAt:Date.now(),host:String(oldestFirst.wishReadHost||'')});
+      if(chars>MAX_CHARS){records.delete(rid);donors.delete(rid);return;}
+      const messages=snapshot(newest);carryMessageCaches(records.get(rid)?.messages||donors.get(rid),messages);donors.delete(rid);
+      // Records from an older route can never be served again (scope includes routeEpoch); free them now.
+      for(const [k,v] of records)if(v.scope!==scope(k))records.delete(k);
+      records.delete(rid);records.set(rid,{messages,ids:new Set(newest.map(m=>String(messageIdOf(m)))),chars,scope:ticket.scope,seq:ticket.seq,verifiedAt:Date.now(),host:String(oldestFirst.wishReadHost||'')});
       while(records.size>2)records.delete(records.keys().next().value);
     }
     function merge(record,head){
@@ -8656,7 +8673,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
       }catch{return '';}
     }
     function changed(rid){
-      invalidate(rid);const room=state.currentRoom;if(room&&String(apiChatIdOf(room))===rid){carrierFrameCache.delete(rid);WUITurnSnapshots.delete(room);U3.invalidate(room);scheduleRecovery(0);}
+      invalidate(rid);const room=state.currentRoom;if(room&&String(apiChatIdOf(room))===rid){WUITurnSnapshots.delete(room);U3.invalidate(room);scheduleRecovery(0);}
     }
     // Observe only message writes. Never read request/response bodies or credentials.
     function install(){
@@ -8670,7 +8687,8 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
         p.send=function(){const rid=requests.get(this);if(rid){changed(rid);this.addEventListener('loadend',()=>changed(rid),{once:true});}return send.apply(this,arguments);};
       }
       W.addEventListener('online',()=>{const rid=String(apiChatIdOf(state.currentRoom)||'');if(rid)changed(rid);});
-      document.addEventListener('visibilitychange',()=>{if(!document.hidden){const rid=String(apiChatIdOf(state.currentRoom)||'');if(rid)changed(rid);}});
+      // Tab return: the visibility recovery tick checks the newest messages; the full history is re-read only when next needed.
+      document.addEventListener('visibilitychange',()=>{if(!document.hidden){const rid=String(apiChatIdOf(state.currentRoom)||'');if(rid)invalidate(rid);}});
     }
     function hasMessage(room,id){const rid=String(apiChatIdOf(room)),record=records.get(rid);if(!record||record.scope!==scope(rid)||ExternalReplay.pending(rid))return null;return record.ids.has(String(id));}
     return {hasMessage,begin,seed,read,invalidate,changed,merge,install};
@@ -11351,7 +11369,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       }
       for(const r of rooms){
         const rid=String(apiChatIdOf(r)||'');
-        clearPendingBackup(r.chatId);generationGates.delete(rid);carrierFrameCache.delete(rid);
+        clearPendingBackup(r.chatId);generationGates.delete(rid);
         state.idleAutoScanAt.delete(String(r.chatId));state.sessionSetupEligibility.delete(rid);state.sessionSetupEligibilityPending.delete(rid);
         const memoryTimer=automaticMemoryCheckTimers.get(rid);if(memoryTimer?.timer)clearTimeout(memoryTimer.timer);automaticMemoryCheckTimers.delete(rid);
         const loreTimerKey=automaticLoreTimerKey(r),loreTimer=automaticLoreTimers.get(loreTimerKey);if(loreTimer?.timer)clearTimeout(loreTimer.timer);automaticLoreTimers.delete(loreTimerKey);
@@ -11594,16 +11612,17 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     if(!room||!pending)return {added:0};
     migrateQuickInjectionState(pending);
     const isSlot=i=>i.slotId==='currentState'||['character','extra'].includes(i.group);
-    const old=new Map((pending.items||[]).map(i=>[i.slotId,i]));
-    pending.items=(pending.items||[]).filter(i=>!isSlot(i));
+    const all=pending.items||[],old=new Map(all.map(i=>[i.slotId,i])),first=all.findIndex(isSlot),at=first<0?-1:all.slice(0,first).filter(i=>!isSlot(i)).length,slots=[];
+    pending.items=all.filter(i=>!isSlot(i));
     let added=0;
     for(const slot of selectedSlots(room)){
       if(slot.id==='logSummary')continue;
       const next=slotToPendingItem(slot);next.totalTurns=0;next.usedTurns=0;
       if(old.get(slot.id)?.quickChoice)next.quickChoice={...old.get(slot.id).quickChoice};
       next.turnStartUserId=old.get(slot.id)?.turnStartUserId||pending.latestUserId||pending.turnStartUserId;
-      pending.items.push(next);if(!old.has(slot.id))added++;
+      slots.push(next);if(!old.has(slot.id))added++;
     }
+    if(at<0)pending.items.push(...slots);else pending.items.splice(at,0,...slots);
     pending.quickRemovedItems=(pending.quickRemovedItems||[]).filter(i=>!isSlot(i)||(room.slots||[]).some(s=>s.id===i.slotId));
     return {added};
   }
@@ -11978,7 +11997,6 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     return { ...charResult, logAdded, loreAdded, freshCount: fresh.length };
   }
 
-  const carrierFrameCache=new Map();
 
   function pendingTurnAnchorIds(pending) {
     if(!pending)return [];
@@ -12063,6 +12081,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     const replayEpoch=ExternalReplay.revision(apiChatIdOf(room));if(ExternalReplay.pending(apiChatIdOf(room)))return {deferred:true};
     if(ExternalReplay.changed(apiChatIdOf(room),replayEpoch))return {deferred:true};
     const p=room.pending;if(!p)return {active:0,cleared:false};
+    const volatile=new Set(['verifiedAt','carrierArmedAt','serverChars','observedHead']),pollState=x=>JSON.stringify([x,room.memoryBranchBlocked,room.autoRecallContextText],(k,v)=>volatile.has(k)?undefined:v),pollPrint=reason==='poll'?pollState(p):'';
     if(generationPending(apiChatIdOf(room))){
       const recovery=await recoverGenerationGate(apiChatIdOf(room));
       if(recovery.pending)return {active:activePendingItems(p).length,deferred:true};
@@ -12089,8 +12108,6 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       try{frame=stableFrame([...(await observeFullRoomHistory(room,frame.messages.slice(0,50)))].reverse());}
       catch(error){if(isWishHistoryStale(error))return {deferred:true};throw error;}
     control?.assertActive?.();
-    carrierFrameCache.delete(rid);carrierFrameCache.set(rid,{signature:headSignature,frame});
-    while(carrierFrameCache.size>3)carrierFrameCache.delete(carrierFrameCache.keys().next().value);
     p.observedHead=headSignature;
     if(frame.trailingUser)return {active:activePendingItems(p).length,deferred:true};
     // 전체 현재 분기까지 확인했는데도 옛 USER anchor가 없으면 fatal 대신 남은 유지기간을 보존해 자동 재기준화합니다.
@@ -12178,7 +12195,8 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     // Long/ranked preparation, PATCH preflight, post-write verification and the final
     // WebSocket frontier check still perform their original live reads.
     const reuseRead=allFitCarrierRead&&Date.now()-allFitCarrierRead.at<=1000&&room.pending===p&&!generationPending(rid)&&!ExternalReplay.changed(rid,replayEpoch)&&String(messageIdOf(allFitCarrierRead.message))===newId;
-    const live=reuseRead?allFitCarrierRead.message:await fetchMessage(apiChatIdOf(room),newId);
+    const listed=reason==='poll'&&knownFrame?frame.messages.find(m=>String(messageIdOf(m))===newId):null;
+    const live=reuseRead?allFitCarrierRead.message:listed&&stripOurContextBlock(messageTextOf(listed)).text.trim()?listed:await fetchMessage(apiChatIdOf(room),newId);
     if(!live || messageRoleOf(live)!=='assistant')throw new Error('이전 AI 원문을 확인하지 못했습니다.');
     const raw=messageTextOf(live),stripped=stripOurContextBlock(raw),original=stripped.found?stripped.text:raw;
     if(!original.trim())throw emptyCarrierBodyError(live,newId);
@@ -12228,6 +12246,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       try{await restorePendingCarriers(room,{...(cleanupCarrier?{previousCarrierCleanup:cleanupCarrier}:{}),cleanupCarrierMessageIds:cleanupIds});delete next.previousCarrierCleanup;delete next.cleanupCarrierMessageIds;}
       catch(error){console.warn('[Wish] 새 carrier 전환은 완료했지만 이전 carrier 정리를 다음 poll로 미룹니다.',error);}
     }
+    if(pollPrint&&pollPrint===pollState(next)){sanitizeRenderedContextSoon();scheduleMessageInjectionMagnifier(40);return {active:active.length,cleared:false,unchanged:true};}
     savePendingBackup(room.chatId,next);await saveRoom(room);sanitizeRenderedContextSoon();
     scheduleMessageInjectionMagnifier(40);
     if(reason==='start')notify('이전 AI에 주입 확인됨 · 최신 AI 제외 · USER 기준 유지','success',6000);
@@ -12314,13 +12333,15 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
         if(gate)await recoverGenerationGate(rid,gate);
         if(ExternalReplay.pending(rid)||WishDisplayDrain.pending(rid)||unstartedRooms.has(room))return;
         if(!gate&&Date.now()<crackAuthState.retryAt)return;
-        if(!room.pending)void WUIRefreshTurnCount(room);
+        const scanDue=!room.pending&&(room.autoCharacterDetection||room.autoLogRecallEnabled)&&Date.now()-Number(state.idleAutoScanAt.get(room.chatId)||0)>=APP.idleAutoScanMs;
+        const head=scanDue?await fetchRecentMessages(apiChatIdOf(room),50):null;
+        if(!room.pending)void WUIRefreshTurnCount(room,false,head);
         // 자동 캐릭터 감지는 주입 전에도 현재 방에서 동작해 다음 주입 준비를 해둡니다.
         if (!room.pending && (room.autoCharacterDetection || room.autoLogRecallEnabled)) {
           const lastScanAt = Number(state.idleAutoScanAt.get(room.chatId) || 0);
           if (Date.now() - lastScanAt < APP.idleAutoScanMs) return;
           state.idleAutoScanAt.set(room.chatId, Date.now());
-          const recent = await fetchRecentMessages(apiChatIdOf(room), APP.autoScanMessageLimit);
+          const recent = head ? head.slice(0, APP.autoScanMessageLimit) : await fetchRecentMessages(apiChatIdOf(room), APP.autoScanMessageLimit);
           const auto = await refreshAutomaticMemories(room, recent);
           if (auto.detected?.length && room.chatId === state.currentChatId) {
             notify(`캐릭터 자동 감지 · ${auto.detected.map(x => x.slot.title).join(', ')} 설정 활성화`, 'success', 3800);
@@ -12525,11 +12546,11 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     const root = document.documentElement;
     if (!root) return;
     const mobile = isMobileManagerLayout();
-    root.classList.toggle('rpcm-mobile-layout', mobile);
     if (!mobile) state.mobileViewportMaxHeight = 0;
     else if (height > state.mobileViewportMaxHeight) state.mobileViewportMaxHeight = height;
-    root.style.setProperty('--rpcm-vvh', `${height}px`);
-    root.style.setProperty('--rpcm-vv-top', `${top}px`);
+    // Set on #wish-rp-root, the only element that reads them: on <html> every change restyled the whole chat.
+    const host = document.getElementById('wish-rp-root');
+    if (host) { host.style.setProperty('--rpcm-vvh', `${height}px`); host.style.setProperty('--rpcm-vv-top', `${top}px`); }
     const activeInput = document.activeElement;
     const typingFocus = !!activeInput?.matches?.('textarea,input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"])') && !!activeInput.closest?.('#wish-rp-root,#rpcm-overlay,#rpcm-detached-backdrop,#rpcm-lib-dialog-backdrop,#rpcm-library-manager-backdrop,#rpcm-log-dialog-backdrop,#rpcm-dup-dialog-backdrop,#rpcm-import-backdrop,#rpcm-ai-backdrop,#rpcm-ai-settings-backdrop,#rpcm-lore-convert-backdrop');
     const keyboardOpen = mobile && typingFocus && state.mobileViewportMaxHeight > 0 && height < state.mobileViewportMaxHeight * .82;
@@ -14331,9 +14352,7 @@ html.rpcm-mobile-keyboard-open #wish-rp-root{top:var(--rpcm-vv-top,0px);bottom:a
 #wish-rp-monitor.is-off .wish-mon-core{color:var(--m3-fg2);border-color:var(--m3-line)}
 #wish-rp-monitor.is-off .wish-mon-core b{font-size:9px;letter-spacing:.2px}
 #wish-rp-monitor.is-off .wish-mon-gauge .val{visibility:hidden}
-#wish-rp-monitor.is-busy .wish-mon-gauge .val{animation:wmon-dash 1.6s ease-in-out infinite}
 #wish-rp-monitor.is-alert .wish-mon-core{border-color:var(--m3-warn);box-shadow:0 0 0 2px var(--m3-warn),0 3px 10px rgba(30,40,90,.2)}
-@keyframes wmon-dash{0%,100%{stroke-dashoffset:66}50%{stroke-dashoffset:22}}
 @keyframes wmon-spin{to{transform:rotate(360deg)}}
 
 @keyframes wmon-pop{from{transform:scale(0)}}
@@ -15203,7 +15222,7 @@ function createWishUI(AD) {
   IC.play='<path d="m8 5 11 7-11 7Z"/>';
   const ic = (n, c = '') => `<svg class="ic ic-${n} ${c}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[n] || ''}</svg>`;
   const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  const FMT_KO = new Intl.NumberFormat('ko-KR'), fmt = n => FMT_KO.format(Number(n || 0));
+  let FMT_KO = null; const fmt = n => (FMT_KO ||= new Intl.NumberFormat('ko-KR')).format(Number(n || 0));
   let UID = 0; const uid = p => 'w' + p + (++UID);
 
   /* ───────── 2. 분류 색 · 라벨 (V.labels로 덮어쓸 수 있음) ───────── */
