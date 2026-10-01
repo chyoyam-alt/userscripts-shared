@@ -959,11 +959,23 @@
   }
 
   function normalizeSpeechRegister(value) {
-    const raw=String(value||'').trim().toLowerCase();
-    if(['honorific','polite','존댓말','경어'].includes(raw))return 'honorific';
-    if(['banmal','casual','반말'].includes(raw))return 'banmal';
-    if(['mixed','혼용','상황별'].includes(raw))return 'mixed';
+    const raw=String(value||'').trim().toLowerCase().replace(/[\s_-]+/g,'');
+    if(['honorific','polite','formal','respectful','존댓말','존대말','존대','경어','높임말','높임'].includes(raw))return 'honorific';
+    if(['banmal','casual','informal','반말','평어','평대'].includes(raw))return 'banmal';
+    if(['mixed','혼용','혼합','상황별','상황별혼용'].includes(raw))return 'mixed';
     return 'other';
+  }
+
+  // AI replies mix the stored labels (honorific/banmal/other) with the reply labels (formal/casual/unknown).
+  // Translate the label before the schema check; an unreadable label becomes "no evidence", never a failed run.
+  function coerceSpeechRegisters(rows, stored=false) {
+    if(!Array.isArray(rows))return;
+    const allowed=stored?['honorific','banmal','mixed','other']:['formal','casual','mixed','unknown'];
+    for(const row of rows){
+      if(!row||typeof row!=='object'||typeof row.register!=='string'||allowed.includes(row.register))continue;
+      const reg=normalizeSpeechRegister(row.register);
+      row.register=stored?reg:({honorific:'formal',banmal:'casual',mixed:'mixed',other:'unknown'})[reg];
+    }
   }
 
   function speechRegisterLabel(value) {
@@ -4349,6 +4361,7 @@ function applyObserve(cog,speech,data,rp,cutoff,relationshipRows=[],relationship
     return {cog:next,speech:relations,relationships,preservedSpeech,preservedAliases};
   }
   function stage(room,cog,packs,p,req,data) {
+    coerceSpeechRegisters(data?.observe?.speech_upsert);
     validateShape(data,req.schema);
     if(data.schema_version!=='1'||Object.keys(data).some(k=>!['schema_version',...(p.memory?['memory']:[]),...(p.observe?['observe']:[])].includes(k)))throw Error('통합 응답 버전·묶음 오류');
     if(req.stateDelta){
@@ -5184,6 +5197,7 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
   function validateExternal(data,s,only=false){
     const expected=only?'wish-relationship-rebuild':'wish-rp-rebuild-2.3';
     if(data?.format!==expected)throw Error(only?'관계 전용 JSON을 선택해 주세요.':'전체 재구축 전용 JSON을 선택해 주세요.');
+    coerceSpeechRegisters(data?.speech);
     U3.validateShape(data,externalSchema(data));
     if(data.source.last_message_id!==s.anchorMessageId)throw Error('재구축 원문 기준이 현재 대화와 다릅니다. 새 TXT를 받아 주세요.');
     if(only&&data.version!==1||!only&&![1,2].includes(data.version))throw Error('재구축 버전 오류');
@@ -10746,6 +10760,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
     }
     function resolvePeople(rows){return label=>{const key=speechNameKey(label),named=rows.filter(a=>speechNameKey(a.name)===key),found=named.length?named:rows.filter(a=>(a.aliases||[]).some(x=>speechNameKey(x)===key));if(found.length!==1)throw WishImportPeople.error(label,found.length>1);return found[0].id;};}
     function stage(r,c,ps,s,data){
+      coerceSpeechRegisters(data?.speech);
       U3.validateShape(data,schema(data.scope));
       // Same rule as full/relationship imports: the last message must match; edited RP text is not a block.
       if(data.source.last_message_id!==s.anchorMessageId)throw Error('내보낸 원문의 마지막 메시지가 현재 대화와 다릅니다. 새 TXT로 다시 분석해 주세요.');
@@ -11022,6 +11037,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
         draft.heldProtected=WishHeld.uniq('F',[...(draft.heldProtected||[]),...segHeld]);
         pack.entries=[...protectedOwn,...entries];return draft;
       }
+      if(Array.isArray(data?.entries))coerceSpeechRegisters(data.entries.map(e=>e?.speechRule),true);
       U3.validateShape(data,req.wireSchema);
       const result=clone(data);
       if(j.bundle==='memory')result.memory.references={upsert:[]};
