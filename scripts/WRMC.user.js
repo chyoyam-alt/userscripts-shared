@@ -1110,7 +1110,9 @@
     room.autoLogPinnedKeys = Array.isArray(room.autoLogPinnedKeys) ? [...new Set(room.autoLogPinnedKeys.map(String))] : [];
     room.autoLogExcludedKeys = Array.isArray(room.autoLogExcludedKeys) ? [...new Set(room.autoLogExcludedKeys.map(String))] : [];
     room.manualLogSelectedKeys = Array.isArray(room.manualLogSelectedKeys) ? [...new Set(room.manualLogSelectedKeys.map(String))] : [];
-    const legacyDateUpgrade=restoreLegacyDateFallbacks(logSummary.content);
+    // Already-checked log text is skipped: this getter runs several times per panel model build.
+    const legacyDateUpgrade=legacyCheckedLog.get(room)===logSummary.content?{restored:0}:restoreLegacyDateFallbacks(logSummary.content);
+    if(!legacyDateUpgrade.restored)legacyCheckedLog.set(room,logSummary.content);
     if(legacyDateUpgrade.restored){
       const oldBlocks=parseDatedLogBlocks(logSummary.content);
       logSummary.content=legacyDateUpgrade.text;
@@ -1149,10 +1151,14 @@
     room.loreAutomation.lastError = String(room.loreAutomation.lastError || '');
     room.loreAutomation.failureCount = Math.max(0, Number(room.loreAutomation.failureCount || 0));
     room.loreAutomation.paused = room.loreAutomation.paused === true;
-    room.logSemanticIndex = Array.isArray(room.logSemanticIndex) ? room.logSemanticIndex.filter(row => row && row.key && Array.isArray(row.vector)).map(row => ({
-      key:String(row.key), sourceHash:String(row.sourceHash || ''), model:String(row.model || APP.loreEmbeddingModel),
-      dimensions:Number(row.dimensions || row.vector.length || APP.loreEmbeddingDimensions), vector:row.vector.map(Number), updatedAt:Number(row.updatedAt || 0),
-    })) : [];
+    // logSemanticIndex is always replaced, never edited in place, so a normalized array can be kept as is.
+    if (!normalizedLogIndexes.has(room.logSemanticIndex)) {
+      room.logSemanticIndex = Array.isArray(room.logSemanticIndex) ? room.logSemanticIndex.filter(row => row && row.key && Array.isArray(row.vector)).map(row => ({
+        key:String(row.key), sourceHash:String(row.sourceHash || ''), model:String(row.model || APP.loreEmbeddingModel),
+        dimensions:Number(row.dimensions || row.vector.length || APP.loreEmbeddingDimensions), vector:row.vector.map(Number), updatedAt:Number(row.updatedAt || 0),
+      })) : [];
+      normalizedLogIndexes.add(room.logSemanticIndex);
+    }
     room.lastLoreSearch = room.lastLoreSearch && typeof room.lastLoreSearch === 'object' ? room.lastLoreSearch : null;
 
     room.autoScanLastMessageId = String(room.autoScanLastMessageId || '');
@@ -5517,6 +5523,8 @@ const WishImportPeople=(()=>{
 
   let automaticMemoryJob = null;
 
+  // Keys are 'memory:<chatId>:<13-digit ms>:<rand>'. Bounding the suffix to digits keeps a branch room ('<id>::branchId=…') out of the base room's range.
+  function memoryCheckpointRange(room){const prefix='memory:'+room.chatId+':';return IDBKeyRange.bound(prefix+'0',prefix+':',false,true);}
   async function saveMemoryCheckpoint(room,reason='update') {
     if(!state.db)return;
     const entry={id:`memory:${room.chatId}:${Date.now()}:${Math.random().toString(36).slice(2,8)}`,chatId:room.chatId,at:Date.now(),reason,
@@ -5525,7 +5533,7 @@ const WishImportPeople=(()=>{
     await new Promise((resolve,reject)=>{
       const tx=state.db.transaction([APP.historyStoreName,APP.cognitionStoreName,APP.libraryStoreName],'readwrite'),st=tx.objectStore(APP.historyStoreName);
       const cq=tx.objectStore(APP.cognitionStoreName).get(String(apiChatIdOf(room))),pq=tx.objectStore(APP.libraryStoreName).getAll();let remaining=2;
-      const complete=()=>{if(--remaining)return;try{entry.displayDetails=MemoryDiff.details(room,cq.result||{},pq.result||[]);}catch{entry.displayDetails=null;}st.put(entry);const prefix='memory:'+room.chatId+':';const q=st.getAll(IDBKeyRange.bound(prefix,prefix+'\uffff'));q.onsuccess=()=>{(q.result||[]).filter(x=>x.chatId===room.chatId).sort((a,b)=>Number(b.at)-Number(a.at)).slice(10).forEach(x=>st.delete(x.id));};};cq.onsuccess=complete;pq.onsuccess=complete;
+      const complete=()=>{if(--remaining)return;try{entry.displayDetails=MemoryDiff.details(room,cq.result||{},pq.result||[]);}catch{entry.displayDetails=null;}st.put(entry);const kq=st.getAllKeys(memoryCheckpointRange(room));kq.onsuccess=()=>{const keys=kq.result||[];for(const key of keys.slice(0,Math.max(0,keys.length-10)))st.delete(key);};};cq.onsuccess=complete;pq.onsuccess=complete;
       tx.oncomplete=resolve;tx.onerror=tx.onabort=()=>reject(tx.error||new Error('기억 변경 전 이력 저장 실패'));
     });
     MemoryDiff.invalidate(room.chatId);
@@ -5568,12 +5576,21 @@ const WishImportPeople=(()=>{
         q.onerror=()=>reject(q.error||Error('정리 기록을 읽지 못했습니다.'));
       });
     }
+    function newest(room){
+      return new Promise((resolve,reject)=>{
+        const revisionAtStart=revision,q=state.db.transaction(APP.historyStoreName,'readonly').objectStore(APP.historyStoreName).openCursor(memoryCheckpointRange(room),'prev');
+        q.onsuccess=()=>{const c=q.result,x=c?.value;if(c&&!(x&&x.chatId===room.chatId&&typeof x.currentState==='string')){c.continue();return;}
+          if(revisionAtStart!==revision){resolve(newest(room));return;}
+          const row=x?{id:x.id,chatId:x.chatId,at:x.at,reason:x.reason,currentState:x.currentState,logSummary:x.logSummary,displayDetails:x.displayDetails}:null;cache.set(room,{revision,entry:row});resolve(row);};
+        q.onerror=()=>reject(q.error||Error('정리 기록을 읽지 못했습니다.'));
+      });
+    }
     function latest(room){
       if(!room?.chatId||!state.db)return null;
       const c=cache.get(room);if(c?.revision===revision)return c.entry;
       if(!loading.has(room)){
         const rev=revision;loading.set(room,rev);
-        list(room).catch(()=>{if(rev===revision)cache.set(room,{revision,entry:null});}).finally(()=>{
+        newest(room).catch(()=>{if(rev===revision)cache.set(room,{revision,entry:null});}).finally(()=>{
           loading.delete(room);if(state.currentRoom===room)WUI?.paint?.();
         });
       }
@@ -5927,8 +5944,11 @@ const WishImportPeople=(()=>{
     return `[${safeDate}｜${safeTitle}]`;
   }
 
+  const legacyCheckedLog=new WeakMap(),normalizedLogIndexes=new WeakSet();
   function restoreLegacyDateFallbacks(value) {
     let text=normalizeLineBreaks(String(value||''));
+    // 2.x '시점 = …' bodies are the only thing this upgrades; without the marker nothing can change.
+    if(!/시점\s*=/.test(text))return {text,restored:0};
     const blocks=parseDatedLogBlocks(text),replacements=[];
     for(const block of blocks){
       if(!block.isUnknown)continue;
@@ -10215,6 +10235,8 @@ function formatLocalRecordTime(value){
   }
 
   function loreEntrySourceHash(entry) { return aiHashTiny(loreEntrySourceText(entry)); }
+const loreSourceHashMemo = new WeakMap();
+function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(entry), c = loreSourceHashMemo.get(entry); if (c && c.text === text) return c.hash; const hash = aiHashTiny(text); loreSourceHashMemo.set(entry, { text, hash }); return hash; }
   function loreEntryMergeKey(entry) {
     const pair=entry?.speechRule&&speechPairKey(entry.speechRule.speaker,entry.speechRule.target);
     return entry?.autoLoreKey?`auto:${entry.autoLoreKey}`:pair?`speech:${pair}`:`name:${normalizedRecallTerm(entry?.name||'')}`;
@@ -15282,7 +15304,9 @@ function createWishUI(AD) {
   function readVM() {
     const finish=typeof WishPerformance==='undefined'?()=>{}:WishPerformance.start('viewModel');
     try {
-    try { V = fill(AD.vm() || {}, DEF); }
+    // The injection preview (V.inj.items) is read by: check tab, cognition → relationships, quick panel, preview sheet.
+    // Elsewhere, with injection off, the model skips building it.
+    try { V = fill(AD.vm({ preview: S.tab === 'check' || (S.tab === 'cognition' && S.cog === 'relationships') || S.quick || S.quickLeaving || S.dialogs.some(d => d.type === 'preview') }) || {}, DEF); }
     catch (e) { console.error('[WUI] vm() 오류', e); V = fill({}, DEF); }
     Object.assign(L.reg, V.labels.reg || {}); Object.assign(L.lore, V.labels.lore || {}); Object.assign(L.fact, V.labels.fact || {});
     vmAt = Date.now();
@@ -15309,9 +15333,12 @@ function createWishUI(AD) {
   const help = t => `<button type="button" class="m3-help" data-tip="${esc(t)}" aria-label="도움말" aria-expanded="false">?</button>`;
   const tag = (t, c = '') => `<span class="m3-tag ${c}">${t}</span>`;
   const dots = '<span class="m3-dots"><i></i><i></i><i></i></span>';
+  // UTF-8 size of JSON.stringify(array), cached per array; re-checked by length and first/last element.
+  const JSON_BYTES = new WeakMap(), UTF8 = new TextEncoder();
+  function jsonBytes(a) { const c = JSON_BYTES.get(a); if (c && c.n === a.length && c.f === a[0] && c.l === a[a.length - 1]) return c.b; const b = UTF8.encode(JSON.stringify(a)).length; JSON_BYTES.set(a, { n: a.length, f: a[0], l: a[a.length - 1], b }); return b; }
   function card(key, title, meta, body, actions = '', right = '', cc = '') {
     const open = S.openSet.has(key);
-    return `<details class="m3-card" data-key="k-${esc(key)}" data-open="${esc(key)}"${open ? ' open' : ''}${cc ? ` style="--cc:${cc}"` : ''}><summary class="m3-card-head"><span class="m3-t"><b>${title}</b>${meta ? `<small>${meta}</small>` : ''}</span>${right}${ic('chev', 'm3-chev')}</summary><div class="m3-cardbody">${body}${actions ? `<div class="m3-row m3-card-actions">${actions}</div>` : ''}</div></details>`;
+    return `<details class="m3-card" data-key="k-${esc(key)}" data-open="${esc(key)}"${open ? ' open' : ''}${cc ? ` style="--cc:${cc}"` : ''}><summary class="m3-card-head"><span class="m3-t"><b>${title}</b>${meta ? `<small>${meta}</small>` : ''}</span>${right}${ic('chev', 'm3-chev')}</summary><div class="m3-cardbody">${open ? body : ''}${open && actions ? `<div class="m3-row m3-card-actions">${actions}</div>` : ''}</div></details>`;
   }
   function fold(key, title, body) {
     const o = S.openSet.has(key);
@@ -15497,11 +15524,11 @@ function createWishUI(AD) {
   }
 
 function mRelationships() {
-    const rows=(V.relationships||{}).rows||[],archiveBytes=new TextEncoder().encode(JSON.stringify(rows.map(r=>r.evidenceArchive||[]))).length;
+    const rows=(V.relationships||{}).rows||[],archiveBytes=rows.reduce((n,r)=>n+jsonBytes(r.evidenceArchive||[]),0)+Math.max(0,rows.length-1)+2;
     const pairStatus=list=>{const states=list.map(status);return states.every(s=>s==='주입 OFF')?'주입 OFF':states.every(s=>s==='주입 확인')?'주입 중':states.includes('후보 · 확인 대기')?'후보 · 확인 대기':states.includes('주입 확인')?'일부 주입':states.includes('저장됨')?'저장됨':'이번 주입 제외';};
     const relPairs=()=>{const key=r=>JSON.stringify([String(r.speakerActorId||r.speaker),String(r.targetActorId||r.target)].sort()),m=new Map();for(const r of rows){const k=key(r);if(!m.has(k))m.set(k,[]);m.get(k).push(r);}
       const one=s=>{const t=String(s||'').split(/(?<=[.。!?])\s+/)[0];return t.length>64?t.slice(0,63)+'…':t;};
-      const dir=r=>{const st=status(r);return `<div class="wp-rel-dir" data-key="rel-${esc(r.id)}"><div class="wp-rel-dh"><b>${esc(r.speaker)}<i>→</i>${esc(r.target)}</b>${tag(st,st==='주입 확인'?'ok':'')}${r.manual?tag('수동 보호'):''}${r.pinned?tag('고정 후보'):''}${btn('편집','relEdit',{arg:r.id,cls:'quiet mini',icon:'edit'})}</div><p class="wp-rel-now">${esc(r.current)}</p>${r.unresolved?`<div class="wp-rel-issue"><b>남은 쟁점</b><span>${esc(r.unresolved)}</span></div>`:''}<div class="wp-rel-more">${r.trajectory?fold('rel-history-'+r.id,'핵심 전환 · '+fmt(r.trajectory.length)+'자',`<p style="white-space:pre-wrap">${esc(r.trajectory)}</p>`):''}${(()=>{const ev=r.lastEvidence?.length?r.lastEvidence:[...(r.evidenceHistory||[])].reverse().find(e=>Array.isArray(e?.evidence)&&e.evidence.length)?.evidence;return ev?.length?fold('rel-evidence-'+r.id,'근거 '+(r.evidenceHistory||[]).length+'건 · 보관 '+(r.evidenceArchive||[]).length+'건 · 약 '+Math.ceil(new TextEncoder().encode(JSON.stringify([r.evidenceHistory||[],r.evidenceArchive||[]])).length/1024)+' KB',ev.map(e=>`<p class="m3-muted" style="white-space:pre-wrap">${esc(e.role==='user'?'USER':'CHAR/서술')}: ${esc(e.quote)}</p>`).join('')):'';})()}${heldARowList(r)}</div>${r.trajectory.length>=5000?'<p class="m3-warning">변화 이력이 저장 상한에 가까워졌습니다. 자료 관리의 외부 AI 인물 재구축에서 원문과 비교해 정리할 수 있습니다.</p>':''}</div>`;};
+      const dir=r=>{const st=status(r);return `<div class="wp-rel-dir" data-key="rel-${esc(r.id)}"><div class="wp-rel-dh"><b>${esc(r.speaker)}<i>→</i>${esc(r.target)}</b>${tag(st,st==='주입 확인'?'ok':'')}${r.manual?tag('수동 보호'):''}${r.pinned?tag('고정 후보'):''}${btn('편집','relEdit',{arg:r.id,cls:'quiet mini',icon:'edit'})}</div><p class="wp-rel-now">${esc(r.current)}</p>${r.unresolved?`<div class="wp-rel-issue"><b>남은 쟁점</b><span>${esc(r.unresolved)}</span></div>`:''}<div class="wp-rel-more">${r.trajectory?fold('rel-history-'+r.id,'핵심 전환 · '+fmt(r.trajectory.length)+'자',`<p style="white-space:pre-wrap">${esc(r.trajectory)}</p>`):''}${(()=>{const ev=r.lastEvidence?.length?r.lastEvidence:[...(r.evidenceHistory||[])].reverse().find(e=>Array.isArray(e?.evidence)&&e.evidence.length)?.evidence;return ev?.length?fold('rel-evidence-'+r.id,'근거 '+(r.evidenceHistory||[]).length+'건 · 보관 '+(r.evidenceArchive||[]).length+'건 · 약 '+Math.ceil((jsonBytes(r.evidenceHistory||[])+jsonBytes(r.evidenceArchive||[])+3)/1024)+' KB',ev.map(e=>`<p class="m3-muted" style="white-space:pre-wrap">${esc(e.role==='user'?'USER':'CHAR/서술')}: ${esc(e.quote)}</p>`).join('')):'';})()}${heldARowList(r)}</div>${r.trajectory.length>=5000?'<p class="m3-warning">변화 이력이 저장 상한에 가까워졌습니다. 자료 관리의 외부 AI 인물 재구축에서 원문과 비교해 정리할 수 있습니다.</p>':''}</div>`;};
       return [...m.values()].map(list=>{const a=list[0],issues=list.filter(r=>r.unresolved).length,on=list.filter(r=>status(r)==='주입 확인').length;
         const peek=`<span class="wp-rel-peek">${list.map(r=>`<span><em>${esc(r.speaker)} →</em>${esc(one(r.current))}</span>`).join('')}</span>`;
         return card('relpair-'+list.map(r=>r.id).join('-'),`${esc(a.speaker)}<i class="wp-rel-arrow">${list.length>1?'↔':'→'}</i>${esc(a.target)}`,`${list.length}방향${issues?' · 남은 쟁점 '+issues:''}${list.some(r=>r.manual)?' · 수동 보호':''}`+peek,list.map(dir).join(''),'',tag(pairStatus(list),on?'ok':''));}).join('');};
@@ -16775,7 +16802,7 @@ nativeBundle(d) {
     <div data-key="shell-layout" class="m3-layout"><nav class="m3-nav" aria-label="주 메뉴"><span class="m3-navind" style="transform:translateY(${idx * 60}px)"></span>${nav()}</nav><main class="m3-main">${vPage()}</main></div>
     <footer data-key="shell-footer" class="m3-foot">${vFoot()}</footer><nav data-key="shell-bottomnav" class="m3-bottomnav" aria-label="주 메뉴">${nav()}</nav><div data-key="shell-grip" class="m3-grip" data-grip aria-hidden="true"></div></div></div>`;
   }
-  const vRoot = () => `${S.open ? vOverlay() : ''}<div class="wish-dlg-layer" data-key="dl">${S.dialogs.map(vDialog).join('')}</div><div class="wish-toast-wrap" data-key="tw">${S.toasts.map(t => `<div class="m3-toast ${t.type} ${t.leaving ? 'm3-out' : ''}" data-key="t-${t.id}" role="status">${ic(t.type === 'ok' ? 'check' : 'alert')}<span>${esc(t.text)}</span>${t.errorId?`<button type="button" class="m3-toast-detail" data-act="errorDetail" data-arg="${esc(t.errorId)}">${ic('doc')}<span>상세 보기</span></button>`:''}</div>`).join('')}</div>`;
+  const vRegions = () => [['ov', S.open ? vOverlay() : ''], ['dl', `<div class="wish-dlg-layer" data-key="dl">${S.dialogs.map(vDialog).join('')}</div>`], ['tw', `<div class="wish-toast-wrap" data-key="tw">${S.toasts.map(t => `<div class="m3-toast ${t.type} ${t.leaving ? 'm3-out' : ''}" data-key="t-${t.id}" role="status">${ic(t.type === 'ok' ? 'check' : 'alert')}<span>${esc(t.text)}</span>${t.errorId?`<button type="button" class="m3-toast-detail" data-act="errorDetail" data-arg="${esc(t.errorId)}">${ic('doc')}<span>상세 보기</span></button>`:''}</div>`).join('')}</div>`]];
 
   /* ───────── 15. 빠른 패널 ───────── */
   function vQuick() {
@@ -16811,8 +16838,10 @@ nativeBundle(d) {
     if(x.tagName==='TEXTAREA'&&x.dataset.bind&&x.dataset.bind===y.dataset.bind&&!y.style.height&&x.style.height)
       y.style.height=x.style.height;
     const oc = x.getAttribute('data-count');
-    for (const a of [...x.attributes]) if (!a.name.startsWith('data-fx') && !y.hasAttribute(a.name)) x.removeAttribute(a.name);
-    for (const a of y.attributes) if (x.getAttribute(a.name) !== a.value) x.setAttribute(a.name, a.value);
+    const ya = y.attributes, xa = x.attributes;
+    for (let i = 0; i < ya.length; i++) { const a = ya[i]; if (x.getAttribute(a.name) !== a.value) x.setAttribute(a.name, a.value); }
+    // After copying y's attributes, equal counts mean equal names, so removal is needed only when counts differ.
+    if (xa.length !== ya.length) for (let i = xa.length; i--;) { const n = xa[i].name; if (!n.startsWith('data-fx') && !y.hasAttribute(n)) x.removeAttribute(n); }
     const tg = x.tagName;
     if (tg === 'INPUT') { if (x.type === 'checkbox' || x.type === 'radio') { const c = y.hasAttribute('checked'); if (x.checked !== c) x.checked = c; } else if (document.activeElement !== x) { const v = y.getAttribute('value') ?? ''; if (x.value !== v) x.value = v; } return; }
     if (tg === 'TEXTAREA') { if (document.activeElement !== x && x.value !== y.textContent) x.value = y.textContent; return; }
@@ -16821,20 +16850,32 @@ nativeBundle(d) {
     const nc = x.getAttribute('data-count'); if (oc !== null && nc !== null && oc !== nc) tween(x, Number(oc), Number(nc));
   }
   function patchKids(a, b) {
-    const old = [...a.childNodes].filter(n => !isFx(n)), byKey = new Map(), free = [];
+    // Fast path: walk both lists in order while keys and node types line up (the usual repaint).
+    let x0 = a.firstChild, y0 = b.firstChild, prev = null;
+    while (y0) {
+      while (x0 && isFx(x0)) x0 = x0.nextSibling;
+      if (!x0 || keyOf(x0) !== keyOf(y0) || x0.nodeType !== y0.nodeType || x0.nodeName !== y0.nodeName) break;
+      const nx = x0.nextSibling, ny = y0.nextSibling; patchNode(x0, y0); prev = x0; x0 = nx; y0 = ny;
+    }
+    if (!y0) { while (x0) { const nx = x0.nextSibling; if (!isFx(x0)) x0.remove(); x0 = nx; } return; }
+    // From the first mismatch on, match the remaining siblings by key, as before.
+    const old = [], byKey = new Map(), free = [], ys = [];
+    for (let n = x0; n; n = n.nextSibling) if (!isFx(n)) old.push(n);
+    for (let n = y0; n; n = n.nextSibling) ys.push(n);
     for (const n of old) { const k = keyOf(n); if (k) byKey.set(k, n); else free.push(n); }
     let fi = 0; const res = [];
-    for (const y of [...b.childNodes]) {
+    for (const y of ys) {
       const k = keyOf(y); let x = null;
       if (k) { x = byKey.get(k) || null; if (x) byKey.delete(k); } else if (fi < free.length) x = free[fi++];
       if (x && x.nodeType === y.nodeType && x.nodeName === y.nodeName) { patchNode(x, y); res.push(x); } else res.push(document.importNode(y, true));
     }
     const keep = new Set(res); for (const n of old) if (!keep.has(n)) n.remove();
-    let prev = null; for (const n of res) { const want = prev ? prev.nextSibling : a.firstChild; if (n !== want) a.insertBefore(n, want); prev = n; }
+    for (const n of res) { const want = prev ? prev.nextSibling : a.firstChild; if (n !== want) a.insertBefore(n, want); prev = n; }
   }
   function tween(el, from, to) { if (REDUCED || !Number.isFinite(to) || !Number.isFinite(from)) return; const t0 = performance.now(), dur = 800; const f = now => { const k = Math.min(1, (now - t0) / dur); if (el.firstChild) el.firstChild.nodeValue = fmt(Math.round(from + (to - from) * (1 - (1 - k) ** 3))); if (k < 1 && el.isConnected) requestAnimationFrame(f); }; requestAnimationFrame(f); }
   function fxInit(r) { r.querySelectorAll('[data-count]:not([data-fx-c])').forEach(el => { el.setAttribute('data-fx-c', ''); tween(el, 0, Number(el.getAttribute('data-count'))); }); }
-  let root = null, raf = 0, modelDirty = true, rootHtml = '', rootPatched = null, rootTouched = true;
+  let root = null, raf = 0, modelDirty = true, rootHtml = '', rootPatched = null, rootTouched = true, regionHtml = new Map(), touchedAll = true;
+  const touchedRegions = new Set();
   function ensureRoot() {
     if (root && root.isConnected) return;
     root = document.getElementById('wish-rp-root');
@@ -16844,8 +16885,22 @@ nativeBundle(d) {
   function render() {
     raf = 0; if(needsFullView()){if(modelDirty||!vmAt)readVM();}else readMonitorVM(); modelDirty=false; ensureRoot();
     // 사용자 입력 없이 같은 화면을 다시 그릴 때는 파싱·비교를 건너뜁니다(탭 전환 직후 반복 갱신이 애니메이션을 끊지 않게).
-    const html = vRoot();
-    if (rootTouched || rootPatched !== root || html !== rootHtml) { const tpl = document.createElement('template'); tpl.innerHTML = html; patchKids(root, tpl.content); rootHtml = html; rootPatched = root; rootTouched = false; }
+    const regions = vRegions(), html = regions.map(r => r[1]).join('');
+    if (rootTouched || rootPatched !== root || html !== rootHtml) {
+      // A toast or dialog typing repaints only its own region; anything unmapped falls back to the whole root.
+      let full = touchedAll || rootPatched !== root;
+      if (!full) for (const [k, h] of regions) {
+        const before = regionHtml.get(k) ?? '';
+        if (h === before && !touchedRegions.has(k)) continue;
+        const el = h && before ? root.querySelector(`:scope>[data-key="${k}"]`) : null;
+        if (!el) { full = true; break; }
+        const tpl = document.createElement('template'); tpl.innerHTML = h; const y = tpl.content.firstElementChild;
+        if (!y || tpl.content.childNodes.length !== 1 || keyOf(y) !== k) { full = true; break; }
+        patchNode(el, y);
+      }
+      if (full) { const tpl = document.createElement('template'); tpl.innerHTML = html; patchKids(root, tpl.content); }
+      regionHtml = new Map(regions); rootHtml = html; rootPatched = root; rootTouched = false; touchedRegions.clear(); touchedAll = false;
+    }
     mountApprovedViews(); fxInit(root); positionExternalMenu(); positionPackMenus();
     renderQuick(); updateMonitor();
     if (S.scrollTop) { S.scrollTop = false; const m = root.querySelector('.m3-main'); if (m) m.scrollTop = 0; }
@@ -17011,7 +17066,7 @@ ${open ? `<div class="wp-err-body"><div class="wp-err-row"><span>원인</span><p
   const wired = new WeakSet();
   function wire(host) {
     if (wired.has(host)) return; wired.add(host);
-    for (const type of ['input','change','click','keydown','pointerdown','paste','drop','focusout','compositionend']) host.addEventListener(type, () => { rootTouched = true; }, true);
+    for (const type of ['input','change','click','keydown','pointerdown','paste','drop','focusout','compositionend']) host.addEventListener(type, e => { rootTouched = true; const r = e.target?.closest?.('#wish-rp-root>[data-key]'); if (r) touchedRegions.add(r.getAttribute('data-key')); else touchedAll = true; }, true);
     host.addEventListener('scroll',positionExternalMenu,true);
     host.addEventListener('scroll',positionPackMenus,true);
     window.addEventListener('resize',positionPackMenus);
@@ -17074,18 +17129,18 @@ ${open ? `<div class="wp-err-body"><div class="wp-err-row"><span>원인</span><p
   function startDrag(e) {
     if (!canMove()) return; const sh = root.querySelector('.m3-shell'), ov = root.querySelector('.m3-overlay'); if (!sh || !ov) return; e.preventDefault();
     const sr = sh.getBoundingClientRect(), or = ov.getBoundingClientRect(), ox = e.clientX - sr.left, oy = e.clientY - sr.top;
-    if (!S.size) S.size = { w: Math.round(sr.width), h: Math.round(sr.height) }; S.pos = { x: sr.left - or.left, y: sr.top - or.top }; S.dragging = true; paint();
-    const mv = ev => { S.pos = { x: Math.round(clamp(ev.clientX - or.left - ox, 0, or.width - S.size.w)), y: Math.round(clamp(ev.clientY - or.top - oy, 0, or.height - S.size.h)) }; paint(false); };
-    const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); S.dragging = false; AD.saveLayout && AD.saveLayout({ pos: S.pos, size: S.size }); paint(); };
-    addEventListener('pointermove', mv); addEventListener('pointerup', up);
+    if (!S.size) S.size = { w: Math.round(sr.width), h: Math.round(sr.height) }; S.pos = { x: sr.left - or.left, y: sr.top - or.top }; S.dragging = true; paint(false);
+    const mv = ev => { S.pos = { x: Math.round(clamp(ev.clientX - or.left - ox, 0, or.width - S.size.w)), y: Math.round(clamp(ev.clientY - or.top - oy, 0, or.height - S.size.h)) }; sh.style.left = S.pos.x + 'px'; sh.style.top = S.pos.y + 'px'; };
+    const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); S.dragging = false; AD.saveLayout && AD.saveLayout({ pos: S.pos, size: S.size }); paint(false); };
+    addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up);
   }
   function startResize(e) {
     if (!canMove()) return; const sh = root.querySelector('.m3-shell'), ov = root.querySelector('.m3-overlay'); if (!sh || !ov) return; e.preventDefault();
     const sr = sh.getBoundingClientRect(), or = ov.getBoundingClientRect(); S.pos = { x: Math.max(0,sr.left - or.left), y: Math.max(0,sr.top - or.top) }; const w0 = sr.width, h0 = sr.height, x0 = e.clientX, y0 = e.clientY;
     S.size={w:Math.round(w0),h:Math.round(h0)};
     const maxW=Math.max(1,or.width-S.pos.x),maxH=Math.max(1,or.height-S.pos.y);
-    const mv = ev => { S.size = { w: Math.round(clamp(w0 + ev.clientX - x0, Math.min(360,maxW), maxW)), h: Math.round(clamp(h0 + ev.clientY - y0, Math.min(360,maxH), maxH)) }; paint(false); };
-    const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); AD.saveLayout && AD.saveLayout({ pos: S.pos, size: S.size }); paint(); };
+    const mv = ev => { S.size = { w: Math.round(clamp(w0 + ev.clientX - x0, Math.min(360,maxW), maxW)), h: Math.round(clamp(h0 + ev.clientY - y0, Math.min(360,maxH), maxH)) }; sh.style.width = S.size.w + 'px'; sh.style.height = S.size.h + 'px'; };
+    const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); AD.saveLayout && AD.saveLayout({ pos: S.pos, size: S.size }); paint(false); };
     addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel',up);
   }
   let tipEl = null, tipHideTimer = 0;
@@ -17186,7 +17241,7 @@ ${open ? `<div class="wp-err-body"><div class="wp-err-row"><span>원인</span><p
     document.addEventListener('focusout',e=>{if(!e.relatedTarget?.closest?.('#wish-ui-help-tip'))hideTip();}); addEventListener('scroll',e=>{if(!e.target.closest?.('#wish-ui-help-tip'))hideTip();},true);
     document.addEventListener('keydown', e => { if (e.key !== 'Escape') return; if(!e.target.closest?.('#wish-rp-root,#wish-rp-quick,#wish-rp-monitor,#wish-ui-help-tip'))return; const packKey=[...S.openSet].find(k=>k.startsWith('pack-menu-'));if(packKey){S.openSet.delete(packKey);const picker=[...root.querySelectorAll('.m3-pack-picker')].find(el=>el.dataset.open===packKey);picker?.querySelector('summary')?.focus();paint();e.preventDefault();return;} if(S.openSet.has('external-export')){S.openSet.delete('external-export');paint();document.querySelector('.m3-external-picker>summary')?.focus();e.preventDefault();return;} if(tipEl){hideTip();return;} const d = [...S.dialogs].reverse().find(x => !x.leaving); if (d) { closeSheet(d, false, true); return; } if (S.quick) { closeQuick(); return; } if (S.open) close(); });
     document.addEventListener('pointerdown', e => { if (S.quick && !e.target.closest('#wish-rp-quick,#' + MON_ID)) closeQuick(); });
-    addEventListener('resize', () => { if (S.pos || S.size) { S.pos = null; S.size = null; } if (S.open || S.quick) paint(); });
+    addEventListener('resize', () => { if (S.pos || S.size) { S.pos = null; S.size = null; } if (S.open || S.quick) paint(false); });
     mountMonitor();
   }
   return { sendButton:findSendAction, mountMonitor, boot, open, close, toggle: () => (S.open ? close() : open()), paint, toast, job, openSheet, closeSheet, confirm: ask, isOpen: () => S.open, ui };
@@ -17348,7 +17403,7 @@ async function WUIResetMemoryBaseline() {
 }
 function WUIForm(values={}){const root=document.createElement('div');for(const [selector,value] of Object.entries(values)){const input=document.createElement(typeof value==='boolean'||!/[\r\n]/.test(String(value??''))?'input':'textarea');if(selector.startsWith('#'))input.id=selector.slice(1);else{const m=selector.match(/^\[([^=\]]+)(?:="([^"]*)")?\]$/);if(!m)throw Error('지원하지 않는 필드 선택자: '+selector);input.setAttribute(m[1],m[2]||'');}if(typeof value==='boolean'){input.type='checkbox';input.checked=value;}else input.value=String(value??'');root.append(input);}return root;}
 async function WUIInvoke(action,arg='',extra={},editor){
- const room=state.currentRoom;if(!room)throw Error('채팅방 데이터가 준비되지 않았습니다.');const vm=WUI_ADAPTER.vm(),values={};for(const [path,key] of Object.entries(WUI_FIELD_MAP)){const value=WUIGetPath(vm,path);if(value!==undefined)values['[data-v2-'+key+']']=value;}Object.assign(values,extra);
+ const room=state.currentRoom;if(!room)throw Error('채팅방 데이터가 준비되지 않았습니다.');const values={...extra};
  const overlay=WUIForm(values),button=document.createElement('button');button.setAttribute('data-v2-'+action,String(arg??''));overlay.append(button);
  for(const k of ['file','lore-file','lore-external-file']){const input=document.createElement('input');input.type='file';input.accept='.json,application/json';input.setAttribute('data-v2-'+k,'');overlay.append(input);}
  const listeners=new Map();for(const el of [overlay,...overlay.querySelectorAll('*')]){el.addEventListener=(type,fn)=>{let list=listeners.get(el);if(!list)listeners.set(el,list=[]);list.push([type,fn]);};if(el.type!=='file')el.click=()=>{const event={currentTarget:el,target:el,preventDefault(){},stopPropagation(){}};if(el.onclick)return el.onclick(event);for(const [type,fn] of listeners.get(el)||[])if(type==='click')return fn(event);};}
@@ -17521,9 +17576,9 @@ function WUIReadFactRows(cog,pending){
  for(const c of cog.state?.concealments||[]){if(!c.active)continue;let rows=byFact.get(c.factId);if(!rows)byFact.set(c.factId,rows=[]);rows.push(c);}
  return (cog.facts||[]).filter(f=>!f.archived).map(f=>({...f,mode:f.injectionMode||'auto',sel:selected.has(f.id),why:(cog.contextDiagnostics?.reasons?.[f.id]||[]).join(' · '),know:Object.fromEntries((cog.actors||[]).map(a=>[a.id,cog.state?.knowledge?.[a.id]?.[f.id]||'unverified'])),con:(byFact.get(f.id)||[]).map(c=>({...c,h:c.holderId,t:c.targetId,scope:c.scope||'',pub:c.publicName||''}))}));
 }
-function WUIReadModel(){let D,S,room,items,logView;const opened=new Set(),dateLabel=v=>v?new Date(v).toLocaleString('ko-KR'):'';
+function WUIReadModel(options={}){let D,S,room,items,logView;const preview=options?.preview!==false;const opened=new Set(),dateLabel=v=>v?new Date(v).toLocaleString('ko-KR'):'';
 function model(r){
- room=r;items=v2CurrentItems(r);logView=WUIReadLogView(r);const m=autoMemoryState(r),sched=memoryScheduleForRoom(r),cs=v2CognitionStatus(),cg=state.v2Cognition||{},bridge=(typeof unsafeWindow!=='undefined'?unsafeWindow:window).__WishCognitionBridge,cfg=bridge?.getSettings?.()||{},ai=WUICache.ai,p=r.injectionPolicy||{},la=autoLoreState(r),lc=r.loreConfig||{};
+ room=r;items=r.pending||preview?v2CurrentItems(r):[];logView=WUIReadLogView(r);const m=autoMemoryState(r),sched=memoryScheduleForRoom(r),cs=v2CognitionStatus(),cg=state.v2Cognition||{},bridge=(typeof unsafeWindow!=='undefined'?unsafeWindow:window).__WishCognitionBridge,cfg=bridge?.getSettings?.()||{},ai=WUICache.ai,p=r.injectionPolicy||{},la=autoLoreState(r),lc=r.loreConfig||{};
  const slots=r.slots||[],slot=id=>slots.find(s=>s.id===id),chars=group=>slots.filter(s=>s.group===group).map(s=>({...s,aliases:s.aliases||[],ret:s.turns??s.retentionTurns??0,size:String(s.content||'').length,pin:!!s.userPinned,match:''}));
  D={room:WishRoomNames.display(r),inj:{armed:!!r.pending,verified:!!r.pending?.verified},saveAt:saveStatusText(),saving:false,slot:{state:!!slot('currentState')?.enabled,log:!!slot('logSummary')?.enabled},
  state:parseCurrentStateSections(slot('currentState')?.content||'').map((s,i)=>({...s,id:String(i),size:String(s.body||'').length})),
@@ -17535,11 +17590,11 @@ function model(r){
  facts:WUIReadFactRows(cg,r.pending),
  reviews:(cg.reviews||[]).slice().reverse().map(rv=>({id:rv.id,kind:v2ReviewLabel(rv),desc:v2ReviewDescription(rv,cg),quote:v2EvidenceQuote(rv),accept:v2ReviewNeedsInspect(rv,cg)?'':'이대로 반영',original:rv})),
 
- lore:{enabled:lc.enabled!==false&&Number(p.loreEvery)>0,sem:lc.semanticEnabled,max:lc.maxEntries,dens:lc.budgetChars<=2600?'light':lc.budgetChars>=7600?'rich':'balanced',lastSel:{lore:r.lastLoreSearch?.matchedLore||0,logs:r.lastLoreSearch?.matchedLogs||0,sem:r.lastLoreSearch?.semanticUsed},auto:{enabled:la.enabled&&!la.paused,interval:la.intervalTurns,read:la.readTurns,pending:la.committedTurns||0,last:la.lastError||la.lastStatus||dateLabel(la.lastRunAt)},packs:visibleLorePacksForRoom(r).filter(pk=>!pk.ownerChatId||String(pk.ownerChatId)===String(r.chatId)||(r.activeLorePackIds||[]).includes(pk.scopeId)).map(pk=>({id:pk.scopeId,name:wishLoreDisplayName(pk,r),desc:pk.description,copyOrigin:pk.copyOrigin||null,originLabel:pk.copyOrigin?wishLoreOriginLabel(pk):'',ownerLabel:wishLoreOwnerLabel(pk,r),active:(r.activeLorePackIds||[]).includes(pk.scopeId),auto:pk.autoManaged,ownerChatId:String(pk.ownerChatId||''),ownerApiChatId:String(pk.ownerApiChatId||''),ownerCurrent:!!String(pk.ownerChatId||'')&&String(pk.ownerChatId||'')===String(r.chatId||''),entries:(pk.entries||[]).map(e=>({...e,on:e.enabled,emb:e.embedding?.sourceHash===loreEntrySourceHash(e)&&e.embedding?.model===lc.embeddingModel&&Number(e.embedding?.dimensions)===Number(lc.embeddingDimensions),auto:e.autoManaged,prot:e.userProtected,speech:e.speechRule?{...e.speechRule,reg:e.speechRule.register}:null,full:loreTextAtLevel(e,'full'),micro:loreTextAtLevel(e,'micro'),compact:loreTextAtLevel(e,'compact')}))}))},
+ lore:{enabled:lc.enabled!==false&&Number(p.loreEvery)>0,sem:lc.semanticEnabled,max:lc.maxEntries,dens:lc.budgetChars<=2600?'light':lc.budgetChars>=7600?'rich':'balanced',lastSel:{lore:r.lastLoreSearch?.matchedLore||0,logs:r.lastLoreSearch?.matchedLogs||0,sem:r.lastLoreSearch?.semanticUsed},auto:{enabled:la.enabled&&!la.paused,interval:la.intervalTurns,read:la.readTurns,pending:la.committedTurns||0,last:la.lastError||la.lastStatus||dateLabel(la.lastRunAt)},packs:visibleLorePacksForRoom(r).filter(pk=>!pk.ownerChatId||String(pk.ownerChatId)===String(r.chatId)||(r.activeLorePackIds||[]).includes(pk.scopeId)).map(pk=>({id:pk.scopeId,name:wishLoreDisplayName(pk,r),desc:pk.description,copyOrigin:pk.copyOrigin||null,originLabel:pk.copyOrigin?wishLoreOriginLabel(pk):'',ownerLabel:wishLoreOwnerLabel(pk,r),active:(r.activeLorePackIds||[]).includes(pk.scopeId),auto:pk.autoManaged,ownerChatId:String(pk.ownerChatId||''),ownerApiChatId:String(pk.ownerApiChatId||''),ownerCurrent:!!String(pk.ownerChatId||'')&&String(pk.ownerChatId||'')===String(r.chatId||''),entries:(pk.entries||[]).map(e=>({...e,on:e.enabled,emb:!!e.embedding&&e.embedding.sourceHash===loreEntrySourceHashCached(e)&&e.embedding?.model===lc.embeddingModel&&Number(e.embedding?.dimensions)===Number(lc.embeddingDimensions),auto:e.autoManaged,prot:e.userProtected,speech:e.speechRule?{...e.speechRule,reg:e.speechRule.register}:null,full:loreTextAtLevel(e,'full'),micro:loreTextAtLevel(e,'micro'),compact:loreTextAtLevel(e,'compact')}))}))},
  ai:{...ai,model:getAiSelectedModel(ai),dsModel:getAiSelectedModel(ai)},presets:WUICache.presets.items||[],};
  S={tab:({check:'home',cognition:'cog'})[state.v2Tab]||state.v2Tab||'home',mem:state.v2MemoryView==='character'?'char':['state','log','speech','extra'].includes(state.v2MemoryView)?state.v2MemoryView:'state',cog:state.v2MemoryView==='cog-reviews'?'review':'people',open:opened,job:automaticMemoryJob?{label:'현재상태·날짜별 사건 정리 중'}:automaticLoreJob?{label:'자료 카드 정리 중'}:aiUpdateRunning&&!U3.checking()?{label:'기억 작업 마무리 중'}:null};
 }
-if(!state.currentRoom||!WUICache.ai)return {};model(state.currentRoom);const r=state.currentRoom;const injection=WUIInjectionView(r,items),plan=injection.items;
+if(!state.currentRoom||!WUICache.ai)return {};model(state.currentRoom);const r=state.currentRoom;const injection=r.pending||preview?WUIInjectionView(r,items):{legacyExclusions:0,armed:false,verified:false,total:0,max:allFitLimit(r),groups:{},items:[],hasCarrier:false,hasOriginal:false,matchesSaved:false,selection:null,review:null,...pendingSyncIssue(null)},plan=injection.items;
 const rebuild=R31.get(r);const vm={held:WishHeldUI.view(r),apiEconomy:{...WishEconomy.settings(r),status:WishEconomy.describe(r)},cogInclude:Number(r.injectionPolicy?.cognitionEvery)>0,recall:recallSelectionSettings(r),rebuild:rebuild?{status:rebuild.status,message:rebuild.message,segments:rebuild.segments,ready:!!rebuild.draft}:null,rebuildRunning:R31.busy(),unified:U3.view(r),room:{...WishRoomNames.describe(r),name:D.room},version:SCRIPT_VERSION,save:{saving:state.saveStatus==='saving',at:state.lastSavedAt?new Date(state.lastSavedAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}):''},job:S.job,features:{autoDefault:false,semantic:false,density:false},inj:injection,defaults:{enabled:WUICache.ai.autoMemoryEnabled!==false,every:WUICache.ai.memoryMaxTurns},memory:D.memory,cog:{...D.cog,actors:D.actors,facts:D.facts.map(f=>({...f,included:f.sel}))},reviews:D.reviews.map(rv=>({...rv,acceptLabel:rv.accept})),state:{inject:D.pol.state,sections:D.state,raw:String(r.slots?.find(s=>s.id==='currentState')?.content||'')},logs:{inject:D.pol.log,blocks:D.logs.map(b=>({...b,undated:b.date==='날짜 미상',included:D.pol.log&&plan.some(i=>i.kind==='log'&&!i.off&&(i.sourceKey===b.key||i.key==='log:'+b.key))})),dupDates:logView.duplicateDates},relationships:{held:Array.isArray(r.relationshipHeld)?r.relationshipHeld:[],on:r.relationshipConfig?.enabled!==false,rows:WishRelationships.normalize(r.relationships)},speech:{on:D.speechOn,rows:D.speech},chars:{autoDetect:D.autoChar,rows:D.chars},extras:{rows:D.extras},presets:D.presets.map(p=>({...p,ret:p.retentionTurns})),lore:D.lore,ai:{providerLabel: getAiProviderLabel(D.ai.provider),model:D.ai.provider==='manual'?'API 없이 · 요청문 복사 → 답 붙여넣기':D.ai.model,manual:D.ai.provider==='manual',ready:isAiProviderReady(D.ai),job:D.ai.provider==='manual'?manualJobView(r):null},pol:D.pol,autoChar:D.autoChar,quickCog:D.facts.map(f=>({id:f.id,label:f.label,mode:f.mode,included:state.quickCognitionDesired.has(f.id)?state.quickCognitionDesired.get(f.id):f.sel})),recent:[D.memory.last,D.lore.auto.last].filter(Boolean),labels:{resetDesc:'현재 방의 기억·인지·이 방 전용 자동 자료를 초기화합니다. 일반 자료집은 유지됩니다.'}};
 Object.assign(vm.memory,{error:U3.monitor(r).error,enabled:vm.unified.enabled&&vm.unified.memoryEnabled,committed:vm.unified.memoryPending,target:vm.unified.memoryEvery,fixed:vm.unified.memoryEvery,running:vm.unified.running,status:vm.unified.error||vm.unified.status});Object.assign(vm.cog,{auto:vm.unified.enabled&&vm.unified.observeEnabled,every:vm.unified.observeEvery});vm.job=vm.unified.running?{label:vm.unified.jobLabel||'통합 결과 확인 중'}:vm.job;
 if(R31.busy())vm.job={label:rebuild?.message||'재구축 자료 준비 중'};
