@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽 Wish RP Manager Core
 // @namespace    local.rp.context.manager
-// @version      1.5.1
+// @version      1.5.2
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @description  Crack RP용 컨텍스트 주입·인지·자동 장기기억·자료집·전체 재구축을 하나로 관리합니다.
@@ -36,6 +36,7 @@
   // Koofr WebDAV backup/restore is optional and manual only (no timers, startup requests or shared server).
   // Core 1.5.0: Firebase gets an optional App Check debug token (required by Firebase AI Logic from 2026-11-02), exchanged on demand without background timers.
   // New provider 'vertex': a Vertex AI service account JSON is signed in-browser (RS256) into a 1-hour access token kept in memory only and renewed 5 minutes early.
+  // Core 1.5.2: the memory before/after view groups rewritten phrases instead of striking word by word.
   // Core 1.5.1 UI polish: quiet buttons share the normal button look, delete-type buttons are red-tinted, several dialogs are tidied,
   // and folds that remember being open build their contents only while open (no new timers or continuous animations).
   // Core 1.4.0: external AI mode (provider '외부 AI 복붙', no API key): [함께 정리] copies a request and [답 붙여넣기] applies the answer.
@@ -56,7 +57,7 @@
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '1.5.1';
+  const SCRIPT_VERSION = '1.5.2';
   const EDITION = 'core';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const RUNTIME_ATTR = 'data-wish-rp-runtime';
