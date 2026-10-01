@@ -1002,6 +1002,7 @@
     return [...current.values()].sort((a,b)=>a.speaker.localeCompare(b.speaker,'ko')||a.target.localeCompare(b.target,'ko'));
   }
 
+  const legacyCheckedLog=new WeakMap(),normalizedLogIndexes=new WeakSet();
   function normalizeRoomSlots(room) {
     const existing = Array.isArray(room.slots) ? room.slots : [];
     const byId = new Map(existing.filter(Boolean).map(slot => [String(slot.id || ''), slot]));
@@ -1155,7 +1156,7 @@
     if (!normalizedLogIndexes.has(room.logSemanticIndex)) {
       room.logSemanticIndex = Array.isArray(room.logSemanticIndex) ? room.logSemanticIndex.filter(row => row && row.key && Array.isArray(row.vector)).map(row => ({
         key:String(row.key), sourceHash:String(row.sourceHash || ''), model:String(row.model || APP.loreEmbeddingModel),
-        dimensions:Number(row.dimensions || row.vector.length || APP.loreEmbeddingDimensions), vector:row.vector.map(Number), updatedAt:Number(row.updatedAt || 0),
+        dimensions:Number(row.dimensions) || row.vector.length || APP.loreEmbeddingDimensions, vector:row.vector.map(Number), updatedAt:Number(row.updatedAt) || 0,
       })) : [];
       normalizedLogIndexes.add(room.logSemanticIndex);
     }
@@ -5527,13 +5528,13 @@ const WishImportPeople=(()=>{
   function memoryCheckpointRange(room){const prefix='memory:'+room.chatId+':';return IDBKeyRange.bound(prefix+'0',prefix+':',false,true);}
   async function saveMemoryCheckpoint(room,reason='update') {
     if(!state.db)return;
-    const entry={id:`memory:${room.chatId}:${Date.now()}:${Math.random().toString(36).slice(2,8)}`,chatId:room.chatId,at:Date.now(),reason,
+    const now=Date.now(),entry={id:`memory:${room.chatId}:${now}:${Math.random().toString(36).slice(2,8)}`,chatId:room.chatId,at:now,reason,
       currentState:String(room.slots?.find(s=>s.id==='currentState')?.content||''),
       logSummary:String(room.slots?.find(s=>s.id==='logSummary')?.content||''),cursors:structuredClone(room.aiUpdateCursors||{}),sourceManifests:structuredClone(room.aiSourceManifests||{})};
     await new Promise((resolve,reject)=>{
       const tx=state.db.transaction([APP.historyStoreName,APP.cognitionStoreName,APP.libraryStoreName],'readwrite'),st=tx.objectStore(APP.historyStoreName);
       const cq=tx.objectStore(APP.cognitionStoreName).get(String(apiChatIdOf(room))),pq=tx.objectStore(APP.libraryStoreName).getAll();let remaining=2;
-      const complete=()=>{if(--remaining)return;try{entry.displayDetails=MemoryDiff.details(room,cq.result||{},pq.result||[]);}catch{entry.displayDetails=null;}st.put(entry);const kq=st.getAllKeys(memoryCheckpointRange(room));kq.onsuccess=()=>{const keys=kq.result||[];for(const key of keys.slice(0,Math.max(0,keys.length-10)))st.delete(key);};};cq.onsuccess=complete;pq.onsuccess=complete;
+      const complete=()=>{if(--remaining)return;try{entry.displayDetails=MemoryDiff.details(room,cq.result||{},pq.result||[]);}catch{entry.displayDetails=null;}st.put(entry);const own='memory:'+room.chatId+':',kq=st.getAllKeys(memoryCheckpointRange(room));kq.onsuccess=()=>{const keys=(kq.result||[]).filter(k=>/^\d+:[0-9a-z]*$/.test(String(k).slice(own.length)));for(const key of keys.slice(0,Math.max(0,keys.length-10)))st.delete(key);};};cq.onsuccess=complete;pq.onsuccess=complete;
       tx.oncomplete=resolve;tx.onerror=tx.onabort=()=>reject(tx.error||new Error('기억 변경 전 이력 저장 실패'));
     });
     MemoryDiff.invalidate(room.chatId);
@@ -5572,7 +5573,7 @@ const WishImportPeople=(()=>{
         if(!state.db||!room?.chatId){resolve([]);return;}
         const revisionAtStart=revision,prefix='memory:'+room.chatId+':';
         const q=state.db.transaction(APP.historyStoreName,'readonly').objectStore(APP.historyStoreName).getAll(IDBKeyRange.bound(prefix,prefix+'\uffff'));
-        q.onsuccess=()=>{const rows=(q.result||[]).filter(x=>x&&x.chatId===room.chatId&&typeof x.currentState==='string').sort((a,b)=>Number(b.at)-Number(a.at)).slice(0,10).map(({id,chatId,at,reason,currentState,logSummary,displayDetails})=>({id,chatId,at,reason,currentState,logSummary,displayDetails}));if(revisionAtStart!==revision){resolve(list(room));return;}if(revisionAtStart===revision)cache.set(room,{revision,entry:rows[0]||null});resolve(rows);};
+        q.onsuccess=()=>{const rows=(q.result||[]).filter(x=>x&&x.chatId===room.chatId&&typeof x.currentState==='string').sort((a,b)=>a.id<b.id?1:a.id>b.id?-1:0).slice(0,10).map(({id,chatId,at,reason,currentState,logSummary,displayDetails})=>({id,chatId,at,reason,currentState,logSummary,displayDetails}));if(revisionAtStart!==revision){resolve(list(room));return;}if(revisionAtStart===revision)cache.set(room,{revision,entry:rows[0]||null});resolve(rows);};
         q.onerror=()=>reject(q.error||Error('정리 기록을 읽지 못했습니다.'));
       });
     }
@@ -5944,7 +5945,6 @@ const WishImportPeople=(()=>{
     return `[${safeDate}｜${safeTitle}]`;
   }
 
-  const legacyCheckedLog=new WeakMap(),normalizedLogIndexes=new WeakSet();
   function restoreLegacyDateFallbacks(value) {
     let text=normalizeLineBreaks(String(value||''));
     // 2.x '시점 = …' bodies are the only thing this upgrades; without the marker nothing can change.
@@ -15334,6 +15334,7 @@ function createWishUI(AD) {
   const tag = (t, c = '') => `<span class="m3-tag ${c}">${t}</span>`;
   const dots = '<span class="m3-dots"><i></i><i></i><i></i></span>';
   // UTF-8 size of JSON.stringify(array), cached per array; re-checked by length and first/last element.
+  // Valid while evidence arrays are only appended (push, push+splice at the cap) or replaced, never edited in the middle.
   const JSON_BYTES = new WeakMap(), UTF8 = new TextEncoder();
   function jsonBytes(a) { const c = JSON_BYTES.get(a); if (c && c.n === a.length && c.f === a[0] && c.l === a[a.length - 1]) return c.b; const b = UTF8.encode(JSON.stringify(a)).length; JSON_BYTES.set(a, { n: a.length, f: a[0], l: a[a.length - 1], b }); return b; }
   function card(key, title, meta, body, actions = '', right = '', cc = '') {
@@ -16888,14 +16889,14 @@ nativeBundle(d) {
     const regions = vRegions(), html = regions.map(r => r[1]).join('');
     if (rootTouched || rootPatched !== root || html !== rootHtml) {
       // A toast or dialog typing repaints only its own region; anything unmapped falls back to the whole root.
-      let full = touchedAll || rootPatched !== root;
+      let full = touchedAll || rootPatched !== root || root.childElementCount !== regions.filter(r => r[1]).length;
       if (!full) for (const [k, h] of regions) {
         const before = regionHtml.get(k) ?? '';
         if (h === before && !touchedRegions.has(k)) continue;
         const el = h && before ? root.querySelector(`:scope>[data-key="${k}"]`) : null;
         if (!el) { full = true; break; }
         const tpl = document.createElement('template'); tpl.innerHTML = h; const y = tpl.content.firstElementChild;
-        if (!y || tpl.content.childNodes.length !== 1 || keyOf(y) !== k) { full = true; break; }
+        if (!y || tpl.content.childNodes.length !== 1 || keyOf(y) !== k || el.nodeName !== y.nodeName) { full = true; break; }
         patchNode(el, y);
       }
       if (full) { const tpl = document.createElement('template'); tpl.innerHTML = html; patchKids(root, tpl.content); }
@@ -17126,20 +17127,22 @@ ${open ? `<div class="wp-err-body"><div class="wp-err-row"><span>원인</span><p
   }
   const clamp = (v, a, b) => Math.min(Math.max(v, a), Math.max(a, b));
   const canMove = () => matchMedia('(any-pointer: fine)').matches || innerWidth >= 600;
+  // Open pack/export popovers sit in the top layer, so they are re-positioned while the shell moves under them.
+  function followPopovers() { if (S.openSet.has('external-export') || [...S.openSet].some(k => k.startsWith('pack-menu-'))) { positionPackMenus(); positionExternalMenu(); } }
   function startDrag(e) {
     if (!canMove()) return; const sh = root.querySelector('.m3-shell'), ov = root.querySelector('.m3-overlay'); if (!sh || !ov) return; e.preventDefault();
     const sr = sh.getBoundingClientRect(), or = ov.getBoundingClientRect(), ox = e.clientX - sr.left, oy = e.clientY - sr.top;
     if (!S.size) S.size = { w: Math.round(sr.width), h: Math.round(sr.height) }; S.pos = { x: sr.left - or.left, y: sr.top - or.top }; S.dragging = true; paint(false);
-    const mv = ev => { S.pos = { x: Math.round(clamp(ev.clientX - or.left - ox, 0, or.width - S.size.w)), y: Math.round(clamp(ev.clientY - or.top - oy, 0, or.height - S.size.h)) }; sh.style.left = S.pos.x + 'px'; sh.style.top = S.pos.y + 'px'; };
+    const mv = ev => { S.pos = { x: Math.round(clamp(ev.clientX - or.left - ox, 0, or.width - S.size.w)), y: Math.round(clamp(ev.clientY - or.top - oy, 0, or.height - S.size.h)) }; const el = sh.isConnected ? sh : root.querySelector('.m3-shell'); if (el) { el.style.left = S.pos.x + 'px'; el.style.top = S.pos.y + 'px'; } followPopovers(); };
     const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); S.dragging = false; AD.saveLayout && AD.saveLayout({ pos: S.pos, size: S.size }); paint(false); };
     addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up);
   }
   function startResize(e) {
     if (!canMove()) return; const sh = root.querySelector('.m3-shell'), ov = root.querySelector('.m3-overlay'); if (!sh || !ov) return; e.preventDefault();
     const sr = sh.getBoundingClientRect(), or = ov.getBoundingClientRect(); S.pos = { x: Math.max(0,sr.left - or.left), y: Math.max(0,sr.top - or.top) }; const w0 = sr.width, h0 = sr.height, x0 = e.clientX, y0 = e.clientY;
-    S.size={w:Math.round(w0),h:Math.round(h0)};
+    S.size={w:Math.round(w0),h:Math.round(h0)};paint(false);
     const maxW=Math.max(1,or.width-S.pos.x),maxH=Math.max(1,or.height-S.pos.y);
-    const mv = ev => { S.size = { w: Math.round(clamp(w0 + ev.clientX - x0, Math.min(360,maxW), maxW)), h: Math.round(clamp(h0 + ev.clientY - y0, Math.min(360,maxH), maxH)) }; sh.style.width = S.size.w + 'px'; sh.style.height = S.size.h + 'px'; };
+    const mv = ev => { S.size = { w: Math.round(clamp(w0 + ev.clientX - x0, Math.min(360,maxW), maxW)), h: Math.round(clamp(h0 + ev.clientY - y0, Math.min(360,maxH), maxH)) }; const el = sh.isConnected ? sh : root.querySelector('.m3-shell'); if (el) { el.style.width = S.size.w + 'px'; el.style.height = S.size.h + 'px'; } followPopovers(); };
     const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); AD.saveLayout && AD.saveLayout({ pos: S.pos, size: S.size }); paint(false); };
     addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel',up);
   }
@@ -17205,10 +17208,12 @@ ${open ? `<div class="wp-err-body"><div class="wp-err-row"><span>원인</span><p
     if(AD.streaming?.())return;
     const w = document.getElementById(MON_ID); if (!w) return;
     const m=needsFullView()?{inj:V.inj,memory:V.memory,job:V.job,reviewCount:V.reviews.length}:monitorVm;
-    const busy=!!(S.jobs.length||m.job),pct=Math.min(1,(m.inj.total||0)/(m.inj.max||40000));
+    const busy=!!(S.jobs.length||m.job),pct=Math.min(1,(m.inj.total||0)/(m.inj.max||40000)),snapOn=w.classList.contains('is-off')&&!!m.inj.armed&&needsFullView();
     w.classList.toggle('is-off', !m.inj.armed); w.classList.toggle('is-warn', pct >= .85 && !busy); w.classList.toggle('is-busy', busy); w.classList.toggle('is-holding', S.monHold);
     w.classList.toggle('is-alert', !!m.memory?.error); // 2.7.1: 자동 정리가 오류로 멈춤 (주입 OFF에서도 보이는 테두리 표시)
-    const val = w.querySelector('.wish-mon-gauge .val'), off = (81.7 * (1 - (busy ? .55 : pct))).toFixed(1); if (val && val.style.strokeDashoffset !== off) val.style.strokeDashoffset = off;
+    const val = w.querySelector('.wish-mon-gauge .val'), off = (81.7 * (1 - (busy ? .55 : pct))).toFixed(1);
+    if (val && snapOn) { val.style.transition = 'none'; val.style.strokeDashoffset = off; void val.getBoundingClientRect(); val.style.transition = ''; }
+    else if (val && val.style.strokeDashoffset !== off) val.style.strokeDashoffset = off;
     const num = w.querySelector('.wish-mon-core>b'), left = !m.inj.armed ? 'OFF' : m.memory.enabled ? String(Math.max(0, (m.memory.target || 0) - (m.memory.committed || 0))) : '–'; if (num && num.textContent !== left) num.textContent = left;
     const alertNote=m.memory?.error?' · 자동 정리 멈춤: '+String(m.memory.error).replace(/\s+/g,' ').slice(0,80):''; // 2.7.1
     const core=w.querySelector('.wish-mon-core'), status=(m.inj.armed?'주입 중':'주입 해제')+alertNote, hint=status+' · 탭: 현재 주입 · 길게: 전체 패널', label='Wish RP Manager Core — '+status+' · 탭: 현재 주입, 길게: 전체 패널';
@@ -17578,7 +17583,7 @@ function WUIReadFactRows(cog,pending){
 }
 function WUIReadModel(options={}){let D,S,room,items,logView;const preview=options?.preview!==false;const opened=new Set(),dateLabel=v=>v?new Date(v).toLocaleString('ko-KR'):'';
 function model(r){
- room=r;items=r.pending||preview?v2CurrentItems(r):[];logView=WUIReadLogView(r);const m=autoMemoryState(r),sched=memoryScheduleForRoom(r),cs=v2CognitionStatus(),cg=state.v2Cognition||{},bridge=(typeof unsafeWindow!=='undefined'?unsafeWindow:window).__WishCognitionBridge,cfg=bridge?.getSettings?.()||{},ai=WUICache.ai,p=r.injectionPolicy||{},la=autoLoreState(r),lc=r.loreConfig||{};
+ room=r;items=r.pending||preview?v2CurrentItems(r):[];const m=autoMemoryState(r);logView=WUIReadLogView(r);const sched=memoryScheduleForRoom(r),cs=v2CognitionStatus(),cg=state.v2Cognition||{},bridge=(typeof unsafeWindow!=='undefined'?unsafeWindow:window).__WishCognitionBridge,cfg=bridge?.getSettings?.()||{},ai=WUICache.ai,p=r.injectionPolicy||{},la=autoLoreState(r),lc=r.loreConfig||{};
  const slots=r.slots||[],slot=id=>slots.find(s=>s.id===id),chars=group=>slots.filter(s=>s.group===group).map(s=>({...s,aliases:s.aliases||[],ret:s.turns??s.retentionTurns??0,size:String(s.content||'').length,pin:!!s.userPinned,match:''}));
  D={room:WishRoomNames.display(r),inj:{armed:!!r.pending,verified:!!r.pending?.verified},saveAt:saveStatusText(),saving:false,slot:{state:!!slot('currentState')?.enabled,log:!!slot('logSummary')?.enabled},
  state:parseCurrentStateSections(slot('currentState')?.content||'').map((s,i)=>({...s,id:String(i),size:String(s.body||'').length})),
@@ -17594,7 +17599,7 @@ function model(r){
  ai:{...ai,model:getAiSelectedModel(ai),dsModel:getAiSelectedModel(ai)},presets:WUICache.presets.items||[],};
  S={tab:({check:'home',cognition:'cog'})[state.v2Tab]||state.v2Tab||'home',mem:state.v2MemoryView==='character'?'char':['state','log','speech','extra'].includes(state.v2MemoryView)?state.v2MemoryView:'state',cog:state.v2MemoryView==='cog-reviews'?'review':'people',open:opened,job:automaticMemoryJob?{label:'현재상태·날짜별 사건 정리 중'}:automaticLoreJob?{label:'자료 카드 정리 중'}:aiUpdateRunning&&!U3.checking()?{label:'기억 작업 마무리 중'}:null};
 }
-if(!state.currentRoom||!WUICache.ai)return {};model(state.currentRoom);const r=state.currentRoom;const injection=r.pending||preview?WUIInjectionView(r,items):{legacyExclusions:0,armed:false,verified:false,total:0,max:allFitLimit(r),groups:{},items:[],hasCarrier:false,hasOriginal:false,matchesSaved:false,selection:null,review:null,...pendingSyncIssue(null)},plan=injection.items;
+if(!state.currentRoom||!WUICache.ai)return {};model(state.currentRoom);const r=state.currentRoom;const injection=r.pending||preview?WUIInjectionView(r,items):{legacyExclusions:0,armed:false,verified:false,total:0,max:allFitLimit(r),groups:{},items:[],hasCarrier:false,hasOriginal:false,matchesSaved:false,selection:null,review:r.lastLoreSearch?{method:r.lastLoreSearch.reviewMethod,reason:r.lastLoreSearch.reviewReason,total:r.lastLoreSearch.reviewBaseTotal,limit:r.lastLoreSearch.reviewLimit,at:r.lastLoreSearch.at}:null,...pendingSyncIssue(null)},plan=injection.items;
 const rebuild=R31.get(r);const vm={held:WishHeldUI.view(r),apiEconomy:{...WishEconomy.settings(r),status:WishEconomy.describe(r)},cogInclude:Number(r.injectionPolicy?.cognitionEvery)>0,recall:recallSelectionSettings(r),rebuild:rebuild?{status:rebuild.status,message:rebuild.message,segments:rebuild.segments,ready:!!rebuild.draft}:null,rebuildRunning:R31.busy(),unified:U3.view(r),room:{...WishRoomNames.describe(r),name:D.room},version:SCRIPT_VERSION,save:{saving:state.saveStatus==='saving',at:state.lastSavedAt?new Date(state.lastSavedAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}):''},job:S.job,features:{autoDefault:false,semantic:false,density:false},inj:injection,defaults:{enabled:WUICache.ai.autoMemoryEnabled!==false,every:WUICache.ai.memoryMaxTurns},memory:D.memory,cog:{...D.cog,actors:D.actors,facts:D.facts.map(f=>({...f,included:f.sel}))},reviews:D.reviews.map(rv=>({...rv,acceptLabel:rv.accept})),state:{inject:D.pol.state,sections:D.state,raw:String(r.slots?.find(s=>s.id==='currentState')?.content||'')},logs:{inject:D.pol.log,blocks:D.logs.map(b=>({...b,undated:b.date==='날짜 미상',included:D.pol.log&&plan.some(i=>i.kind==='log'&&!i.off&&(i.sourceKey===b.key||i.key==='log:'+b.key))})),dupDates:logView.duplicateDates},relationships:{held:Array.isArray(r.relationshipHeld)?r.relationshipHeld:[],on:r.relationshipConfig?.enabled!==false,rows:WishRelationships.normalize(r.relationships)},speech:{on:D.speechOn,rows:D.speech},chars:{autoDetect:D.autoChar,rows:D.chars},extras:{rows:D.extras},presets:D.presets.map(p=>({...p,ret:p.retentionTurns})),lore:D.lore,ai:{providerLabel: getAiProviderLabel(D.ai.provider),model:D.ai.provider==='manual'?'API 없이 · 요청문 복사 → 답 붙여넣기':D.ai.model,manual:D.ai.provider==='manual',ready:isAiProviderReady(D.ai),job:D.ai.provider==='manual'?manualJobView(r):null},pol:D.pol,autoChar:D.autoChar,quickCog:D.facts.map(f=>({id:f.id,label:f.label,mode:f.mode,included:state.quickCognitionDesired.has(f.id)?state.quickCognitionDesired.get(f.id):f.sel})),recent:[D.memory.last,D.lore.auto.last].filter(Boolean),labels:{resetDesc:'현재 방의 기억·인지·이 방 전용 자동 자료를 초기화합니다. 일반 자료집은 유지됩니다.'}};
 Object.assign(vm.memory,{error:U3.monitor(r).error,enabled:vm.unified.enabled&&vm.unified.memoryEnabled,committed:vm.unified.memoryPending,target:vm.unified.memoryEvery,fixed:vm.unified.memoryEvery,running:vm.unified.running,status:vm.unified.error||vm.unified.status});Object.assign(vm.cog,{auto:vm.unified.enabled&&vm.unified.observeEnabled,every:vm.unified.observeEvery});vm.job=vm.unified.running?{label:vm.unified.jobLabel||'통합 결과 확인 중'}:vm.job;
 if(R31.busy())vm.job={label:rebuild?.message||'재구축 자료 준비 중'};
@@ -17732,7 +17737,7 @@ async function WUIPresetsSave(d,apply){const items=d.draft.list.map((x,i)=>({...
 
 async function WUILoreConvert(d){d.draft.busy=true;WUI.paint();try{const room=d.wishRoom,entries=await convertTextToLoreEntries(d.draft.src),existingPack=(state.v2LorePacks||[]).find(p=>p.scopeId===d.draft.target);if(existingPack?.ownerChatId&&String(existingPack.ownerChatId)!==String(room.chatId||''))throw Error('다른 방 소유 자료집에는 직접 변환 결과를 넣을 수 없습니다. 독립 사본을 만든 뒤 사용해 주세요.');let pack=existingPack?structuredClone(existingPack):null,createdNew=!pack;if(pack){const byKey=new Map(pack.entries.map(e=>[loreEntryMergeKey(e),e]));for(const entry of entries){const old=byKey.get(loreEntryMergeKey(entry));if(old){entry.id=old.id;entry.anchor=entry.speechRule?false:old.anchor||entry.anchor;entry.enabled=old.enabled!==false;}byKey.set(loreEntryMergeKey(entry),entry);}pack.entries=[...byKey.values()];}else pack=normalizeLorePack({name:String(d.draft.name||'가져온 자료집').trim(),entries,ownerChatId:room.chatId,ownerApiChatId:apiChatIdOf(room)});pack=await putLorePack(pack);if(createdNew&&!(room.activeLorePackIds||[]).includes(pack.scopeId))room.activeLorePackIds.push(pack.scopeId);await saveRoom(room);if(room.pending){replaceLorePendingItems(room,room.autoRecallContextText||'',null);await syncPendingCarrier(room,'lore-convert');}notify('자료집 변환 완료 · '+entries.length+'개 자료','success');WUI.closeSheet(d);renderModalIfOpen();}finally{d.draft.busy=false;}}
 
-const WUI_ACTION_MAP={arm:'arm',spDel:'speech-delete',loreIndex:'lore-index',loreAutoSave:'lore-auto-save',loreBase:'lore-auto-baseline',loreRun:'lore-auto-run',loreExt:'lore-external-export',loreImport:'lore-external-import',loreFile:'lore-import',packExport:'lore-pack-export',ftDel:'cog-fact-remove',rvClear:'cog-reviews-clear',rvAccept:'review-accept',rvDismiss:'review-dismiss',fileBackup:'backup',fileRestore:'restore',reset:'reset',autoDefault:'automation-defaults',inheritDefaults:'automation-defaults',autoSave:'automation-save',injSave:'injection-save',loreSave:'lore-settings-save',};
+const WUI_ACTION_MAP={arm:'arm',spDel:'speech-delete',loreIndex:'lore-index',loreBase:'lore-auto-baseline',loreRun:'lore-auto-run',loreExt:'lore-external-export',loreImport:'lore-external-import',loreFile:'lore-import',packExport:'lore-pack-export',ftDel:'cog-fact-remove',rvClear:'cog-reviews-clear',rvAccept:'review-accept',rvDismiss:'review-dismiss',fileBackup:'backup',fileRestore:'restore',reset:'reset',};
 const WUI_ADAPTER={isChatPath:path=>!!getChatIdFromPath(path),vm:WUIReadModel,monitor:WUIReadMonitor,streaming:()=>!!state.currentRoom&&backgroundWorkPending(apiChatIdOf(state.currentRoom)),act:Object.fromEntries(Object.entries(WUI_ACTION_MAP).map(([name,action])=>[name,async arg=>{const room=state.currentRoom,key=String(apiChatIdOf(room)),before={...(WUICache.settings.get(key)||{})};const ok=await WUIInvoke(action,arg);if(ok){WUIClearSavedDraft(key,name,before);WUIRefreshSettings();}return ok;}])),bind:{},save:WUISaveEditor,remove:WUIRemoveEditor,
  onOpen(){void WishHeldUI.refresh().catch(()=>{});void WUIOnOpen().catch(e=>notify(e.message,'error'));},onClose(){state.modal=null;},onNav(tab,sub){void WishHeldUI.refresh().catch(()=>{});if(tab==='lore')wishRefreshRoomNames();state.v2Tab=tab;state.v2MemoryView=tab==='cognition'?'cog-'+(sub==='review'?'reviews':'facts'):sub==='char'?'character':sub||state.v2MemoryView;v2ScheduleAsyncRefresh(state.currentRoom);},onRoute(){WUICache.settings.clear();},loadLayout(){try{return JSON.parse(localStorage.getItem('wish-m3-layout')||'null');}catch{return null;}},saveLayout(layout){localStorage.setItem('wish-m3-layout',JSON.stringify(layout));},copy:copyPlainText};
 Object.assign(WUI_ADAPTER.act,{
