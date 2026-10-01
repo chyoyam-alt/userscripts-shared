@@ -15190,6 +15190,23 @@ pre.m3-block.tall{max-height:none;min-height:340px}
 #wish-rp-root .wp-lr-ctl{display:flex;gap:4px}
 #wish-rp-root .wp-lr-ctl .m3-choice{padding:3px 9px;font-size:11px}
 @media (max-width:600px){#wish-rp-root .wp-lr-row{grid-template-columns:minmax(0,1fr)}#wish-rp-root .wp-lr-t b{white-space:normal;overflow-wrap:anywhere}}
+/* 모바일 화면 다듬기 */
+/* 툴바 앞 글씨: 버튼에 밀려 세로로 쪼개지지 않게, 자리가 모자라면 버튼이 다음 줄로 */
+#wish-rp-root .m3-toolbar>.m3-muted.m3-grow{flex:1 0 auto;max-width:100%}
+/* 설정 · 재검토 방식: 좁은 화면에서도 이름 옆에 선택 상자 */
+@media (max-width:560px){#wish-rp-root .m3-setting-row.m3-recall-mode{flex-direction:row;align-items:center;gap:10px}#wish-rp-root .m3-recall-mode>label{flex:none}#wish-rp-root .m3-recall-mode select{flex:1 1 auto;width:auto;min-width:0}}
+@container (max-width:490px){
+/* 외부 AI로 재구축 · 2차 재구축: 버튼 세 개를 한 줄에 (앞 아이콘을 빼고 여백을 줄임) */
+#wish-rp-root :is(.m3-external-actions,[data-key="secondary-rebuild"]>.m3-card-actions){flex-wrap:nowrap;gap:6px}
+#wish-rp-root :is(.m3-external-actions,[data-key="secondary-rebuild"]>.m3-card-actions) .m3-btn{padding-left:8px;padding-right:8px;min-width:0}
+#wish-rp-root :is(.m3-external-actions,[data-key="secondary-rebuild"]>.m3-card-actions) .m3-btn>svg.ic:first-child{display:none}
+/* 쪽 머리줄: 제목 옆에 들어가는 만큼 버튼을 놓고, 남는 버튼(AI 묶음 정리 등)은 다음 줄 오른쪽 */
+#wish-rp-root .m3-pagehead{gap:8px 5px}
+#wish-rp-root .m3-pagehead>.m3-actions{display:contents}
+#wish-rp-root .m3-pagehead>h2{flex:1 0 auto}
+#wish-rp-root .m3-pagehead>.m3-actions>.m3-btn{flex:none;padding-left:8px;padding-right:8px}
+#wish-rp-root .m3-pagehead>.m3-actions>.m3-btn:last-child{margin-left:auto}
+}
 `;
 /* =====================================================================
    Wish 청묵 UI 모듈 (WUI) — 화면 전용. 이 함수 전체를 그대로 붙여 넣는다.
