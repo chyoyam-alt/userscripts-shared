@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🖼️ CSP - Generated Image Background Blur (배경 이미지&테마)
 // @namespace    crack-scene-painter-background-borderless
-// @version      4.1.0
+// @version      4.2.0
 // @description  다크/라이트와 소설형/채팅형을 자동 구분해 조합별 배경·테마 설정을 적용하고, 라이트 전용 테마·입력창·라디오존데 색과 HANGAR·Cozy 다크를 함께 최적화합니다.
 // @match        https://crack.wrtn.ai/*
 // @require      https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js
@@ -53,7 +53,7 @@
   }
 
   const SCRIPT_NAME = 'CSP Borderless Background Blur';
-  const VERSION = '4.1.0';
+  const VERSION = '4.2.0';
   const SGB_MUTATION_BATCH_MS = 32;
 
   /**
@@ -3873,6 +3873,7 @@ function decorateRoleAwareUserBubbles(group, uiStyle = normalizeUiStyle(CONFIG.u
     const activePaletteIndex = Math.max(0, Math.min(paletteCount - 1, Math.round(Number(CONFIG.uiPaletteIndex) || 0)));
     const useBaseThemeColorCss = !!CONFIG.themeRecommendedColorsEnabled && activePaletteIndex === 0;
 
+    sgbThemeCss.ensure(normalizeUiStyle(CONFIG.uiStyle));
     setAttributeIfChanged(document.documentElement, 'data-sgb-ui-style', normalizeUiStyle(CONFIG.uiStyle));
     setAttributeIfChanged(document.documentElement, 'data-sgb-botanical-paper', activePaletteIndex === 1 ? 'sage' : 'linen');
     if (normalizeUiStyle(CONFIG.uiStyle) !== 'haunt') stopHauntRuntime();
@@ -6162,41 +6163,91 @@ function createSettingsModal() {
     decorateCodeblocks(group);
 
     if (final) {
-      const signature = makeMessageGroupSignature(group);
-      const previousSignature = state.finalizedMessageSignatures.get(group) || '';
-      if (signature && signature !== previousSignature) {
-        decorateQuotesInRoot(group, { force: true, visibleOnly: true });
-        state.finalizedMessageSignatures.set(group, signature);
-      }
+      decorateGroupQuotesOnce(group, true, true);
     }
 
+    return true;
+  }
+
+  // 최적화(4.2.0): 대사 강조 상태 서명 = makeMessageGroupSignature(같은 본문 목록) + 지금 붙은 강조 수.
+  // 본문 목록을 받아 쓰므로 레이아웃을 다시 읽지 않는다. 칠한 뒤 서명을 기록해 두면
+  // 방 진입 시 유휴 작업과 메시지별 정리 타이머가 같은 메시지를 두 번 칠하던 중복이 사라진다.
+  // 강조 수가 들어 있어 React가 같은 글로 다시 그려 강조가 지워지면 다시 칠한다.
+  function quoteDecorSignature(group, markdowns) {
+    if (!(group instanceof HTMLElement)) return '';
+    const messageIds = markdowns.map(markdown => {
+      const holder = markdown.closest('[data-message-id], [data-id]');
+      return holder?.getAttribute?.('data-message-id') || holder?.getAttribute?.('data-id') || '';
+    }).filter(Boolean);
+    const text = markdowns.map(markdown => markdown.textContent || '').join('\n␞\n');
+    const groupId = group.getAttribute('data-message-group-id') || '';
+    let spans = 0;
+    markdowns.forEach(markdown => { spans += markdown.querySelectorAll('span[data-sgb-quote]').length; });
+    return `${groupId}|${messageIds.join(',')}|${text.length}|${hashMessageText(text)}|q${spans}`;
+  }
+
+  // 메시지 하나를 칠하고 서명을 기록한다. 보이는 본문은 한 번만 찾는다(강제 레이아웃 1회).
+  // skipIfSame이면 이미 같은 상태로 칠해진 메시지는 건너뛴다. markdowns를 주면 그 목록을 쓴다.
+  function decorateGroupQuotesOnce(group, force, skipIfSame, markdowns = null) {
+    // decorateQuotesInRoot()가 아무것도 안 하고 돌아오는 때(강조 꺼짐, 상황 이미지 토글 직후)는 기록하지 않는다.
+    // 기록해 두면 나중에 같은 메시지를 다시 칠할 기회를 놓친다.
+    if (!isAnyQuoteHighlightEnabled() || Date.now() < Number(state.quoteHealUntil || 0)) {
+      decorateQuotesInRoot(group, { force, visibleOnly: true });
+      return false;
+    }
+    const list = markdowns || getActiveMessageMarkdowns(group);
+    if (skipIfSame && state.finalizedMessageSignatures.get(group) === quoteDecorSignature(group, list)) return false;
+    decorateQuotesInRoot(group, { force, visibleOnly: true, markdowns: list });
+    state.finalizedMessageSignatures.set(group, quoteDecorSignature(group, list));
     return true;
   }
 
   // 새 메시지 스트리밍이 끝나거나 메시지 수정이 끝나면(=글자가 잠깐 안 바뀌면)
   // 그 문단만 대사/생각 강조(따옴표 형광펜+글자색)를 다시 칠한다.
   // generate_done 방송을 안 기다려도 바로 반영되게 하는 안정 감지용.
+  // 최적화(4.2.0): 원본은 메시지마다 타이머를 따로 걸어, 방 이동 때 수십 개 타이머가 각각 레이아웃을
+  // 강제로 계산했다. 메시지별 예정 시각(마지막 변화 + delay)은 그대로 두고, 타이머 하나가 때가 된
+  // 메시지를 모아 "보이는 본문 찾기(레이아웃 1회) → 칠하기" 순서로 한꺼번에 처리한다.
   function scheduleGroupQuoteSettle(group, delay = 200) {
     if (isNormalUiStyle() || !isAnyQuoteHighlightEnabled()) return;
     if (!(group instanceof HTMLElement) || !group.isConnected || !group.closest('main')) return;
 
-    const timers = state.quoteSettleTimers || (state.quoteSettleTimers = new WeakMap());
-    clearTimeout(timers.get(group));
+    const due = state.quoteSettleDue || (state.quoteSettleDue = new Map());
+    due.delete(group);
+    due.set(group, performance.now() + Math.max(0, Number(delay) || 0));
+    scheduleQuoteSettleFlush();
+  }
 
-    const timerId = window.setTimeout(() => {
-      timers.delete(group);
-      if (isNormalUiStyle() || !isAnyQuoteHighlightEnabled()) return;
-      if (!(group instanceof HTMLElement) || !group.isConnected) return;
+  function scheduleQuoteSettleFlush() {
+    const due = state.quoteSettleDue;
+    if (!due || !due.size) return;
+    let next = Infinity;
+    for (const at of due.values()) if (at < next) next = at;
+    if (state.quoteSettleTimer && state.quoteSettleTimerAt <= next) return;
+    clearTimeout(state.quoteSettleTimer);
+    state.quoteSettleTimerAt = next;
+    state.quoteSettleTimer = window.setTimeout(flushQuoteSettle, Math.max(0, next - performance.now()));
+  }
 
-      const signature = makeMessageGroupSignature(group);
-      // 이미 이 내용 그대로 칠했으면 다시 안 함(중복 방지).
-      if (state.finalizedMessageSignatures.get(group) === signature) return;
+  function flushQuoteSettle() {
+    state.quoteSettleTimer = 0;
+    const due = state.quoteSettleDue;
+    if (!due) return;
+    const now = performance.now();
+    const ready = [];
+    for (const [group, at] of due) {
+      if (at <= now + 1) ready.push(group);
+    }
+    ready.forEach(group => due.delete(group));
 
-      decorateQuotesInRoot(group, { force: true, visibleOnly: true });
-      state.finalizedMessageSignatures.set(group, signature);
-    }, Math.max(0, Number(delay) || 0));
-
-    timers.set(group, timerId);
+    if (!isNormalUiStyle() && isAnyQuoteHighlightEnabled()) {
+      const live = ready.filter(group => group instanceof HTMLElement && group.isConnected);
+      // 1단계: 보이는 본문을 모두 먼저 찾는다(칠하기 전이라 레이아웃은 한 번만 계산됨)
+      const lists = live.map(group => getActiveMessageMarkdowns(group));
+      // 2단계: 칠한다. 이미 이 내용 그대로 칠했으면 다시 안 함(중복 방지).
+      live.forEach((group, index) => decorateGroupQuotesOnce(group, true, true, lists[index]));
+    }
+    scheduleQuoteSettleFlush();
   }
 
 
@@ -6749,9 +6800,13 @@ function createSettingsModal() {
     const force = options.force === true;
     if (force) restoreQuoteHighlightsInRoot(root);
 
-    const markdowns = visibleOnly && root.matches?.('[data-message-group-id]')
-      ? getActiveMessageMarkdowns(root)
-      : getMessageMarkdowns(root);
+    // 최적화(4.2.0): 호출한 쪽이 이미 찾은 "보이는 본문" 목록이 있으면 그대로 쓴다(강제 레이아웃 중복 제거).
+    // 칠하기 전 되돌리기는 span만 풀기 때문에 본문이 보이는지 여부는 바뀌지 않는다.
+    const markdowns = Array.isArray(options.markdowns)
+      ? options.markdowns
+      : visibleOnly && root.matches?.('[data-message-group-id]')
+        ? getActiveMessageMarkdowns(root)
+        : getMessageMarkdowns(root);
 
     markdowns.forEach(markdown => {
       const text = markdown.textContent || '';
@@ -6817,10 +6872,15 @@ function createSettingsModal() {
     const work = deadline => {
       if (generation !== state.hydrationGeneration || state.themeHydratedPath !== location.pathname) return;
 
+      // 최적화(4.2.0): 원본은 남은 시간과 무관하게 최소 6개를 한 번에 칠해 최대 90ms 멈췄다.
+      // 1개는 반드시 하고, 그다음은 유휴 시간(시간 초과로 불렸으면 12ms) 안에서만 이어 간다. 순서·결과는 같다.
+      const sliceStart = performance.now();
       let processed = 0;
-      while (index < groups.length && (processed < 6 || Number(deadline?.timeRemaining?.() || 0) > 4)) {
+      while (index < groups.length && (processed < 1 || (deadline?.didTimeout
+        ? performance.now() - sliceStart < 12
+        : Number(deadline?.timeRemaining?.() || 0) > 4))) {
         const group = groups[index++];
-        if (group?.isConnected) decorateQuotesInRoot(group, { force, visibleOnly: true });
+        if (group?.isConnected) decorateGroupQuotesOnce(group, force, true);
         processed += 1;
       }
 
@@ -6877,7 +6937,7 @@ function createSettingsModal() {
     decorateEditableEditors(document);
 
     if (options.forceQuotes === true) {
-      groups.forEach(group => decorateQuotesInRoot(group, { force: true, visibleOnly: true }));
+      groups.forEach(group => decorateGroupQuotesOnce(group, true, false));
     } else {
       scheduleInitialQuoteHydration(groups, generation, true);
     }
@@ -7085,6 +7145,177 @@ function createSettingsModal() {
     `;
   }
 
+
+  // ---------------------------------------------------------------
+  // 최적화(4.2.0): 테마 CSS 거르기
+  // 33개 테마 CSS(약 890KB, 규칙 1,390개)를 한꺼번에 넣지 않고, 공통 규칙과 지금 테마 규칙만
+  // 원래 순서 그대로 남긴다. 순서를 지키므로 같은 우선순위끼리 덮어쓰는 결과도 원본과 같다.
+  // 테마 판별: 선택자에 [data-sgb-ui-style="x"]가 있으면 그 테마 전용(:not(...) 안은 제외).
+  // 선택자 목록 중 하나라도 테마 표시가 없으면 공통. @keyframes·@font-face 등은 항상 공통.
+  // 테마를 바꾸면 applyCssVars()가 ensure()로 새 테마 기준으로 다시 거른다.
+  // ---------------------------------------------------------------
+  const sgbThemeCss = (() => {
+    let nodes = null;
+    let builtFor = null;
+    let styleEl = null;
+    const MARK = 'data-sgb-ui-style="';
+    const THEME_RE = /\[data-sgb-ui-style="([a-z0-9-]+)"\]/g;
+
+    // 따옴표 문자열 끝(닫는 따옴표 다음 위치)
+    function skipString(css, i) {
+      const quote = css[i];
+      let j = i + 1;
+      for (;;) {
+        const k = css.indexOf(quote, j);
+        if (k < 0) return css.length;
+        let backslashes = 0;
+        for (let b = k - 1; b > i && css.charCodeAt(b) === 92; b--) backslashes++;
+        if (backslashes % 2 === 0) return k + 1;
+        j = k + 1;
+      }
+    }
+    function skipComment(css, i) {
+      const end = css.indexOf('*/', i + 2);
+      return end < 0 ? css.length : end + 2;
+    }
+    // url( ... ) 끝(따옴표 없는 url 안의 괄호·중괄호 보호)
+    function skipUrl(css, i) {
+      let j = i + 4;
+      while (css.charCodeAt(j) <= 32) j++;
+      const c = css.charCodeAt(j);
+      if (c === 34 || c === 39) j = skipString(css, j);
+      const close = css.indexOf(')', j);
+      return close < 0 ? css.length : close + 1;
+    }
+    // 특별한 글자만 정규식으로 건너뛰며 찾는다(처음 실행에서도 빠름): 중괄호·세미콜론·따옴표·주석·url(
+    const TOKEN_RE = /[{};"']|\/\*|url\(/gi;
+    // i('{' 위치)부터 짝이 맞는 '}' 위치
+    function findBlockEnd(css, i, to) {
+      let depth = 0;
+      TOKEN_RE.lastIndex = i;
+      let m;
+      while ((m = TOKEN_RE.exec(css)) && m.index < to) {
+        const j = m.index;
+        const t = m[0];
+        if (t === '{') depth++;
+        else if (t === '}') { if (--depth === 0) return j; }
+        else if (t === '"' || t === "'") TOKEN_RE.lastIndex = skipString(css, j);
+        else if (t === '/*') TOKEN_RE.lastIndex = skipComment(css, j);
+        else if (t.length === 4) TOKEN_RE.lastIndex = skipUrl(css, j);
+      }
+      return to;
+    }
+
+    // 선택자 목록을 최상위 쉼표로 나눈다
+    function splitSelectors(prelude) {
+      if (prelude.indexOf(',') < 0) return [prelude];
+      const out = [];
+      let depth = 0, start = 0;
+      for (let j = 0; j < prelude.length; j++) {
+        const c = prelude.charCodeAt(j);
+        if (c === 40 || c === 91) depth++;
+        else if (c === 41 || c === 93) depth--;
+        else if (c === 44 && depth === 0) { out.push(prelude.slice(start, j)); start = j + 1; }
+        else if (c === 34 || c === 39) j = skipString(prelude, j) - 1;
+      }
+      out.push(prelude.slice(start));
+      return out;
+    }
+    // :not( ... ) 안쪽을 지운다(중첩 괄호 포함)
+    function stripNot(selector) {
+      let out = '', from = 0, at;
+      while ((at = selector.indexOf(':not(', from)) >= 0) {
+        out += selector.slice(from, at);
+        let depth = 0, k = at + 4;
+        for (; k < selector.length; k++) {
+          const c = selector.charCodeAt(k);
+          if (c === 40) depth++;
+          else if (c === 41) { if (--depth === 0) break; }
+          else if (c === 34 || c === 39) k = skipString(selector, k) - 1;
+        }
+        from = k + 1;
+      }
+      return out + selector.slice(from);
+    }
+    // 선택자 목록이 어느 테마 전용인지. 공통이면 null
+    function themesOf(prelude) {
+      if (prelude.indexOf(MARK) < 0) return null;
+      const themes = new Set();
+      const hasNot = prelude.indexOf(':not(') >= 0;
+      for (const selector of splitSelectors(prelude)) {
+        const positive = hasNot ? stripNot(selector) : selector;
+        if (positive.indexOf(MARK) < 0) return null;
+        for (const m of positive.matchAll(THEME_RE)) themes.add(m[1]);
+      }
+      return themes;
+    }
+
+    // 규칙 목록 해석: { text, themes } 또는 { prelude, children }(@media·@supports 등)
+    function parse(css, from, to) {
+      const list = [];
+      let i = from;
+      while (i < to) {
+        const c0 = css.charCodeAt(i);
+        if (c0 <= 32) { i++; continue; }
+        if (c0 === 47 && css.charCodeAt(i + 1) === 42) { i = skipComment(css, i); continue; }
+        // 머리(선택자·@규칙) 끝: '{' 또는 ';'
+        let j = to;
+        TOKEN_RE.lastIndex = i;
+        let m;
+        while ((m = TOKEN_RE.exec(css)) && m.index < to) {
+          const t = m[0];
+          if (t === '{' || t === ';') { j = m.index; break; }
+          if (t === '"' || t === "'") TOKEN_RE.lastIndex = skipString(css, m.index);
+          else if (t === '/*') TOKEN_RE.lastIndex = skipComment(css, m.index);
+          // '}'와 url(은 머리에서는 특별하지 않다(이전 글자 단위 판과 같은 동작)
+        }
+        if (j >= to) { list.push({ text: css.slice(i, to).trim(), themes: null }); break; }
+        if (css.charCodeAt(j) === 59) { list.push({ text: css.slice(i, j + 1).trim(), themes: null }); i = j + 1; continue; }
+        const end = findBlockEnd(css, j, to);
+        const prelude = css.slice(i, j).trim();
+        if (c0 === 64 && /^@(media|supports|layer|container|document)\b/i.test(prelude)) {
+          list.push({ prelude, children: parse(css, j + 1, end) });
+        } else if (c0 === 64) {
+          list.push({ text: css.slice(i, end + 1), themes: null });
+        } else {
+          list.push({ text: css.slice(i, end + 1), themes: themesOf(prelude) });
+        }
+        i = end + 1;
+      }
+      return list;
+    }
+
+    function serialize(list, theme) {
+      const parts = [];
+      for (const node of list) {
+        if (node.children) {
+          const inner = serialize(node.children, theme);
+          if (inner) parts.push(node.prelude + '{' + inner + '}');
+        } else if (!node.themes || node.themes.has(theme)) {
+          parts.push(node.text);
+        }
+      }
+      return parts.join('\n');
+    }
+
+    return {
+      // injectStyle()이 만든 전체 CSS를 기억하고, 지금 테마만 남긴 CSS를 돌려준다
+      load(css, theme, el) {
+        nodes = parse(css, 0, css.length);
+        styleEl = el;
+        builtFor = theme;
+        return serialize(nodes, theme);
+      },
+      // 테마가 바뀌었으면 같은 스타일 요소의 내용을 새 테마 기준으로 바꾼다
+      ensure(theme) {
+        if (!nodes || theme === builtFor) return;
+        if (!(styleEl instanceof HTMLStyleElement) || !styleEl.isConnected) return;
+        builtFor = theme;
+        styleEl.textContent = serialize(nodes, theme);
+      },
+      build: (theme) => (nodes ? serialize(nodes, theme) : ''),
+    };
+  })();
 
   function injectStyle() {
     document.getElementById(IDS.style)?.remove();
@@ -17385,6 +17616,8 @@ html.sgb-bg-active[data-sgb-ui-style][data-sgb-text-shadow="on"][data-sgb-ui-sty
 `;
 
     style.textContent += BOTANICAL_LETTER_CSS;
+    // 최적화(4.2.0): 33개 테마 중 지금 테마 규칙만 원래 순서대로 남긴다(sgbThemeCss 참고)
+    style.textContent = sgbThemeCss.load(style.textContent, normalizeUiStyle(CONFIG.uiStyle), style);
     document.head.appendChild(style);
   }
 
