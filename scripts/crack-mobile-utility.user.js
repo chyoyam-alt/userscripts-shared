@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.5.13
-// @description  허브 SVG 복원, 모델 맨 왼쪽 배치 및 전환 버튼 간격 수정. 미니사이드바 다크/라이트·소설/채팅 전환. 코드블록 자동 줄바꿈, 라이트 테마 코드·보조 글자 대비 수정, 테마 판별 통일, DOM·캐시·라디오존데 반복 처리 최적화. 모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
+// @version      4.5.14
+// @description  라디오존데 복구(CDN 직접 조회·신규 모델 자동 추가·GM.xmlHttpRequest 호환). 허브 SVG 복원, 모델 맨 왼쪽 배치 및 전환 버튼 간격 수정. 미니사이드바 다크/라이트·소설/채팅 전환. 코드블록 자동 줄바꿈, 라이트 테마 코드·보조 글자 대비 수정, 테마 판별 통일, DOM·캐시·라디오존데 반복 처리 최적화. 모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       Assistant
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/crack-mobile-utility.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/crack-mobile-utility.user.js
@@ -10,8 +10,10 @@
 // @run-at       document-idle
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
+// @grant        GM.xmlHttpRequest
 // @grant        unsafeWindow
 // @connect      rs.igx.kr
+// @connect      igx-radiosonde-api-striker.b-cdn.net
 // @connect      claude-radiosonde.chyoyam.chatgpt.site
 // @connect      crack-api.wrtn.ai
 // @connect      contents-api.wrtn.ai
@@ -30,7 +32,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.5.13';
+    const VERSION = '4.5.14';
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
     const CMU_RUNTIME_KEY = '__CRACK_MOBILE_UTILITY_RUNTIME__';
     const runtimeRoot = document.documentElement;
@@ -1068,11 +1070,29 @@
     function messageIdOf(msg) {
         return String(msg?._id || msg?.id || msg?.messageId || msg?.messageID || msg?.uuid || '');
     }
+    // Tampermonkey/Violentmonkey expose GM_xmlhttpRequest; Safari Userscripts and some mobile managers only GM.xmlHttpRequest.
+    function cmuGmXhrAvailable() {
+        if (typeof GM_xmlhttpRequest === 'function')
+            return true;
+        try { return typeof GM !== 'undefined' && typeof GM?.xmlHttpRequest === 'function'; } catch (_) { return false; }
+    }
+    function cmuGmXhr(details) {
+        if (typeof GM_xmlhttpRequest === 'function')
+            return GM_xmlhttpRequest(details);
+        let settled = false;
+        const once = fn => (...args) => { if (!settled) { settled = true; fn?.(...args); } };
+        const wrapped = { ...details, onload: once(details.onload), onerror: once(details.onerror),
+            ontimeout: once(details.ontimeout), onabort: once(details.onabort) };
+        const result = GM.xmlHttpRequest(wrapped);
+        // Promise-style managers may resolve without invoking callbacks.
+        Promise.resolve(result).then(res => { if (res && res.status !== undefined) wrapped.onload(res); }, err => wrapped.onerror(err));
+        return { abort() { settled = true; try { result?.abort?.(); } catch (_) { } } };
+    }
     function gmGetJson(url, timeoutMs = 15000) {
         if (!shouldRun())
             return Promise.reject(new Error('runtime disposed'));
         return new Promise((resolve, reject) => {
-            if (typeof GM_xmlhttpRequest !== 'function') {
+            if (!cmuGmXhrAvailable()) {
                 fetch(url, { headers: { accept: 'application/json' } })
                     .then(res => {
                     if (!res.ok)
@@ -1082,7 +1102,7 @@
                     .then(resolve, reject);
                 return;
             }
-            GM_xmlhttpRequest({
+            cmuGmXhr({
                 method: 'GET',
                 url,
                 timeout: timeoutMs,
@@ -6556,8 +6576,8 @@
                 try { window.htmlToImage = lib; } catch (_) { }
                 resolve(lib);
             };
-            if (typeof GM_xmlhttpRequest === 'function') {
-                GM_xmlhttpRequest({
+            if (cmuGmXhrAvailable()) {
+                cmuGmXhr({
                     method: 'GET',
                     url: libraryUrl,
                     timeout: 18000,
@@ -6685,10 +6705,10 @@
         }
 
         let gmError = null;
-        if (typeof GM_xmlhttpRequest === 'function') {
+        if (cmuGmXhrAvailable()) {
             try {
                 return await new Promise((resolve, reject) => {
-                    GM_xmlhttpRequest({
+                    cmuGmXhr({
                         method: 'GET',
                         url: source,
                         responseType: 'blob',
@@ -8775,7 +8795,7 @@
     }
     const RS_GROUPS = [
         ['fable', 'Fable'], ['opus', 'Opus'], ['gpt', 'GPT'], ['gemini', 'Gemini'],
-        ['sonnet', 'Sonnet'], ['haiku', 'Haiku'], ['other', '기타'],
+        ['sonnet', 'Sonnet'], ['haiku', 'Haiku'], ['deepseek', 'DeepSeek'], ['other', '기타'],
     ];
     function rsModelGroup(model) {
         const text = `${model.slug} ${model.label || ''}`.toLowerCase();
@@ -10662,9 +10682,9 @@
             return;
         } catch (fetchError) {
             if (CMU_RUNTIME.disposed) throw fetchError;
-            if (typeof GM_xmlhttpRequest !== 'function') throw fetchError;
+            if (!cmuGmXhrAvailable()) throw fetchError;
             await new Promise((resolve, reject) => {
-                GM_xmlhttpRequest({
+                cmuGmXhr({
                     method: 'PATCH', url: 'https://crack-api.wrtn.ai/crack-api/profiles/ui-setting', headers, data: payload,
                     withCredentials: true, anonymous: false, timeout: 10000,
                     onload: (response) => response.status >= 200 && response.status < 300
@@ -12857,22 +12877,20 @@
     const YAME_MODELS = [
         { slug: 'yame-fable5', apiId: 'fable5', source: 'yame', label: 'Fable 5.0', short: 'F5' },
     ];
+    // Built-in list for offline discovery (rs.igx.kr dashboard, 2026-10-01); live discovery adds newer models.
     const FALLBACK_MODELS = [
-        { slug: 'claude-fable-5.1', apiId: 'claude-fable-5.1', source: 'igx', label: 'Claude Fable 5.1', short: 'F5.1' },
-        { slug: 'claude-opus-5', apiId: 'claude-opus-5', source: 'igx', label: 'Claude Opus 5', short: 'O5' },
-        { slug: 'claude-opus-4.8', apiId: 'claude-opus-4.8', source: 'igx', label: 'Claude Opus 4.8', short: 'O4.8' },
-        { slug: 'claude-opus-4.7', apiId: 'claude-opus-4.7', source: 'igx', label: 'Claude Opus 4.7', short: 'O4.7' },
-        { slug: 'claude-opus-4.6', apiId: 'claude-opus-4.6', source: 'igx', label: 'Claude Opus 4.6', short: 'O4.6' },
-        { slug: 'claude-sonnet-5', apiId: 'claude-sonnet-5', source: 'igx', label: 'Claude Sonnet 5', short: 'S5' },
-        { slug: 'gemini-3.1-pro-preview', apiId: 'gemini-3.1-pro-preview', source: 'igx', label: 'Gemini 3.1 Pro (Preview)', short: 'G3.1P' },
-        { slug: 'gemini-2.5-pro', apiId: 'gemini-2.5-pro', source: 'igx', label: 'Gemini 2.5 Pro', short: 'G2.5P' },
-        { slug: 'gemini-3.6-flash', apiId: 'gemini-3.6-flash', source: 'igx', label: 'Gemini 3.6 Flash', short: 'G3.6F' },
-        { slug: 'gemini-3.5-flash', apiId: 'gemini-3.5-flash', source: 'igx', label: 'Gemini 3.5 Flash', short: 'G3.5F' },
-        { slug: 'gemini-3.5-flash-lite', apiId: 'gemini-3.5-flash-lite', source: 'igx', label: 'Gemini 3.5 Flash Lite', short: 'G3.5FL' },
-        { slug: 'gpt-5.6-sol', apiId: 'gpt-5.6-sol', source: 'igx', label: 'ChatGPT 5.6 Sol', short: 'G5.6S' },
-        { slug: 'gpt-5.6-terra', apiId: 'gpt-5.6-terra', source: 'igx', label: 'ChatGPT 5.6 Terra', short: 'G5.6T' },
-        { slug: 'gpt-5.6-luna', apiId: 'gpt-5.6-luna', source: 'igx', label: 'ChatGPT 5.6 Luna', short: 'G5.6L' },
-    ];
+        ['claude-fable-5.1', 'Claude Fable 5.1', 'F5.1'], ['claude-opus-5.5', 'Claude Opus 5.5', 'O5.5'],
+        ['claude-opus-5', 'Claude Opus 5', 'O5'], ['claude-opus-4.8', 'Claude Opus 4.8', 'O4.8'],
+        ['claude-opus-4.7', 'Claude Opus 4.7', 'O4.7'], ['claude-opus-4.6', 'Claude Opus 4.6', 'O4.6'],
+        ['claude-sonnet-5.5', 'Claude Sonnet 5.5', 'S5.5'], ['claude-sonnet-5', 'Claude Sonnet 5', 'S5'],
+        ['gemini-3.1-pro-preview', 'Gemini 3.1 Pro (Preview)', 'G3.1P'], ['gemini-2.5-pro', 'Gemini 2.5 Pro', 'G2.5P'],
+        ['gemini-3.8-flash', 'Gemini 3.8 Flash', 'G3.8F'], ['gemini-3.7-flash', 'Gemini 3.7 Flash', 'G3.7F'],
+        ['gemini-3.6-flash', 'Gemini 3.6 Flash', 'G3.6F'], ['gemini-3.5-flash', 'Gemini 3.5 Flash', 'G3.5F'],
+        ['gemini-3.5-flash-lite', 'Gemini 3.5 Flash Lite', 'G3.5FL'], ['gpt-6-sol', 'ChatGPT 6 Sol', 'G6S'],
+        ['gpt-6-luna', 'ChatGPT 6 Luna', 'G6L'], ['gpt-5.6-sol', 'ChatGPT 5.6 Sol', 'G5.6S'],
+        ['gpt-5.6-terra', 'ChatGPT 5.6 Terra', 'G5.6T'], ['gpt-5.6-luna', 'ChatGPT 5.6 Luna', 'G5.6L'],
+        ['deepseek-v4.1-flash', 'DeepSeek V4.1 Flash', 'D4.1F'], ['deepseek-v4-pro', 'DeepSeek V4 Pro', 'D4P'],
+    ].map(([slug, label, short]) => ({ slug, apiId: slug, source: 'igx', label, short }));
     const DEFAULT_RS_MODELS = [...YAME_MODELS, ...FALLBACK_MODELS];
     const EXCLUDED_MODELS = new Set(['gemini-3-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite']);
     const NON_MODEL_SLUGS = new Set([
@@ -12883,15 +12901,11 @@
     const MODEL_OVERRIDES = new Map(FALLBACK_MODELS.map(model => [model.slug, model]));
 
     const IGX_BASE_URL = 'https://rs.igx.kr';
-    const IGX_DOCS_URL = `${IGX_BASE_URL}/docs`;
-    const IGX_OPENAPI_URL = `${IGX_BASE_URL}/openapi.json`;
-    const IGX_DASHBOARD_URL = `${IGX_BASE_URL}/`;
-    const LEGACY_API_BASE = `${IGX_BASE_URL}/api/simple/`;
-    const LEGACY_STATISTICS_URL = `${IGX_BASE_URL}/api/statistics`;
 
     function titleWord(word) {
         const known = {
-            api: 'API', ai: 'AI', gpt: 'GPT', claude: 'Claude', gemini: 'Gemini',
+            api: 'API', ai: 'AI', gpt: 'GPT', claude: 'Claude', gemini: 'Gemini', deepseek: 'DeepSeek',
+            qwen: 'Qwen', grok: 'Grok', llama: 'Llama', mistral: 'Mistral', kimi: 'Kimi', glm: 'GLM',
             fable: 'Fable', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku',
             pro: 'Pro', flash: 'Flash', lite: 'Lite', mini: 'Mini', preview: 'Preview',
             thinking: 'Thinking', sol: 'Sol', terra: 'Terra', luna: 'Luna', max: 'Max', turbo: 'Turbo',
@@ -12900,7 +12914,9 @@
         return known[word] || (word ? word.charAt(0).toUpperCase() + word.slice(1) : '');
     }
     function parseSlug(slug) {
-        const tokens = String(slug || '').toLowerCase().split('-').map(value => value.trim()).filter(Boolean);
+        // "v4.1" style versions (deepseek-v4.1-flash) count as version numbers.
+        const tokens = String(slug || '').toLowerCase().split('-').map(value => value.trim()).filter(Boolean)
+            .map((token, index) => index > 0 && /^v\d+(?:\.\d+)*$/.test(token) ? token.slice(1) : token);
         const brand = tokens[0] || 'model';
         const isNumber = token => /^\d+(?:\.\d+)*$/.test(token);
         const numberIndex = tokens.findIndex((token, index) => index > 0 && isNumber(token));
@@ -12980,945 +12996,329 @@
     // 아래 별칭은 참고 확프의 검증된 데이터 파서를 그대로 가져오기 위한 연결점
     const looksLikeModelSlug = isRsModelSlug;
     const makeModelMeta = rsModelMeta;
-      function gmGetText(url, timeoutMs = 15000, accept = "text/plain,*/*") {
-        return new Promise((resolve, reject) => {
-          GM_xmlhttpRequest({
-            method: "GET",
-            url,
-            timeout: timeoutMs,
-            headers: { Accept: accept },
-            onload: (res) => {
-              const status = Number(res.status) || 0;
-              if (status && (status < 200 || status >= 300)) {
-                reject(new Error(`HTTP ${status}`));
-                return;
-              }
-              resolve(String(res.responseText || ""));
-            },
-            onerror: () => reject(new Error("network error")),
-            ontimeout: () => reject(new Error("timeout")),
-          });
-        });
-      }
-
-      function absoluteIgxUrl(value) {
-        try {
-          return new URL(String(value || ""), IGX_BASE_URL).href;
-        } catch {
-          return "";
-        }
-      }
-
-      async function loadIgxOpenApiSpec() {
-        const directCandidates = [
-          IGX_OPENAPI_URL,
-          `${IGX_BASE_URL}/api/openapi.json`,
-          `${IGX_BASE_URL}/docs/openapi.json`,
-        ];
-
-        for (const url of directCandidates) {
-          try {
-            const spec = await gmGetJson(url, 16000);
-            if (spec?.paths && typeof spec.paths === "object") return spec;
-          } catch (_) {}
-        }
-
-        // /docs가 Swagger/Scalar/ReDoc 어느 쪽으로 바뀌어도 HTML 안의 OpenAPI JSON 경로를 한 번 찾는다.
-        try {
-          const html = await gmGetText(IGX_DOCS_URL, 16000, "text/html,application/xhtml+xml");
-          const candidates = new Set();
-          const patterns = [
-            /https?:\/\/[^"'\s<>]+openapi[^"'\s<>]*\.json[^"'\s<>]*/gi,
-            /(?:url|spec-url|specUrl|data-url)\s*[:=]\s*["']([^"']+\.json[^"']*)["']/gi,
-            /["']([^"']*openapi[^"']*\.json[^"']*)["']/gi,
-          ];
-
-          for (const pattern of patterns) {
-            let match;
-            while ((match = pattern.exec(html))) {
-              const raw = match[1] || match[0];
-              const url = absoluteIgxUrl(raw);
-              if (url && url.startsWith(IGX_BASE_URL)) candidates.add(url);
-            }
-          }
-
-          for (const url of candidates) {
-            try {
-              const spec = await gmGetJson(url, 16000);
-              if (spec?.paths && typeof spec.paths === "object") return spec;
-            } catch (_) {}
-          }
-        } catch (_) {}
-
-        throw new Error("IGX OpenAPI spec not found");
-      }
-      let igxRouteCatalog = null;
-      let igxRouteCatalogTried = false;
-      let igxWorkingBulkRoute = null;
-      let igxWorkingModelRoute = null;
-      let igxSnapshotCache = null;
-      let igxSnapshotCacheAt = 0;
-      let igxSupplementCache = null;
-      let igxSupplementCacheAt = 0;
-      let igxWorkingSupplementRoute = null;
-      const IGX_SUPPLEMENT_CACHE_MS = 5 * 60 * 1000;
-
-
-      function firstFinite(...values) {
+    function firstFinite(...values) {
         for (const value of values) {
-          if (value === null || value === undefined || value === "") continue;
-          const number = Number(value);
-          if (Number.isFinite(number)) return number;
+            if (value === null || value === undefined || value === '') continue;
+            const number = Number(value);
+            if (Number.isFinite(number)) return number;
         }
         return null;
-      }
-
-      function secondsToMs(value) {
-        const number = firstFinite(value);
-        return number === null ? null : number * 1000;
-      }
-
-      function firstText(...values) {
-        for (const value of values) {
-          if (typeof value === "string" && value.trim()) return value.trim();
-        }
-        return "";
-      }
-
-      function metricRecordFromObject(source, impliedSlug = "") {
-        if (!source || typeof source !== "object" || Array.isArray(source)) return null;
-
-        const nested = [
-          source.data,
-          source.metrics,
-          source.metric,
-          source.latest,
-          source.current,
-          source.result,
-          source.health,
-        ].filter(value => value && typeof value === "object" && !Array.isArray(value));
-
-        const merged = Object.assign({}, source, ...nested);
-        const slug = firstText(
-          merged.slug,
-          merged.model_slug,
-          merged.modelSlug,
-          merged.model_id,
-          merged.modelId,
-          typeof merged.model === "string" ? merged.model : "",
-          typeof merged.id === "string" ? merged.id : "",
-          impliedSlug,
-        );
-
+    }
+    // IGX v2 /simple/{model}: { status, measuredAt, latency(ms), tps, score, failureCount }.
+    function metricRecordFromObject(source, impliedSlug = '') {
+        if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+        const slug = String(source.slug || source.model || impliedSlug || '');
         if (!looksLikeModelSlug(slug)) return null;
-
-        const score = firstFinite(
-          merged.score,
-          merged.health_score,
-          merged.healthScore,
-          merged.experience_score?.value,
-          merged.experienceScore?.value,
-          merged.rating,
-        );
-
-        const latency = firstFinite(
-          merged.latency,
-          merged.latency?.value,
-          merged.latency?.ms,
-          secondsToMs(merged.latency?.seconds),
-          merged.latency_ms,
-          merged.latencyMs,
-          secondsToMs(merged.latency_sec),
-          secondsToMs(merged.latencySec),
-          secondsToMs(merged.latency_seconds),
-          secondsToMs(merged.latencySeconds),
-          merged.avg_latency,
-          merged.avgLatency,
-          merged.average_latency,
-          merged.averageLatency,
-          merged.ttft,
-          merged.ttft?.value,
-          merged.ttft?.ms,
-          secondsToMs(merged.ttft?.seconds),
-          merged.ttft_ms,
-          merged.ttftMs,
-          secondsToMs(merged.ttft_sec),
-          secondsToMs(merged.ttftSec),
-          secondsToMs(merged.ttft_seconds),
-          secondsToMs(merged.ttftSeconds),
-          merged.avg_ttft,
-          merged.avgTtft,
-          merged.response_time,
-          merged.responseTime,
-          merged.response_time?.value,
-          merged.response_time?.ms,
-          secondsToMs(merged.response_time?.seconds),
-          merged.response_time_ms,
-          merged.responseTimeMs,
-          secondsToMs(merged.response_time_sec),
-          secondsToMs(merged.responseTimeSec),
-          secondsToMs(merged.response_time_seconds),
-          secondsToMs(merged.responseTimeSeconds),
-          merged.avg_response_time,
-          merged.avgResponseTime,
-          merged.average_response_time,
-          merged.averageResponseTime,
-          merged.first_token_ms,
-          merged.firstTokenMs,
-          merged.first_token_latency,
-          merged.firstTokenLatency,
-          merged.first_token_latency_ms,
-          merged.firstTokenLatencyMs,
-          merged.time_to_first_token,
-          merged.timeToFirstToken,
-          merged.time_to_first_token_ms,
-          merged.timeToFirstTokenMs,
-        );
-
-        const tps = firstFinite(
-          merged.tps,
-          merged.tokens_per_second,
-          merged.tokensPerSecond,
-          merged.output_tps,
-          merged.outputTps,
-          merged.speed,
-        );
-
-        const rawStatus = firstText(
-          merged.status,
-          merged.state,
-          merged.health_status,
-          merged.healthStatus,
-          merged.condition,
-        );
-
-        const failureCount = firstFinite(
-          merged.failureCount,
-          merged.failure_count,
-          merged.failures,
-          merged.failure,
-          merged.error_count,
-          merged.errorCount,
-        ) ?? 0;
-
-        if (score === null && latency === null && tps === null && !rawStatus && !merged.time && !merged.measuredAt) return null;
-
-        return {
-          slug,
-          status: normalizeStatus(rawStatus),
-          score,
-          latency,
-          tps,
-          failureCount,
-        };
-      }
-
-      function collectIgxMetricEntries(payload, impliedRootSlug = "") {
-        const bySlug = new Map();
-        const seen = new WeakSet();
-
-        const add = (record) => {
-          if (!record || EXCLUDED_MODELS.has(record.slug)) return;
-          const previous = bySlug.get(record.slug);
-          if (!previous) {
-            bySlug.set(record.slug, record);
-            return;
-          }
-
-          // 같은 모델이 여러 번 보이면 실제 수치가 더 많이 들어있는 쪽을 우선한다.
-          const richness = value =>
-            Number(value?.score !== null && value?.score !== undefined) +
-            Number(value?.latency !== null && value?.latency !== undefined) +
-            Number(value?.tps !== null && value?.tps !== undefined) +
-            Number(value?.status && value.status !== "unknown");
-
-          if (richness(record) >= richness(previous)) bySlug.set(record.slug, record);
-        };
-
-        const walk = (value, impliedSlug = "", depth = 0) => {
-          if (depth > 7 || value === null || value === undefined) return;
-
-          if (Array.isArray(value)) {
-            // 응답 배열 순서에 의존하지 않고 측정 시각이 최신인 기록을 선택한다.
-            const ordered = impliedSlug ? [...value].sort((a, b) =>
-              (Date.parse(b?.time || b?.measuredAt || '') || 0) -
-              (Date.parse(a?.time || a?.measuredAt || '') || 0)
-            ) : value;
-            for (const item of ordered) {
-              const record = metricRecordFromObject(item, impliedSlug);
-              if (record) {
-                add(record);
-                if (impliedSlug) break;
-              }
-              walk(item, impliedSlug, depth + 1);
-            }
-            return;
-          }
-
-          if (typeof value !== "object") return;
-          if (seen.has(value)) return;
-          seen.add(value);
-
-          const direct = metricRecordFromObject(value, impliedSlug);
-          if (direct) add(direct);
-
-          const ownSlug = firstText(value.slug, value.model_slug, value.modelSlug,
-            value.model_id, value.modelId, typeof value.model === 'string' ? value.model : '', value.id);
-          const parentSlug = looksLikeModelSlug(ownSlug) ? ownSlug : impliedSlug;
-          for (const [key, child] of Object.entries(value)) {
-            if (child === null || child === undefined) continue;
-            const nextImplied = looksLikeModelSlug(key) ? key : parentSlug;
-            if (typeof child === "object") walk(child, nextImplied, depth + 1);
-          }
-        };
-
-        walk(payload, impliedRootSlug);
-        return bySlug;
-      }
-
-      function routeOperationText(path, operation) {
-        const tags = Array.isArray(operation?.tags) ? operation.tags.join(" ") : "";
-        return `${path} ${operation?.operationId || ""} ${operation?.summary || ""} ${operation?.description || ""} ${tags}`.toLowerCase();
-      }
-
-      function routeScore(path, operation, mode) {
-        const text = routeOperationText(path, operation);
-        let score = 0;
-
-        if (text.includes("latest")) score += 10;
-        if (text.includes("current")) score += 9;
-        if (text.includes("status")) score += 8;
-        if (text.includes("model")) score += 6;
-        if (text.includes("metric")) score += 6;
-        if (text.includes("health")) score += 5;
-        if (text.includes("simple")) score += 4;
-        if (text.includes("statistics")) score += 3;
-        if (text.includes("history")) score -= 4;
-        if (text.includes("badge")) score -= 10;
-        if (text.includes("graph")) score -= 6;
-        if (path.startsWith("/api/")) score += 4;
-        if (mode === "bulk" && !path.includes("{")) score += 3;
-        if (mode === "model" && path.includes("{")) score += 3;
-
-        return score;
-      }
-
-      function requiredOperationParams(operation) {
-        return [
-          ...(Array.isArray(operation?.parameters) ? operation.parameters : []),
-        ].filter(param => param && param.required);
-      }
-
-      function makeRoute(path, operation, mode) {
-        const placeholders = [...String(path).matchAll(/\{([^}]+)\}/g)].map(match => match[1]);
-        const required = requiredOperationParams(operation);
-        let modelParam = "";
-
-        if (mode === "model") {
-          if (placeholders.length === 1) {
-            modelParam = placeholders[0];
-          } else if (placeholders.length === 0) {
-            const queryModel = required.find(param =>
-              param.in === "query" && /^(model|slug|model_id|modelId)$/i.test(String(param.name || "")));
-            if (queryModel) modelParam = queryModel.name;
-          }
-          if (!modelParam) return null;
-        } else if (placeholders.length) {
-          return null;
-        }
-
-        const unrelatedRequired = required.filter(param => {
-          if (mode !== "model") return true;
-          if (param.in === "path" && param.name === modelParam) return false;
-          if (param.in === "query" && param.name === modelParam) return false;
-          return true;
-        });
-        if (unrelatedRequired.length) return null;
-
-        return {
-          path,
-          modelParam,
-          modelParamInPath: placeholders.includes(modelParam),
-          score: routeScore(path, operation, mode),
-        };
-      }
-
-      async function loadIgxRouteCatalog() {
-        if (igxRouteCatalogTried) return igxRouteCatalog;
-        igxRouteCatalogTried = true;
-
-        try {
-          const spec = await loadIgxOpenApiSpec();
-          const bulk = [];
-          const model = [];
-
-          for (const [path, item] of Object.entries(spec?.paths || {})) {
-            const operation = item?.get;
-            if (!operation || typeof path !== "string") continue;
-
-            const bulkRoute = makeRoute(path, operation, "bulk");
-            if (bulkRoute && bulkRoute.score > 0) bulk.push(bulkRoute);
-
-            const modelRoute = makeRoute(path, operation, "model");
-            if (modelRoute && modelRoute.score > 0) model.push(modelRoute);
-          }
-
-          bulk.sort((a, b) => b.score - a.score);
-          model.sort((a, b) => b.score - a.score);
-
-          igxRouteCatalog = { bulk, model };
-        } catch (_) {
-          igxRouteCatalog = { bulk: [], model: [] };
-        }
-
-        return igxRouteCatalog;
-      }
-
-      function routeUrl(route, slug = "") {
-        let path = route.path;
-
-        if (slug && route.modelParam) {
-          if (route.modelParamInPath) {
-            path = path.replace(`{${route.modelParam}}`, encodeURIComponent(slug));
-          } else {
-            const joiner = path.includes("?") ? "&" : "?";
-            path += `${joiner}${encodeURIComponent(route.modelParam)}=${encodeURIComponent(slug)}`;
-          }
-        }
-
-        return `${IGX_BASE_URL}${path}`;
-      }
-
-      async function fetchRouteJson(route, slug = "", timeoutMs = 18000) {
-        return gmGetJson(routeUrl(route, slug), timeoutMs);
-      }
-
-      async function tryBulkRoute(route) {
-        const payload = await fetchRouteJson(route);
-        const rawEntries = collectIgxMetricEntries(payload);
-        const entries = new Map(
-          [...rawEntries].filter(([slug]) => looksLikeModelSlug(slug))
-        );
-
-        const hasLiveMetrics = [...entries.values()].some(record =>
-          record?.score !== null && record?.score !== undefined ||
-          record?.latency !== null && record?.latency !== undefined ||
-          record?.tps !== null && record?.tps !== undefined
-        );
-
-        // bulk/current 계열에서 한 개짜리 가짜 메타 레코드가 잡혀
-        // 전체 모델 목록을 덮어쓰는 사고를 막는다.
-        if (entries.size < 2 || !hasLiveMetrics || ![...entries.values()].some(record => record.score !== null)) {
-          throw new Error("bulk route returned insufficient real model metrics");
-        }
-        return entries;
-      }
-
-      async function fetchDashboardHtml() {
-        return gmGetText(
-          `${IGX_DASHBOARD_URL}?t=${Date.now()}`,
-          20000,
-          "text/html,application/xhtml+xml",
-        );
-      }
-
-      function dashboardEntriesFromHtml(html) {
-        const parsed = new DOMParser().parseFromString(String(html || ""), "text/html");
+        const score = firstFinite(source.score, source.experience_score?.value);
+        const latency = firstFinite(source.latency, source.latency_ms, source.ttft_ms);
+        const tps = firstFinite(source.tps);
+        const rawStatus = String(source.status || source.state || '');
+        if (score === null && latency === null && tps === null && !rawStatus) return null;
+        return { slug, status: normalizeStatus(rawStatus), score, latency, tps, failureCount: firstFinite(source.failureCount) ?? 0 };
+    }
+    // Last-resort metrics when the per-model API fails; parsing the 0.8MB dashboard is costly on phones.
+    function dashboardEntriesFromHtml(html) {
+        const parsed = new DOMParser().parseFromString(String(html || ''), 'text/html');
         const bySlug = new Map();
         const slugRe = /^[a-z0-9][a-z0-9._-]*$/i;
         const statusRe = /\b(Operational|Active|Degraded|Impacted|Down|Offline|Unknown)\b/i;
         const scoreRe = /(\d+(?:\.\d+)?)\s*\/\s*100\b/i;
         const latencyRe = /(\d+(?:\.\d+)?)\s*(?:초|s\b)/i;
         const tpsRe = /(\d+(?:\.\d+)?)\s*(?:tok\/s|tokens?\/s)\b/i;
-
-        const leaves = parsed.querySelectorAll("body *");
-        for (const node of leaves) {
-          if (node.children.length) continue;
-          const slug = String(node.textContent || "").trim();
-          if (!slugRe.test(slug) || !looksLikeModelSlug(slug)) continue;
-
-          let row = node.parentElement;
-          let parsedRecord = null;
-
-          for (let depth = 0; row && depth < 8; depth += 1, row = row.parentElement) {
-            const rowText = String(row.textContent || "").replace(/\s+/g, " ").trim();
-            const statusMatch = rowText.match(statusRe);
-            const scoreMatch = rowText.match(scoreRe);
-            const latencyMatch = rowText.match(latencyRe);
-            const tpsMatch = rowText.match(tpsRe);
-
-            if (!statusMatch || !scoreMatch) continue;
-
-            parsedRecord = {
-              slug,
-              status: normalizeStatus(statusMatch[1]),
-              score: Number(scoreMatch[1]),
-              latency: latencyMatch ? Number(latencyMatch[1]) * 1000 : null,
-              tps: tpsMatch ? Number(tpsMatch[1]) : null,
-              failureCount: 0,
-            };
-            break;
-          }
-
-          if (parsedRecord) bySlug.set(slug, parsedRecord);
-        }
-
-        return bySlug;
-      }
-
-      async function fetchDashboardSnapshot() {
-        const html = await fetchDashboardHtml();
-        const entries = dashboardEntriesFromHtml(html);
-        if (!entries.size) throw new Error("dashboard parse returned no model metrics");
-        return entries;
-      }
-
-      async function fetchLegacyStatisticsSnapshot() {
-        const payload = await gmGetJson(LEGACY_STATISTICS_URL, 22000);
-        const entries = collectIgxMetricEntries(payload);
-        if (!entries.size) throw new Error("legacy statistics returned no model metrics");
-        return entries;
-      }
-
-
-      function snapshotNeedsSupplement(entries) {
-        if (!(entries instanceof Map) || !entries.size) return false;
-        return [...entries.values()].some(record =>
-          record && (
-            record.latency === null || record.latency === undefined || record.latency === "" ||
-            record.tps === null || record.tps === undefined || record.tps === ""
-          )
-        );
-      }
-
-      function hasSupplementMetrics(entries) {
-        if (!(entries instanceof Map) || !entries.size) return false;
-        return [...entries.values()].some(record =>
-          record && (
-            record.latency !== null && record.latency !== undefined && record.latency !== "" ||
-            record.tps !== null && record.tps !== undefined && record.tps !== ""
-          )
-        );
-      }
-
-      function mergeSupplementMetrics(primary, supplement) {
-        if (!(primary instanceof Map) || !(supplement instanceof Map) || !supplement.size) return primary;
-
-        const merged = new Map();
-        for (const [slug, record] of primary) {
-          const extra = supplement.get(slug);
-          if (!extra) {
-            merged.set(slug, record);
-            continue;
-          }
-
-          merged.set(slug, {
-            ...record,
-            // 새 API의 점수/상태는 그대로 유지하고 비어 있는 측정값만 채운다.
-            latency:
-              record?.latency !== null && record?.latency !== undefined && record?.latency !== ""
-                ? record.latency
-                : extra.latency,
-            tps:
-              record?.tps !== null && record?.tps !== undefined && record?.tps !== ""
-                ? record.tps
-                : extra.tps,
-          });
-        }
-        return merged;
-      }
-
-      async function trySupplementRoute(route) {
-        const payload = await fetchRouteJson(route);
-        const entries = collectIgxMetricEntries(payload);
-        if (!hasSupplementMetrics(entries)) throw new Error("route has no supplement metrics");
-        return entries;
-      }
-
-      async function fetchIgxSupplementSnapshot({ force = false } = {}) {
-        const now = Date.now();
-        if (!force && igxSupplementCache?.size && now - igxSupplementCacheAt < IGX_SUPPLEMENT_CACHE_MS) {
-          return igxSupplementCache;
-        }
-
-        if (igxWorkingSupplementRoute) {
-          try {
-            const entries = await trySupplementRoute(igxWorkingSupplementRoute);
-            igxSupplementCache = entries;
-            igxSupplementCacheAt = Date.now();
-            return entries;
-          } catch (_) {
-            igxWorkingSupplementRoute = null;
-          }
-        }
-
-        // 새 문서의 통계/history/metrics 계열 GET 중 추가 측정값을 실제로 주는 경로를 찾는다.
-        try {
-          const catalog = await loadIgxRouteCatalog();
-          const candidates = catalog.bulk.filter(route => {
-            const text = String(route?.path || "").toLowerCase();
-            return /stat|history|metric|measurement|sample|record/.test(text) &&
-              route !== igxWorkingBulkRoute;
-          });
-
-          for (const route of candidates.slice(0, 8)) {
-            try {
-              const entries = await trySupplementRoute(route);
-              igxWorkingSupplementRoute = route;
-              igxSupplementCache = entries;
-              igxSupplementCacheAt = Date.now();
-              return entries;
-            } catch (_) {}
-          }
-        } catch (_) {}
-
-        // 예전 statistics가 아직 호환되는 경우 가장 저렴한 보충 소스로 사용.
-        try {
-          const entries = await fetchLegacyStatisticsSnapshot();
-          if (hasSupplementMetrics(entries)) {
-            igxSupplementCache = entries;
-            igxSupplementCacheAt = Date.now();
-            return entries;
-          }
-        } catch (_) {}
-
-        // 공식 대시보드 HTML에 응답시간이 노출되는 배포라면 마지막으로 여기서 보충.
-        try {
-          const entries = await fetchDashboardSnapshot();
-          if (hasSupplementMetrics(entries)) {
-            igxSupplementCache = entries;
-            igxSupplementCacheAt = Date.now();
-            return entries;
-          }
-        } catch (_) {}
-
-        return new Map();
-      }
-
-      async function finalizeIgxSnapshot(entries) {
-        if (!(entries instanceof Map) || !entries.size) return entries;
-        if (settings.radiosondeLatency === false || !snapshotNeedsSupplement(entries)) return entries;
-
-        try {
-          const supplement = await fetchIgxSupplementSnapshot();
-          return mergeSupplementMetrics(entries, supplement);
-        } catch (_) {
-          return entries;
-        }
-      }
-
-      // Official IGX v2 contract, with cancellable userscript transport.
-  var igxV2Models = null;
-  let igxModelListPromise = null;
-  const igxMetricCache = new Map();
-  const igxMetricInflight = new Map();
-  const igxMetricFailures = new Map();
-  const igxPendingRequests = [];
-  const igxActiveAborts = new Set();
-  let igxRunningRequests = 0;
-
-  function igxAbortError() {
-    const error = new Error('IGX request cancelled');
-    error.name = 'AbortError';
-    return error;
-  }
-  function igxCanRequest() {
-    return !document.hidden && shouldRun() && settings.radiosonde && isChatRoomPath();
-  }
-  function cancelIgxRequests() {
-    for (const abort of [...igxActiveAborts]) abort();
-    for (const job of igxPendingRequests.splice(0)) job.reject(igxAbortError());
-  }
-  function pumpIgxRequests() {
-    if (!igxCanRequest()) {
-      cancelIgxRequests();
-      return;
-    }
-    while (igxRunningRequests < 4 && igxPendingRequests.length) {
-      const job = igxPendingRequests.shift();
-      igxRunningRequests++;
-      Promise.resolve().then(() => {
-        if (!igxCanRequest()) throw igxAbortError();
-        return job.run();
-      }).then(job.resolve, job.reject).finally(() => {
-        igxRunningRequests--;
-        pumpIgxRequests();
-      });
-    }
-  }
-  function igxRequestJson(endpoint, { rawText = false, withHeaders = false, url = '', envelope = true } = {}) {
-    const target = url || (rawText ? IGX_BASE_URL + '/' : IGX_BASE_URL + '/api/v2/' + endpoint);
-    // Catalog headers need extension access. Statistics use the SDK's browser-fetch path first.
-    const nativeFirst = !rawText && !withHeaders;
-    return new Promise((resolve, reject) => {
-      igxPendingRequests.push({ resolve, reject, run: () => new Promise((done, fail) => {
-        let settled = false, stage = 0, phaseTimer, hardTimer, request, controller;
-        const closeStage = () => {
-          stage++;
-          clearTimeout(phaseTimer);
-          try { controller?.abort(); } catch (_) {}
-          try { request?.abort?.(); } catch (_) {}
-          controller = request = null;
-        };
-        const finish = (error, value) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(hardTimer);
-          igxActiveAborts.delete(abort);
-          closeStage();
-          if (error) fail(error); else done(value);
-        };
-        const abort = () => finish(igxAbortError());
-        const parse = response => {
-          const status = Number(response.status) || 0;
-          if (status && (status < 200 || status >= 300)) throw new Error('HTTP ' + status);
-          if (rawText) {
-            if (!response.responseText) throw new Error('Empty response');
-            return response.responseText;
-          }
-          const payload = JSON.parse(response.responseText);
-          if (envelope && payload?.success !== true) throw new Error(payload?.message || 'IGX request failed');
-          const data = envelope ? payload.data : payload;
-          return withHeaders ? { data, headers: response.responseHeaders || '' } : data;
-        };
-        const start = (useFetch, canFallback) => {
-          if (settled) return;
-          if (!igxCanRequest()) { abort(); return; }
-          closeStage();
-          const token = stage;
-          const current = () => !settled && token === stage;
-          const failure = error => {
-            if (!current()) return;
-            if (!igxCanRequest()) { abort(); return; }
-            if (canFallback) start(!useFetch, false);
-            else finish(error instanceof Error ? error : new Error('Network request failed'));
-          };
-          const loaded = response => {
-            if (!current()) return;
-            try { finish(null, parse(response)); } catch (error) { failure(error); }
-          };
-          if (canFallback) phaseTimer = setTimeout(() => failure(new Error('Request transport timeout')), 8000);
-          try {
-            if (useFetch) {
-              if (typeof fetch !== 'function' || typeof AbortController !== 'function') throw new Error('Browser fetch unavailable');
-              controller = new AbortController();
-              fetch(target, { method: 'GET', credentials: 'omit', cache: 'no-store', signal: controller.signal,
-                headers: { Accept: rawText ? 'text/html' : 'application/json' } }).then(async response => {
-                const responseText = await response.text();
-                let responseHeaders = '';
-                response.headers.forEach((value, name) => { responseHeaders += name + ': ' + value + '\r\n'; });
-                loaded({ status: response.status, responseText, responseHeaders });
-              }).catch(failure);
-            } else {
-              if (typeof GM_xmlhttpRequest !== 'function') throw new Error('Extension request unavailable');
-              request = GM_xmlhttpRequest({ method: 'GET', url: target, timeout: 18000,
-                headers: { Accept: rawText ? 'text/html' : 'application/json' }, onload: loaded,
-                onerror: () => failure(new Error('Extension network error')),
-                ontimeout: () => failure(new Error('Extension request timeout')),
-                onabort: () => failure(new Error('Extension request aborted')),
-              });
-              // Support managers that additionally return a Promise; duplicate callbacks are ignored.
-              if (request && typeof request.then === 'function') request.then(response => {
-                if (response && typeof response.responseText === 'string') loaded(response);
-              }, failure);
+        for (const node of parsed.querySelectorAll('body *')) {
+            if (node.children.length) continue;
+            const slug = String(node.textContent || '').trim();
+            if (!slugRe.test(slug) || !looksLikeModelSlug(slug)) continue;
+            let row = node.parentElement;
+            for (let depth = 0; row && depth < 8; depth += 1, row = row.parentElement) {
+                const rowText = String(row.textContent || '').replace(/\s+/g, ' ').trim();
+                const statusMatch = rowText.match(statusRe);
+                const scoreMatch = rowText.match(scoreRe);
+                if (!statusMatch || !scoreMatch) continue;
+                const latencyMatch = rowText.match(latencyRe);
+                const tpsMatch = rowText.match(tpsRe);
+                bySlug.set(slug, {
+                    slug,
+                    status: normalizeStatus(statusMatch[1]),
+                    score: Number(scoreMatch[1]),
+                    latency: latencyMatch ? Number(latencyMatch[1]) * 1000 : null,
+                    tps: tpsMatch ? Number(tpsMatch[1]) : null,
+                    failureCount: 0,
+                });
+                break;
             }
-          } catch (error) { failure(error); }
-        };
-        igxActiveAborts.add(abort);
-        hardTimer = setTimeout(() => finish(new Error('Request timeout')), 18000);
-        start(nativeFirst, true);
-      }) });
-      pumpIgxRequests();
-    });
-  }
-  let igxDashboardMetrics = null;
-  let igxDashboardMetricsAt = 0;
-  let igxDashboardMetricsPromise = null;
-  let igxDashboardRetryAt = 0;
-  function rememberIgxDashboardMetrics(html) {
-    const entries = dashboardEntriesFromHtml(html);
-    if (!entries.size) throw new Error('No dashboard statistics');
-    igxDashboardMetrics = entries;
-    igxDashboardMetricsAt = Date.now();
-    return entries;
-  }
-  function recentIgxDashboardMetrics() {
-    return igxDashboardMetrics && Date.now() - igxDashboardMetricsAt < 5 * 60 * 1000
-      ? igxDashboardMetrics : new Map();
-  }
-  function recoverIgxDashboardMetrics() {
-    const recent = recentIgxDashboardMetrics();
-    if (recent.size) return Promise.resolve(recent);
-    if (igxDashboardMetricsPromise) return igxDashboardMetricsPromise;
-    if (Date.now() < igxDashboardRetryAt || !igxCanRequest()) return Promise.resolve(new Map());
-    igxDashboardRetryAt = Date.now() + 5 * 60 * 1000;
-    igxDashboardMetricsPromise = igxRequestJson(null, { rawText: true })
-      .then(rememberIgxDashboardMetrics).catch(() => new Map())
-      .finally(() => { igxDashboardMetricsPromise = null; });
-    return igxDashboardMetricsPromise;
-  }
-  function igxModelSlugs(data) {
-    if (!Array.isArray(data)) throw new Error('Invalid IGX model list');
-    const slugs = [...new Set(data.filter(value => typeof value === 'string' &&
-      /^[a-z0-9][a-z0-9._-]*$/i.test(value) && !EXCLUDED_MODELS.has(value.toLowerCase())))];
-    if (!slugs.length) throw new Error('Empty IGX model list');
-    return slugs;
-  }
-  function igxCatalogIsStale(headers) {
-    // The CDN can serve an old catalog despite max-age=15 and no-cache requests.
-    const stamp = /^cdn-cachedat:\s*(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})\s*$/im.exec(headers);
-    if (stamp) {
-      const [, month, day, year, hour, minute, second] = stamp.map(Number);
-      return Date.now() - Date.UTC(year, month - 1, day, hour, minute, second) > 5 * 60 * 1000;
+        }
+        return bySlug;
     }
-    const age = /^age:\s*(\d+)\s*$/im.exec(headers);
-    return !!age && Number(age[1]) > 300;
-  }
-  function igxDashboardModelSlugs(html) {
-    // Read only the serialized model IDs; never evaluate dashboard JavaScript.
-    const match = /\bmodels["']?\s*:\s*(\[[a-z0-9._",\s-]{1,32768}\])/i.exec(html);
-    if (!match) throw new Error('Missing IGX dashboard model list');
-    return igxModelSlugs(JSON.parse(match[1]));
-  }
-  async function getIgxOfficialModels() {
-    if (igxV2Models) return igxV2Models;
-    // One discovery per page, including its stale-CDN fallback. No polling of catalogs.
-    if (!igxModelListPromise) igxModelListPromise = (async () => {
-      let slugs;
-      let needsDashboard = false;
-      try {
-        const response = await igxRequestJson('models', { withHeaders: true });
-        slugs = igxModelSlugs(response.data);
-        needsDashboard = igxCatalogIsStale(response.headers);
-      } catch (error) {
-        if (error.name === 'AbortError') throw error;
-        needsDashboard = true;
-      }
-      if (needsDashboard) {
+
+    // rs.igx.kr/api/v2/* answers 307 to this CDN without CORS headers, so browser fetch must call the CDN directly.
+    // The CDN sends `Access-Control-Allow-Origin: *`; the igx host stays as an extension-only fallback.
+    const IGX_API_BASES = ['https://igx-radiosonde-api-striker.b-cdn.net/v2/', `${IGX_BASE_URL}/api/v2/`];
+    // The CDN pins /v2/models (query strings are ignored); only the dashboard lists newly added models.
+    const IGX_MODEL_CACHE_KEY = 'cmu_rs_models_v1';
+    const IGX_MODEL_CACHE_MS = 6 * 60 * 60 * 1000;
+    var igxV2Models = null;
+    let igxModelListPromise = null;
+    let igxApiBaseIndex = 0;
+    const igxMetricCache = new Map();
+    const igxMetricInflight = new Map();
+    const igxMetricFailures = new Map();
+    const igxPendingRequests = [];
+    const igxActiveAborts = new Set();
+    let igxRunningRequests = 0;
+
+    function igxAbortError() {
+        const error = new Error('IGX request cancelled');
+        error.name = 'AbortError';
+        return error;
+    }
+    function igxCanRequest() {
+        return !document.hidden && shouldRun() && settings.radiosonde && isChatRoomPath();
+    }
+    function cancelIgxRequests() {
+        for (const abort of [...igxActiveAborts]) abort();
+        for (const job of igxPendingRequests.splice(0)) job.reject(igxAbortError());
+    }
+    function pumpIgxRequests() {
+        if (!igxCanRequest()) {
+            cancelIgxRequests();
+            return;
+        }
+        while (igxRunningRequests < 4 && igxPendingRequests.length) {
+            const job = igxPendingRequests.shift();
+            igxRunningRequests++;
+            Promise.resolve().then(() => {
+                if (!igxCanRequest()) throw igxAbortError();
+                return job.run();
+            }).then(job.resolve, job.reject).finally(() => {
+                igxRunningRequests--;
+                pumpIgxRequests();
+            });
+        }
+    }
+    function igxRequestAttempts(endpoint, rawText, url) {
+        if (url) return [{ target: url, useFetch: true }, { target: url, useFetch: false }];
+        // The dashboard has no CORS headers; only the extension transport can read it.
+        if (rawText) return [{ target: IGX_BASE_URL + '/', useFetch: false }];
+        const order = [igxApiBaseIndex, ...IGX_API_BASES.keys()].filter((value, index, list) => list.indexOf(value) === index);
+        return order.flatMap(base => [
+            { target: IGX_API_BASES[base] + endpoint, useFetch: true, base },
+            { target: IGX_API_BASES[base] + endpoint, useFetch: false, base },
+        ]);
+    }
+    function igxRequestJson(endpoint, { rawText = false, url = '', envelope = true } = {}) {
+        const attempts = igxRequestAttempts(endpoint, rawText, url)
+            .filter(attempt => attempt.useFetch ? typeof fetch === 'function' && typeof AbortController === 'function' : cmuGmXhrAvailable());
+        return new Promise((resolve, reject) => {
+            igxPendingRequests.push({ resolve, reject, run: () => new Promise((done, fail) => {
+                let settled = false, stage = -1, phaseTimer, hardTimer, request, controller, lastError = null;
+                const closeStage = () => {
+                    clearTimeout(phaseTimer);
+                    try { controller?.abort(); } catch (_) {}
+                    try { request?.abort?.(); } catch (_) {}
+                    controller = request = null;
+                };
+                const finish = (error, value) => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(hardTimer);
+                    igxActiveAborts.delete(abort);
+                    closeStage();
+                    if (error) fail(error); else done(value);
+                };
+                const abort = () => finish(igxAbortError());
+                const parse = response => {
+                    const status = Number(response.status) || 0;
+                    if (status && (status < 200 || status >= 300)) throw new Error('HTTP ' + status);
+                    if (rawText) {
+                        if (!response.responseText) throw new Error('Empty response');
+                        return response.responseText;
+                    }
+                    const payload = JSON.parse(response.responseText);
+                    if (envelope && payload?.success !== true) throw new Error(payload?.message || 'IGX request failed');
+                    return envelope ? payload.data : payload;
+                };
+                const next = () => {
+                    if (settled) return;
+                    if (!igxCanRequest()) { abort(); return; }
+                    closeStage();
+                    stage++;
+                    const attempt = attempts[stage];
+                    if (!attempt) { finish(lastError || new Error('Network request failed')); return; }
+                    const token = stage;
+                    const current = () => !settled && token === stage;
+                    const failure = error => {
+                        if (!current()) return;
+                        lastError = error instanceof Error ? error : new Error('Network request failed');
+                        next();
+                    };
+                    const loaded = response => {
+                        if (!current()) return;
+                        try {
+                            const value = parse(response);
+                            if (attempt.base !== undefined) igxApiBaseIndex = attempt.base;
+                            finish(null, value);
+                        } catch (error) { failure(error); }
+                    };
+                    phaseTimer = setTimeout(() => failure(new Error('Request transport timeout')), 8000);
+                    try {
+                        if (attempt.useFetch) {
+                            controller = new AbortController();
+                            fetch(attempt.target, { method: 'GET', credentials: 'omit', cache: 'no-store', signal: controller.signal,
+                                headers: { Accept: rawText ? 'text/html' : 'application/json' } }).then(async response => {
+                                loaded({ status: response.status, responseText: await response.text() });
+                            }).catch(failure);
+                        } else {
+                            request = cmuGmXhr({ method: 'GET', url: attempt.target, timeout: 18000,
+                                headers: { Accept: rawText ? 'text/html' : 'application/json' }, onload: loaded,
+                                onerror: () => failure(new Error('Extension network error')),
+                                ontimeout: () => failure(new Error('Extension request timeout')),
+                                onabort: () => failure(new Error('Extension request aborted')),
+                            });
+                        }
+                    } catch (error) { failure(error); }
+                };
+                igxActiveAborts.add(abort);
+                hardTimer = setTimeout(() => finish(new Error('Request timeout')), 20000);
+                next();
+            }) });
+            pumpIgxRequests();
+        });
+    }
+    let igxDashboardMetrics = null;
+    let igxDashboardMetricsAt = 0;
+    let igxDashboardMetricsPromise = null;
+    let igxDashboardRetryAt = 0;
+    function recentIgxDashboardMetrics() {
+        return igxDashboardMetrics && Date.now() - igxDashboardMetricsAt < 5 * 60 * 1000
+            ? igxDashboardMetrics : new Map();
+    }
+    function recoverIgxDashboardMetrics() {
+        const recent = recentIgxDashboardMetrics();
+        if (recent.size) return Promise.resolve(recent);
+        if (igxDashboardMetricsPromise) return igxDashboardMetricsPromise;
+        if (Date.now() < igxDashboardRetryAt || !igxCanRequest() || !cmuGmXhrAvailable()) return Promise.resolve(new Map());
+        igxDashboardRetryAt = Date.now() + 5 * 60 * 1000;
+        igxDashboardMetricsPromise = igxRequestJson(null, { rawText: true })
+            .then(html => {
+                const entries = dashboardEntriesFromHtml(html);
+                if (!entries.size) throw new Error('No dashboard statistics');
+                igxDashboardMetrics = entries;
+                igxDashboardMetricsAt = Date.now();
+                return entries;
+            }).catch(() => new Map())
+            .finally(() => { igxDashboardMetricsPromise = null; });
+        return igxDashboardMetricsPromise;
+    }
+    function igxModelSlugs(data) {
+        if (!Array.isArray(data)) throw new Error('Invalid IGX model list');
+        const slugs = [...new Set(data.filter(value => typeof value === 'string' &&
+            /^[a-z0-9][a-z0-9._-]*$/i.test(value) && !EXCLUDED_MODELS.has(value.toLowerCase())))];
+        if (!slugs.length) throw new Error('Empty IGX model list');
+        return slugs;
+    }
+    function igxDashboardModelSlugs(html) {
+        // Read only the serialized model IDs; never evaluate dashboard JavaScript.
+        const match = /\bmodels["']?\s*:\s*(\[[a-z0-9._",\s-]{1,32768}\])/i.exec(html);
+        if (!match) throw new Error('Missing IGX dashboard model list');
+        return igxModelSlugs(JSON.parse(match[1]));
+    }
+    function igxLoadCachedModels() {
         try {
-          const html = await igxRequestJson(null, { rawText: true });
-          slugs = igxDashboardModelSlugs(html);
-          try { rememberIgxDashboardMetrics(html); } catch (_) { /* Catalog remains usable. */ }
-        } catch (error) {
-          if (error.name === 'AbortError' || !slugs) throw error;
-          // Keep a usable API catalog if the optional dashboard request fails.
-        }
-      }
-      igxV2Models = slugs;
-      return slugs;
-    })();
-    return igxModelListPromise;
-  }
-  function fetchIgxOfficialModel(slug, { force = false } = {}) {
-    if (igxMetricInflight.has(slug)) return igxMetricInflight.get(slug);
-    const cached = igxMetricCache.get(slug);
-    if (!force && cached && Date.now() - cached.at < 15000) return Promise.resolve(cached.record);
-    const failure = igxMetricFailures.get(slug);
-    if (failure && Date.now() < failure.retryAt) return Promise.reject(new Error('IGX retry cooldown'));
-    const task = igxRequestJson('simple/' + encodeURIComponent(slug)).then(data => {
-      const record = metricRecordFromObject(data, slug);
-      if (!record) throw new Error('Invalid IGX simple statistics');
-      igxMetricCache.set(slug, { at: Date.now(), record });
-      igxMetricFailures.delete(slug);
-      return record;
-    }).catch(error => {
-      if (error.name !== 'AbortError') {
-        const count = Math.min(4, (failure?.count || 0) + 1);
-        igxMetricFailures.set(slug, { count, retryAt: Date.now() + Math.min(300000, 30000 * 2 ** (count - 1)) });
-      }
-      throw error;
-    }).finally(() => igxMetricInflight.delete(slug));
-    igxMetricInflight.set(slug, task);
-    return task;
-  }
-  async function fetchIgxSnapshot({ force = false, slugs = [], onRecord } = {}) {
-    const requested = [...new Set(slugs)];
-    // Reuse statistics already downloaded for catalog recovery without another request.
-    if (igxCanRequest() && onRecord) {
-      const dashboard = recentIgxDashboardMetrics();
-      for (const slug of requested) {
-        const record = dashboard.get(slug);
-        if (record && !igxMetricCache.has(slug)) onRecord(slug, record);
-      }
+            const cached = JSON.parse(localStorage.getItem(IGX_MODEL_CACHE_KEY) || 'null');
+            if (cached && Array.isArray(cached.slugs) && cached.slugs.length) return cached;
+        } catch (_) {}
+        return null;
     }
-    const results = await Promise.allSettled(requested.map(async slug => {
-      const record = await fetchIgxOfficialModel(slug, { force });
-      if (igxCanRequest() && onRecord) onRecord(slug, record);
-      return record;
-    }));
-    const entries = new Map();
-    results.forEach((result, index) => {
-      if (result.status === 'fulfilled') entries.set(requested[index], result.value);
-    });
-    // A shared, bounded dashboard fallback also covers extension-specific API failures.
-    if (entries.size < requested.length && igxCanRequest()) {
-      const dashboard = await recoverIgxDashboardMetrics();
-      for (const slug of requested) {
-        if (entries.has(slug)) continue;
-        const record = dashboard.get(slug);
-        const latest = igxMetricCache.get(slug);
-        if (record && (!latest || igxDashboardMetricsAt >= latest.at)) {
-          entries.set(slug, record);
-          if (igxCanRequest() && onRecord) onRecord(slug, record);
-        }
-      }
+    async function getIgxOfficialModels() {
+        if (igxV2Models) return igxV2Models;
+        // One discovery per page at most, and the merged list is reused across pages for six hours.
+        if (!igxModelListPromise) igxModelListPromise = (async () => {
+            const cached = igxLoadCachedModels();
+            if (cached && Date.now() - Number(cached.at || 0) < IGX_MODEL_CACHE_MS) return (igxV2Models = cached.slugs);
+            let catalog = [];
+            let dashboard = [];
+            try { catalog = igxModelSlugs(await igxRequestJson('models')); }
+            catch (error) { if (error.name === 'AbortError') throw error; }
+            if (cmuGmXhrAvailable()) {
+                try { dashboard = igxDashboardModelSlugs(await igxRequestJson(null, { rawText: true })); }
+                catch (error) { if (error.name === 'AbortError') throw error; }
+            }
+            // The dashboard lists the newest models; the catalog only adds ones the dashboard missed.
+            const slugs = [...new Set([...dashboard, ...catalog])];
+            if (dashboard.length) {
+                try { localStorage.setItem(IGX_MODEL_CACHE_KEY, JSON.stringify({ at: Date.now(), slugs })); } catch (_) {}
+                return (igxV2Models = slugs);
+            }
+            // Without the dashboard, keep models learned earlier and retry discovery on the next page.
+            const merged = [...new Set([...(cached?.slugs || []), ...FALLBACK_MODELS.map(model => model.slug), ...slugs])];
+            return (igxV2Models = merged);
+        })().catch(error => {
+            igxModelListPromise = null;
+            throw error;
+        });
+        return igxModelListPromise;
     }
-    // Never rebuild the catalog or probe legacy routes during a statistics refresh.
-    return entries;
-  }
+    function fetchIgxOfficialModel(slug, { force = false } = {}) {
+        if (igxMetricInflight.has(slug)) return igxMetricInflight.get(slug);
+        const cached = igxMetricCache.get(slug);
+        if (!force && cached && Date.now() - cached.at < 15000) return Promise.resolve(cached.record);
+        const failure = igxMetricFailures.get(slug);
+        if (failure && Date.now() < failure.retryAt) return Promise.reject(new Error('IGX retry cooldown'));
+        const task = igxRequestJson('simple/' + encodeURIComponent(slug)).then(data => {
+            const record = metricRecordFromObject(data, slug);
+            if (!record) throw new Error('Invalid IGX simple statistics');
+            igxMetricCache.set(slug, { at: Date.now(), record });
+            igxMetricFailures.delete(slug);
+            return record;
+        }).catch(error => {
+            if (error.name !== 'AbortError') {
+                const count = Math.min(4, (failure?.count || 0) + 1);
+                igxMetricFailures.set(slug, { count, retryAt: Date.now() + Math.min(300000, 30000 * 2 ** (count - 1)) });
+            }
+            throw error;
+        }).finally(() => igxMetricInflight.delete(slug));
+        igxMetricInflight.set(slug, task);
+        return task;
+    }
+    async function fetchIgxSnapshot({ force = false, slugs = [], onRecord } = {}) {
+        const requested = [...new Set(slugs)];
+        const results = await Promise.allSettled(requested.map(async slug => {
+            const record = await fetchIgxOfficialModel(slug, { force });
+            if (igxCanRequest() && onRecord) onRecord(slug, record);
+            return record;
+        }));
+        const entries = new Map();
+        results.forEach((result, index) => {
+            if (result.status === 'fulfilled') entries.set(requested[index], result.value);
+        });
+        // A shared, bounded dashboard fallback covers API outages.
+        if (entries.size < requested.length && igxCanRequest()) {
+            const dashboard = await recoverIgxDashboardMetrics();
+            for (const slug of requested) {
+                if (entries.has(slug)) continue;
+                const record = dashboard.get(slug);
+                const latest = igxMetricCache.get(slug);
+                if (record && (!latest || igxDashboardMetricsAt >= latest.at)) {
+                    entries.set(slug, record);
+                    if (igxCanRequest() && onRecord) onRecord(slug, record);
+                }
+            }
+        }
+        return entries;
+    }
 
     cmuListen(document, 'visibilitychange', () => { if (document.hidden) cancelIgxRequests(); });
     cmuListen(window, 'pagehide', cancelIgxRequests);
     CMU_RESOURCES.cleanups.push(cancelIgxRequests);
 
-function modelsFromSnapshot(entries) {
-        if (!(entries instanceof Map) || !entries.size) return [];
-        return ensureUniqueShorts(
-          [...new Set([...(igxV2Models || []), ...entries.keys()])]
-            .filter(slug => looksLikeModelSlug(slug))
-            .map(makeModelMeta)
-        );
-      }
-      async function fetchIgxModelFromDiscoveredRoute(slug) {
-        if (igxWorkingModelRoute) {
-          try {
-            const payload = await fetchRouteJson(igxWorkingModelRoute, slug);
-            const entries = collectIgxMetricEntries(payload, slug);
-            const record = entries.get(slug) || [...entries.values()][0];
-            if (record) return record;
-          } catch (_) {
-            igxWorkingModelRoute = null;
-          }
-        }
-
-        const catalog = await loadIgxRouteCatalog();
-        for (const route of catalog.model.slice(0, 8)) {
-          try {
-            const payload = await fetchRouteJson(route, slug);
-            const entries = collectIgxMetricEntries(payload, slug);
-            const record = entries.get(slug) || [...entries.values()][0];
-            if (record) {
-              igxWorkingModelRoute = route;
-              return record;
-            }
-          } catch (_) {}
-        }
-
-        throw new Error("no working model route");
-      }
-
-      // bulk snapshot이 실패했을 때만 쓰는 모델별 최후 폴백.
-      async function fetchIgxModelWithRetry(slug) {
-    return fetchIgxOfficialModel(slug);
-  }
-
-  async function discoverRsModels(force = false) {
+    async function discoverRsModels() {
         if (RS.discoveryPromise) return RS.discoveryPromise;
         RS.discoveryPromise = (async () => {
             const previous = JSON.stringify(RS.models);
             try {
                 const slugs = await getIgxOfficialModels();
-                const discovered = ensureUniqueShorts(slugs.map(makeModelMeta));
+                const discovered = ensureUniqueShorts(slugs.filter(looksLikeModelSlug).map(makeModelMeta));
                 if (discovered.length < 1) throw new Error('insufficient model list');
                 RS.models = [...YAME_MODELS, ...discovered];
             }
