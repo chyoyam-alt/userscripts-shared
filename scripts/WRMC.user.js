@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽 Wish RP Manager Core
 // @namespace    local.rp.context.manager
-// @version      1.4.0
+// @version      1.5.0
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @description  Crack RP용 컨텍스트 주입·인지·자동 장기기억·자료집·전체 재구축을 하나로 관리합니다.
@@ -20,6 +20,8 @@
 // @connect      www.gstatic.com
 // @connect      firebasevertexai.googleapis.com
 // @connect      firebaseinstallations.googleapis.com
+// @connect      content-firebaseappcheck.googleapis.com
+// @connect      oauth2.googleapis.com
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
 // @grant        GM_getValue
@@ -32,6 +34,8 @@
   'use strict';
   // Core 1.0.0: private cloud sync and native summary engines removed; local backup/restore retained.
   // Koofr WebDAV backup/restore is optional and manual only (no timers, startup requests or shared server).
+  // Core 1.5.0: Firebase gets an optional App Check debug token (required by Firebase AI Logic from 2026-11-02), exchanged on demand without background timers.
+  // New provider 'vertex': a Vertex AI service account JSON is signed in-browser (RS256) into a 1-hour access token kept in memory only and renewed 5 minutes early.
   // Core 1.4.0: external AI mode (provider '외부 AI 복붙', no API key): [함께 정리] copies a request and [답 붙여넣기] applies the answer.
   // In that mode API-only buttons/options are disabled, and AI candidate selection, embeddings and state-delta requests are off; automatic runs only notify.
   // Panel smoothness: identical redraws skip HTML parsing/diffing, off-screen cards skip layout/paint, and invisible infinite dot animations are removed.
@@ -220,6 +224,9 @@
     firebaseConfig: '',
     firebaseLocation: 'global',
     firebaseSdkVersion: '12.5.0',
+    firebaseAppCheckDebugToken: '',
+    vertexServiceAccount: '',
+    vertexLocation: 'global',
     deepSeekApiKey: '',
     deepSeekBaseUrl: AI_DEEPSEEK_DIRECT_BASE_URL,
     deepSeekModel: 'deepseek-v4-flash',
@@ -1296,6 +1303,7 @@
     const raw = String(value || AI_DEFAULTS.provider).trim().toLowerCase();
     if (raw === 'gemini' || raw === 'google' || raw === 'ai-studio') return 'ai-studio';
     if (raw === 'firebase' || raw === 'firebase-ai' || raw === 'firebase-ai-logic') return 'firebase';
+    if (raw === 'vertex' || raw === 'vertex-ai' || raw === 'vertex-sa') return 'vertex';
     if (raw === 'deepseek' || raw === 'deepseek-api') return 'deepseek';
     if (raw === 'manual' || raw === 'external' || raw === 'copy-paste') return 'manual';
     return AI_DEFAULTS.provider;
@@ -1332,6 +1340,12 @@
     return `${url.protocol}//${url.host}${url.pathname}`.replace(/\/+$/g, '');
   }
 
+  // Vertex region: 'global' or a standard region id such as us-central1 / asia-northeast3.
+  function normalizeVertexLocation(value) {
+    const raw = String(value || '').trim().toLowerCase();
+    return /^(global|[a-z]+-[a-z]+\d+)$/.test(raw) ? raw : AI_DEFAULTS.vertexLocation;
+  }
+
   function isDirectDeepSeekBaseUrl(value) {
     try { return new URL(normalizeDeepSeekBaseUrl(value)).hostname === 'api.deepseek.com'; } catch (_) { return false; }
   }
@@ -1365,6 +1379,9 @@
       firebaseConfig: String(src.firebaseConfig || '').trim(),
       firebaseLocation: String(src.firebaseLocation || AI_DEFAULTS.firebaseLocation).trim() || AI_DEFAULTS.firebaseLocation,
       firebaseSdkVersion: String(src.firebaseSdkVersion || AI_DEFAULTS.firebaseSdkVersion).trim() || AI_DEFAULTS.firebaseSdkVersion,
+      firebaseAppCheckDebugToken: normalizeAiKey(src.firebaseAppCheckDebugToken),
+      vertexServiceAccount: String(src.vertexServiceAccount || '').trim(),
+      vertexLocation: normalizeVertexLocation(src.vertexLocation),
       deepSeekApiKey: normalizeAiKey(src.deepSeekApiKey),
       deepSeekBaseUrl: normalizeDeepSeekBaseUrl(src.deepSeekBaseUrl),
       deepSeekModel,
@@ -1407,7 +1424,7 @@
   }
 
   function getAiProviderLabel(provider) {
-    return ({'ai-studio':'Google AI Studio','firebase':'Firebase AI Logic','deepseek':'DeepSeek API','manual':'외부 AI 복붙'})[normalizeAiProvider(provider)] || 'AI';
+    return ({'ai-studio':'Google AI Studio','firebase':'Firebase AI Logic','vertex':'Vertex AI (JSON 키)','deepseek':'DeepSeek API','manual':'외부 AI 복붙'})[normalizeAiProvider(provider)] || 'AI';
   }
 
   function getAiSelectedModel(settings) {
@@ -1425,6 +1442,7 @@
     if (cfg.provider === 'manual') return true;
     if (cfg.provider === 'deepseek') return !!cfg.deepSeekApiKey;
     if (cfg.provider === 'firebase') return !!cfg.firebaseConfig;
+    if (cfg.provider === 'vertex') return !!cfg.vertexServiceAccount;
     return !!cfg.apiKey;
   }
 
@@ -1577,12 +1595,12 @@ const WLOG=(()=>{
       race(p){const c=ctl;if(!c)return p;if(c.aborted)return Promise.reject(err());return new Promise((res,rej)=>{c.rejects.add(rej);Promise.resolve(p).then(v=>{c.rejects.delete(rej);res(v);},e=>{c.rejects.delete(rej);rej(e);});});}
     };})();
 
-  function aiGmRequestJson({ method='POST', url, headers={}, body=null, timeout=120000, label='AI' }) {
+  function aiGmRequestJson({ method='POST', url, headers={}, body=null, rawBody=null, timeout=120000, label='AI' }) {
     return new Promise((resolve, reject) => {
       let handle=null;const done=()=>AiAbort.untrack(handle);
       handle=GM_xmlhttpRequest({
         method, url, headers,
-        data: body == null ? undefined : JSON.stringify(body),
+        data: rawBody != null ? String(rawBody) : body == null ? undefined : JSON.stringify(body),
         timeout,
         onload: res => {
           done();
@@ -1592,7 +1610,7 @@ const WLOG=(()=>{
             const error=new Error(`${label} 서버 응답 JSON 파싱 실패 (HTTP ${res.status || 0})`);error.code='HTTP_JSON_PARSE';error.diagnostic={service:'AI',method,timeoutMs:timeout,httpStatus:res.status||0,responseChars:String(res.responseText||'').length,stage:'서버 응답 JSON 해석'};WLOG.fail(label,error);reject(error); return;
           }
           if (!(res.status >= 200 && res.status < 300)) {
-            const detail = parsed?.error?.message || parsed?.message || res.responseText?.slice(0, 600) || '';
+            const detail = parsed?.error?.message || parsed?.error_description || parsed?.message || res.responseText?.slice(0, 600) || '';
             const error=new Error(`${label} API 오류 ${res.status}${detail ? `: ${WLOG.clean(detail)}` : ''}`);error.code='HTTP_ERROR';error.diagnostic={service:'AI',method,timeoutMs:timeout,httpStatus:res.status,responseChars:String(res.responseText||'').length};reject(error); return;
           }
           resolve(parsed || {});
@@ -1617,13 +1635,13 @@ const WLOG=(()=>{
     const CN_HOLIDAYS=new Set(['2026-09-25','2026-10-01','2026-10-02','2026-10-05','2026-10-06','2026-10-07']); // 2026 weekday holidays (Beijing date); 2027 not yet announced
     function official(meta,t,at=Date.now()){
       const m=meta.model,p=meta.provider;let r;
-      if(p==='ai-studio'||p==='firebase'){
+      if(p==='ai-studio'||p==='firebase'||p==='vertex'){
         if(/^gemini-3\.[678]-flash$/.test(m))r=at<Date.UTC(2027,0,1)?[.75,3.75,.075]:[1.5,7.5,.15];
         else if(m==='gemini-3.5-flash')r=[1.5,9,.15];
         else if(m==='gemini-3.5-flash-lite')r=[.3,2.5,.03];
         else if(m==='gemini-3.1-flash-lite')r=[.25,1.5,.025];
         else if(m==='gemini-3.1-pro-preview'||m==='gemini-3.1-pro')r=t.input>200000?[4,18,.4]:[2,12,.2];
-        if(r&&p==='firebase'&&meta.location&&meta.location!=='global'){
+        if(r&&(p==='firebase'||p==='vertex')&&meta.location&&meta.location!=='global'){
           if(/^gemini-3\.1-pro/.test(m))return null;
           r=r.map(n=>n*1.1);
         }
@@ -1655,7 +1673,7 @@ const WLOG=(()=>{
       db.rows=db.rows.filter(r=>r.date>=since());
       if(!timer)timer=setTimeout(flush,500);
     }catch(e){console.warn('[Wish] 사용량 집계 실패',e.name);}}
-    async function track(cfg,options,fn,override=null){const at=Date.now(),model=getAiSelectedModel(cfg),meta={provider:cfg.provider==='deepseek'&&!isDirectDeepSeekBaseUrl(cfg.deepSeekBaseUrl)?'deepseek-custom':cfg.provider,model,location:/^gemini-3\.[678]-flash$/.test(model)?'global':cfg.firebaseLocation,task:options.operationLabel||options.taskKind||'AI 요청',...(override||{})};let raw;try{raw=await fn();record(meta,raw,false,at);return raw;}catch(e){record(meta,null,true,at);throw e;}}
+    async function track(cfg,options,fn,override=null){const at=Date.now(),model=getAiSelectedModel(cfg),meta={provider:cfg.provider==='deepseek'&&!isDirectDeepSeekBaseUrl(cfg.deepSeekBaseUrl)?'deepseek-custom':cfg.provider,model,location:/^gemini-3\.[678]-flash$/.test(model)?'global':cfg.provider==='vertex'?cfg.vertexLocation:cfg.firebaseLocation,task:options.operationLabel||options.taskKind||'AI 요청',...(override||{})};let raw;try{raw=await fn();record(meta,raw,false,at);return raw;}catch(e){record(meta,null,true,at);throw e;}}
     function cost(r){const p=load().rates[modelKey(r)]||r.rate;if(!p)return null;return ((r.input-r.cached)*p.input+r.cached*p.cached+r.output*p.output)/1e6;}
     function total(rows){return rows.reduce((a,r)=>{const c=cost(r);a.calls+=r.calls;a.failed+=r.failed;a.unknown+=c===null?r.calls:r.unknown;a.usd+=c||0;return a;},{calls:0,failed:0,unknown:0,usd:0});}
     function pruneShards(cutoff=since()){const kept=[];
@@ -1732,6 +1750,43 @@ const WLOG=(()=>{
       if (!appModule?.initializeApp || !aiModule?.getAI || !aiModule?.getGenerativeModel || !aiModule?.VertexAIBackend) throw new Error('필수 Firebase AI 모듈을 찾지 못했습니다.');
       return { ...appModule, ...aiModule };
     } catch (e) { throw new Error(`Firebase SDK 로드 실패: ${e.message || e}`); }
+  }
+
+  // App Check: 콘솔에서 만든 디버그 토큰을 Firebase 교환 서버에서 1시간짜리 App Check 토큰으로 바꿉니다.
+  // 같은 버전의 firebase-app.js에 등록돼야 하므로 SDK 버전을 맞춰 불러옵니다. 백그라운드 갱신 없이 AI 요청 때만 교환합니다.
+  const firebaseAppChecks = new Map();
+  async function loadFirebaseAppCheckModule(version) {
+    const safe = String(version || AI_DEFAULTS.firebaseSdkVersion).trim() || AI_DEFAULTS.firebaseSdkVersion;
+    try {
+      const mod = await import(`https://www.gstatic.com/firebasejs/${encodeURIComponent(safe)}/firebase-app-check.js`);
+      if (!mod?.initializeAppCheck || !mod?.CustomProvider || !mod?.getToken) throw new Error('필수 App Check 모듈을 찾지 못했습니다.');
+      return mod;
+    } catch (e) { throw new Error(`Firebase App Check SDK 로드 실패: ${e.message || e}`); }
+  }
+
+  async function exchangeFirebaseAppCheckDebugToken(firebaseConfig, debugToken) {
+    const { projectId, appId, apiKey } = firebaseConfig;
+    const data = await aiGmRequestJson({ url:`https://content-firebaseappcheck.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}:exchangeDebugToken?key=${encodeURIComponent(apiKey)}`, headers:{'Content-Type':'application/json'}, body:{ debug_token:debugToken }, timeout:30000, label:'Firebase App Check' });
+    const token = String(data?.token || ''), ttl = String(data?.ttl || '').match(/^([\d.]+)s$/);
+    if (!token) throw new Error('App Check 서버가 토큰을 주지 않았습니다.');
+    const ttlMs = (ttl ? Number(ttl[1]) : 3600) * 1000;
+    // 만료 5분 전에 SDK가 새로 받도록 남은 시간을 줄여 알려 줍니다(짧은 TTL은 절반만 사용).
+    return { token, expireTimeMillis: Date.now() + Math.max(ttlMs / 2, ttlMs - 300000) };
+  }
+
+  async function ensureFirebaseAppCheck(app, firebaseConfig, debugToken, version) {
+    if (firebaseAppChecks.has(app.name)) return firebaseAppChecks.get(app.name);
+    const missing = ['apiKey','projectId','appId'].filter(k => !String(firebaseConfig?.[k] || '').trim());
+    if (missing.length) throw new Error(`App Check를 쓰려면 Firebase Config에 ${missing.join('·')} 값이 있어야 합니다.`);
+    const mod = await loadFirebaseAppCheckModule(version);
+    if (firebaseAppChecks.has(app.name)) return firebaseAppChecks.get(app.name);
+    const appCheck = mod.initializeAppCheck(app, {
+      provider: new mod.CustomProvider({ getToken: () => exchangeFirebaseAppCheckDebugToken(firebaseConfig, debugToken) }),
+      isTokenAutoRefreshEnabled: false,
+    });
+    const entry = { appCheck, getToken: mod.getToken };
+    firebaseAppChecks.set(app.name, entry);
+    return entry;
   }
 
   function geminiStructuredSchema(schema) {
@@ -1839,8 +1894,21 @@ const WLOG=(()=>{
     const firebaseConfig = parseFirebaseConfigInput(cfg.firebaseConfig);
     if (!firebaseConfig) throw new Error('Firebase Config가 비어 있습니다.');
     const firebase = await loadFirebaseAiModules(cfg.firebaseSdkVersion);
-    const name = `wish-rp-firebase-${aiHashTiny(JSON.stringify(firebaseConfig))}`;
+    const debugToken = cfg.firebaseAppCheckDebugToken;
+    // App Check는 앱마다 한 번만 붙일 수 있으므로 토큰이 바뀌면 다른 이름의 앱으로 새로 엽니다.
+    const name = `wish-rp-firebase-${aiHashTiny(JSON.stringify(firebaseConfig))}${debugToken ? `-ac${aiHashTiny(debugToken)}` : ''}`;
     const app = firebase.getApps().some(x => x.name === name) ? firebase.getApp(name) : firebase.initializeApp(firebaseConfig, name);
+    if (debugToken) {
+      // getAI보다 먼저 붙여야 AI 요청에 App Check 토큰이 실립니다. 교환 실패는 원인 그대로 먼저 알립니다.
+      const appCheck = await ensureFirebaseAppCheck(app, firebaseConfig, debugToken, cfg.firebaseSdkVersion);
+      try { await appCheck.getToken(appCheck.appCheck, false); }
+      catch (e) {
+        if (e?.code === 'WISH_USER_ABORT') throw e;
+        const status = Number(e?.diagnostic?.httpStatus) || 0;
+        const hint = status === 400 || status === 403 || status === 404 ? ' · Firebase 콘솔 > App Check > 앱 메뉴 > 디버그 토큰 관리에 이 토큰이 등록돼 있는지, Firebase Config가 같은 프로젝트·앱인지 확인해 주세요.' : '';
+        throw Object.assign(new Error(`Firebase App Check 토큰 확인 실패: ${e?.message || e}${hint}`), { code:e?.code || 'AI_APPCHECK', diagnostic:e?.diagnostic, cause:e });
+      }
+    }
     const model = normalizeGeminiModelId(cfg.model);
     const location = AI_GEMINI_GLOBAL_LOCATION_MODELS.has(model) ? 'global' : cfg.firebaseLocation;
     const ai = firebase.getAI(app, { backend:new firebase.VertexAIBackend(location) });
@@ -1864,8 +1932,102 @@ const WLOG=(()=>{
       const timedOut=!httpStatus&&(e?.name==='AbortError'||/timeout|timed out|abort/i.test(String(msg)));
       // 12.5.0은 시간 초과도 ai/error로 감쌉니다. SDK 원본은 cause로 보존합니다.
       const diagnostic=httpStatus?{...e?.diagnostic,httpStatus}:e?.diagnostic;
-      throw Object.assign(new Error(`Firebase AI Logic 호출 실패: ${msg}`),{code:timedOut?'AI_TIMEOUT':e?.code,diagnostic,cause:e});
+      // 2026-11-02부터 Firebase AI Logic은 App Check를 필수로 요구합니다.
+      const appCheckHint=(httpStatus===401||httpStatus===403)&&/app.?check|unauthenticated|attestation/i.test(String(msg))?(debugToken?' · App Check 디버그 토큰이 콘솔에 등록돼 있는지 확인해 주세요.':' · Firebase가 App Check를 요구합니다. AI 설정의 App Check 디버그 토큰 칸을 채워 주세요.'):'';
+      throw Object.assign(new Error(`Firebase AI Logic 호출 실패: ${msg}${appCheckHint}`),{code:timedOut?'AI_TIMEOUT':e?.code,diagnostic,cause:e});
     } finally { AiAbort.untrack(h); }
+  }
+
+  // Vertex AI 서비스 계정 JSON: 브라우저에서 RS256 JWT를 서명해 1시간짜리 액세스 토큰으로 바꿉니다.
+  // 토큰은 메모리에만 두고 만료 5분 전에 새로 받습니다. 동시에 들어온 요청은 같은 발급을 함께 기다립니다.
+  const VertexAuth = (() => {
+    const DEFAULT_TOKEN_URI = 'https://oauth2.googleapis.com/token', tokens = new Map(), keys = new Map();
+    const b64url = bytes => {
+      const u = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+      let out = '';
+      for (let i = 0; i < u.length; i += 0x8000) out += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+      return btoa(out).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    };
+    const b64urlText = text => b64url(new TextEncoder().encode(text));
+    function parse(raw) {
+      const text = String(raw || '').trim();
+      if (!text) throw new Error('Vertex 서비스 계정 JSON이 비어 있습니다.');
+      let sa = null;
+      try { const m = text.match(/\{[\s\S]*\}/); sa = JSON.parse(m ? m[0] : text); } catch (_) {}
+      if (!sa || typeof sa !== 'object' || Array.isArray(sa)) throw new Error('Vertex 서비스 계정 JSON을 읽지 못했습니다. 내려받은 JSON 파일 내용 전체를 붙여 넣어 주세요.');
+      if (sa.type && sa.type !== 'service_account') throw new Error('서비스 계정(service_account) JSON이 아닙니다. Google Cloud 콘솔 > IAM 및 관리자 > 서비스 계정 > 키에서 만든 JSON을 넣어 주세요.');
+      const clientEmail = String(sa.client_email || '').trim(), privateKey = String(sa.private_key || '').replace(/\\n/g, '\n'), projectId = String(sa.project_id || '').trim();
+      if (!clientEmail || !/-----BEGIN PRIVATE KEY-----/.test(privateKey) || !projectId) throw new Error('서비스 계정 JSON에 client_email · private_key · project_id가 모두 있어야 합니다.');
+      // 서명한 인증서는 Google 인증 서버로만 보냅니다.
+      let tokenUri = String(sa.token_uri || DEFAULT_TOKEN_URI).trim();
+      try { const u = new URL(tokenUri); if (u.protocol !== 'https:' || !/(^|\.)googleapis\.com$/i.test(u.hostname)) tokenUri = DEFAULT_TOKEN_URI; } catch (_) { tokenUri = DEFAULT_TOKEN_URI; }
+      return { clientEmail, privateKey, projectId, tokenUri, id:`${clientEmail}|${aiHashTiny(privateKey)}` };
+    }
+    function importKey(sa) {
+      if (!keys.has(sa.id)) {
+        const p = (async () => {
+          if (!globalThis.crypto?.subtle) throw new Error('이 브라우저에서는 서명 기능(WebCrypto)을 쓸 수 없어 Vertex JSON 연결을 할 수 없습니다.');
+          let der;
+          try { der = Uint8Array.from(atob(sa.privateKey.replace(/-----(BEGIN|END) PRIVATE KEY-----/g, '').replace(/\s+/g, '')), c => c.charCodeAt(0)); }
+          catch (_) { throw new Error('서비스 계정 JSON의 private_key 형식이 올바르지 않습니다.'); }
+          try { return await crypto.subtle.importKey('pkcs8', der, { name:'RSASSA-PKCS1-v1_5', hash:'SHA-256' }, false, ['sign']); }
+          catch (_) { throw new Error('서비스 계정 JSON의 private_key를 읽지 못했습니다. JSON 파일 내용을 고치지 말고 그대로 붙여 넣어 주세요.'); }
+        })();
+        keys.set(sa.id, p);
+        p.catch(() => { if (keys.get(sa.id) === p) keys.delete(sa.id); });
+      }
+      return keys.get(sa.id);
+    }
+    async function fetchToken(sa) {
+      const key = await importKey(sa), iat = Math.floor(Date.now() / 1000) - 30;
+      const unsigned = `${b64urlText(JSON.stringify({ alg:'RS256', typ:'JWT' }))}.${b64urlText(JSON.stringify({ iss:sa.clientEmail, scope:'https://www.googleapis.com/auth/cloud-platform', aud:sa.tokenUri, iat, exp:iat + 3600 }))}`;
+      const signature = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, new TextEncoder().encode(unsigned));
+      const data = await aiGmRequestJson({ url:sa.tokenUri, headers:{ 'Content-Type':'application/x-www-form-urlencoded' }, rawBody:`grant_type=${encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer')}&assertion=${encodeURIComponent(`${unsigned}.${b64url(signature)}`)}`, timeout:30000, label:'Vertex 인증' });
+      const token = String(data?.access_token || '');
+      if (!token) throw new Error('Vertex 인증 서버가 액세스 토큰을 주지 않았습니다.');
+      return { token, exp:Date.now() + Math.max(60, Number(data?.expires_in) || 3600) * 1000 };
+    }
+    async function token(cfg, force=false) {
+      const sa = parse(cfg.vertexServiceAccount);
+      const start = () => { const p = fetchToken(sa); tokens.set(sa.id, p); p.catch(() => { if (tokens.get(sa.id) === p) tokens.delete(sa.id); }); return p; };
+      let p = tokens.get(sa.id);
+      if (!p || force) p = start();
+      let v = await p;
+      if (v.exp - Date.now() <= 300000) { const cur = tokens.get(sa.id); p = !cur || cur === p ? start() : cur; v = await p; }
+      return { token:v.token, projectId:sa.projectId };
+    }
+    function invalidate(cfg) { try { tokens.delete(parse(cfg.vertexServiceAccount).id); } catch (_) {} }
+    return { parse, token, invalidate };
+  })();
+
+  async function callVertexAi(cfg, systemPrompt, userPrompt, options={}) {
+    VertexAuth.parse(cfg.vertexServiceAccount);
+    const model = normalizeGeminiModelId(cfg.model);
+    const location = AI_GEMINI_GLOBAL_LOCATION_MODELS.has(model) ? 'global' : normalizeVertexLocation(cfg.vertexLocation);
+    const host = location === 'global' ? 'aiplatform.googleapis.com' : `${location}-aiplatform.googleapis.com`;
+    const send = async (currentOptions, force=false) => {
+      const auth = await VertexAuth.token(cfg, force);
+      return await aiGmRequestJson({ url:`https://${host}/v1/projects/${encodeURIComponent(auth.projectId)}/locations/${location}/publishers/google/models/${encodeURIComponent(model)}:generateContent`, headers:{ 'Content-Type':'application/json', Authorization:`Bearer ${auth.token}` }, body:buildGeminiPayload(cfg, systemPrompt, userPrompt, currentOptions), timeout:Number(currentOptions.timeoutMs)||180000, label:'Vertex AI' });
+    };
+    const run = async currentOptions => {
+      const data = await WishUsage.track(cfg,options,async()=>{
+        try { return await send(currentOptions); }
+        catch (e) {
+          // 토큰이 서버 쪽에서 먼저 만료·폐기되면 한 번만 새로 받아 이어서 보냅니다.
+          if (Number(e?.diagnostic?.httpStatus) !== 401) throw e;
+          VertexAuth.invalidate(cfg);
+          return await send(currentOptions, true);
+        }
+      });
+      return { text:extractGeminiCandidateText(data), raw:data };
+    };
+    try { return await run(options); }
+    catch (e) {
+      // 일부 endpoint가 복잡한 JSON Schema를 거부하면 기존 JSON MIME 방식으로 한 번만 안전하게 후퇴합니다.
+      if (!options.responseJsonSchema || !isStructuredSchemaApiError(e)) throw e;
+      const fallback = {...options}; delete fallback.responseJsonSchema;
+      return {...await run(fallback), structuredOutputFallback:true};
+    }
   }
 
   function buildDeepSeekMessages(systemPrompt, userPrompt, wantsJson) {
@@ -2047,7 +2209,7 @@ const WLOG=(()=>{
   async function callAiProvider(settings, systemPrompt, userPrompt, options={}) {
     const cfg = aiTaskSettings(settings,options.taskKind);
     if (cfg.provider === 'manual') return await callManualAiRelay(systemPrompt, userPrompt, options);
-    options={...options,timeoutMs:Number(options.timeoutMs)>0?Number(options.timeoutMs):(cfg.provider==='firebase'?180000:120000)};
+    options={...options,timeoutMs:Number(options.timeoutMs)>0?Number(options.timeoutMs):(cfg.provider==='firebase'||cfg.provider==='vertex'?180000:120000)};
     const label=options.operationLabel||WLOG.current()?.operation||'보조 AI 요청';
     const inputChars=String(systemPrompt||'').length+String(userPrompt||'').length,started=Date.now();
     const details={provider:cfg.provider,model:getAiSelectedModel(cfg),inputChars,timeoutMs:options.timeoutMs};
@@ -2064,6 +2226,7 @@ const WLOG=(()=>{
       const firebaseOptions = {...options}; delete firebaseOptions.responseJsonSchema;
       return await callFirebaseAi(cfg, systemPrompt, userPrompt, firebaseOptions);
     }
+    if (cfg.provider === 'vertex') return await callVertexAi(cfg, systemPrompt, userPrompt, options);
     return await callGoogleAiStudio(cfg, systemPrompt, userPrompt, options);
     };
     const result=await withAiTimeout(AiAbort.race(invoke()),options.timeoutMs,options.operationLabel||'보조 AI 요청');
@@ -2625,6 +2788,8 @@ const ExternalReplay=(()=>{
     const provider = normalizeAiProvider(backdrop.querySelector('#rpcm-ai-provider')?.value || saved.provider);
     const typedGemini = normalizeAiKey(backdrop.querySelector('#rpcm-ai-key')?.value || '');
     const typedDeepSeek = normalizeAiKey(backdrop.querySelector('#rpcm-ai-deepseek-key')?.value || '');
+    const typedAppCheck = normalizeAiKey(backdrop.querySelector('#rpcm-ai-firebase-appcheck')?.value || '');
+    const typedVertex = String(backdrop.querySelector('#rpcm-ai-vertex-sa')?.value || '').trim();
     const formBase = backdrop.querySelector('#rpcm-ai-deepseek-base')?.value || saved.deepSeekBaseUrl;
     const hostOf = u => { try { return new URL(normalizeDeepSeekBaseUrl(u)).host; } catch (_) { return ''; } };
     const deepSeekKey = typedDeepSeek || (hostOf(formBase) && hostOf(formBase) === hostOf(saved.deepSeekBaseUrl) ? saved.deepSeekApiKey : '');
@@ -2637,6 +2802,9 @@ const ExternalReplay=(()=>{
       firebaseConfig: backdrop.querySelector('#rpcm-ai-firebase-config')?.value || saved.firebaseConfig,
       firebaseLocation: backdrop.querySelector('#rpcm-ai-firebase-location')?.value || saved.firebaseLocation,
       firebaseSdkVersion: backdrop.querySelector('#rpcm-ai-firebase-sdk')?.value || saved.firebaseSdkVersion,
+      firebaseAppCheckDebugToken: typedAppCheck || saved.firebaseAppCheckDebugToken,
+      vertexServiceAccount: typedVertex || saved.vertexServiceAccount,
+      vertexLocation: backdrop.querySelector('#rpcm-ai-vertex-location')?.value || saved.vertexLocation,
       deepSeekApiKey: deepSeekKey,
       deepSeekBaseUrl: formBase,
       deepSeekModel: backdrop.querySelector('#rpcm-ai-deepseek-model')?.value || saved.deepSeekModel,
@@ -2651,7 +2819,7 @@ const ExternalReplay=(()=>{
     });
   }
 
-  function openAiSettingsDialog(options={}){const s=loadAiSettings();return WUI.openSheet('ai',{saved:s,providers:[['ai-studio','AI Studio'],['firebase','Firebase'],['deepseek','DeepSeek'],['manual','외부 AI 복붙 (API 없이)']],models:{'ai-studio':AI_GEMINI_MODELS.map(x=>[x,x]),firebase:AI_GEMINI_MODELS.map(x=>[x,x]),deepseek:AI_DEEPSEEK_MODELS.map(x=>[x.id,x.label])},showCustom:true,draft:{provider:s.provider,key:'',firebase:s.firebaseConfig,dsKey:'',dsBase:s.deepSeekBaseUrl,model:s.model,thinking:s.geminiThinkingLevel,dsModel:s.deepSeekModel,dsThinking:s.deepSeekThinking?'1':'0',dsCustom:s.deepSeekCustomModel,test:''}});}
+  function openAiSettingsDialog(options={}){const s=loadAiSettings();return WUI.openSheet('ai',{saved:s,providers:[['ai-studio','AI Studio'],['firebase','Firebase'],['vertex','Vertex (JSON 키)'],['deepseek','DeepSeek'],['manual','외부 AI 복붙 (API 없이)']],models:{'ai-studio':AI_GEMINI_MODELS.map(x=>[x,x]),firebase:AI_GEMINI_MODELS.map(x=>[x,x]),vertex:AI_GEMINI_MODELS.map(x=>[x,x]),deepseek:AI_DEEPSEEK_MODELS.map(x=>[x.id,x.label])},showCustom:true,draft:{provider:s.provider,key:'',firebase:s.firebaseConfig,fbAppCheck:'',vx:'',vxLoc:s.vertexLocation,dsKey:'',dsBase:s.deepSeekBaseUrl,model:s.model,thinking:s.geminiThinkingLevel,dsModel:s.deepSeekModel,dsThinking:s.deepSeekThinking?'1':'0',dsCustom:s.deepSeekCustomModel,test:''}});}
 
   async function runAiSlotUpdate(room){return await WLOG.run("선택한 기억 갱신 중",async task=>{return U3.run(room,'memory');});}
 
@@ -10052,7 +10220,7 @@ function formatLocalRecordTime(value){
   async function geminiEmbedTexts(texts, room, taskType = 'RETRIEVAL_DOCUMENT', timeout = 120000) {
     const cfg = loadAiSettings();
     if (isManualAiProvider(cfg)) throw new Error('외부 AI 복붙 모드에서는 에리 의미검색(임베딩)을 쓰지 않습니다.');
-    if (!cfg.apiKey) throw new Error('의미 검색에는 AI 설정의 Gemini API Key가 필요합니다. DeepSeek/Firebase를 쓰는 경우에도 임베딩용 Key만 추가해 주세요.');
+    if (!cfg.apiKey) throw new Error('의미 검색에는 AI 설정의 Gemini API Key가 필요합니다. DeepSeek/Firebase/Vertex를 쓰는 경우에도 임베딩용 Key만 추가해 주세요.');
     const list = (texts || []).map(x => String(x || '').trim()).filter(Boolean);
     if (!list.length) return [];
     const model = String(room?.loreConfig?.embeddingModel || APP.loreEmbeddingModel);
@@ -10704,7 +10872,7 @@ function formatLocalRecordTime(value){
       return {...job,status:'ready',message:'남은 구간을 균등 배분했습니다.',segments:[...done,...chunks(job.rows.slice(start),count,start)].map((s,i)=>({...s,index:i+1}))};
     }
     async function digest(value){return sha256Hex(new TextEncoder().encode(JSON.stringify(value)));}
-    const resultSettings=s=>({provider:s.provider,model:getAiSelectedModel(s),endpoint:s.provider==='deepseek'?s.deepSeekBaseUrl:s.provider==='firebase'?[s.firebaseLocation,s.firebaseSdkVersion]:'',temperature:s.temperature,geminiThinkingLevel:s.geminiThinkingLevel,deepSeekThinking:s.deepSeekThinking,apiEconomy:s.apiEconomy});
+    const resultSettings=s=>({provider:s.provider,model:getAiSelectedModel(s),endpoint:s.provider==='deepseek'?s.deepSeekBaseUrl:s.provider==='firebase'?[s.firebaseLocation,s.firebaseSdkVersion]:s.provider==='vertex'?[s.vertexLocation]:'',temperature:s.temperature,geminiThinkingLevel:s.geminiThinkingLevel,deepSeekThinking:s.deepSeekThinking,apiEconomy:s.apiEconomy});
     function basis(r,c,ps){
       return JSON.stringify({room:{chatId:r.chatId,epoch:r._epoch,slots:r.slots,unified:r.unified,autoMemory:r.autoMemory,loreAutomation:r.loreAutomation&&{...r.loreAutomation,apiHeldProtected:undefined,apiHeldResolved:undefined},
         speech:r.speechRelations,relationships:r.relationships,relationshipBaseline:r.relationshipBaseline,active:r.activeLorePackIds,
@@ -15963,7 +16131,7 @@ diff:`<div class="m3-shell">
     approvedIcons(ui);ui.querySelector('.hd-ic').innerHTML=approvedIcon('wallet');
     const q=s=>ui.querySelector(s),T=WishUsage.total,today=WishUsage.day(),cur=today.slice(0,7);
     const months=Array.from({length:12},(_,i)=>{const x=new Date();x.setDate(1);x.setMonth(x.getMonth()-i);return WishUsage.day(x).slice(0,7);});
-    const PV={'ai-studio':'AI Studio',firebase:'Firebase',deepseek:'DeepSeek','deepseek-custom':'DeepSeek 호환'};
+    const PV={'ai-studio':'AI Studio',firebase:'Firebase',vertex:'Vertex',deepseek:'DeepSeek','deepseek-custom':'DeepSeek 호환'};
     const COL=['--c-state','--c-log','--c-cog','--c-lore','--c-rel','--c-extra'];
     const money=n=>{n=Number(n)||0;return n===0?'$0':n<.01?'$'+n.toFixed(4):'$'+n.toFixed(2);};
     const mlabel=m=>{const [y,mm]=m.split('-');return y+'년 '+Number(mm)+'월';};
@@ -16263,15 +16431,17 @@ diff:`<div class="m3-shell">
     },
     /* props: { slot:'state'|'log', desc, draft:{ result } } → act aiApply(dlgId) */
     aiResult(d) { const log = d.slot === 'log'; return sheet(d, { title: `${log ? '날짜로그' : '현재상태'} AI 갱신 결과`, desc: esc(d.desc || ''), wide: true, body: `<div class="m3-status m3-bottomgap">${ic(log ? 'date' : 'memory')}<span>${log ? 'AI가 만든 추가·교체 블록입니다. 적용하면 날짜와 사건 제목 기준으로 병합합니다.' : '전체 교체본입니다. 확인 후 적용합니다.'}</span></div>${field('결과 · 필요하면 직접 고친 뒤 적용', ta(D(d, 'result'), d.draft.result, '', '320'))}`, foot: `${btn('결과 복사', 'copyText', { arg: d.id, cls: 'mini', icon: 'copy' })}${SP}${closeBtn(d, '취소')}${btn(log ? '기존 로그에 병합' : '현재상태 교체', 'aiApply', { arg: d.id, cls: 'primary', icon: 'check' })}` }); },
-    /* props: { providers:[[v,l]], models:{provider:[[v,l]]}, draft:{provider,key,firebase,dsKey,dsBase,model,thinking,dsModel,dsThinking,dsCustom,maxMsg,temp,autoMem,memMin,memMax,test} } */
+    /* props: { providers:[[v,l]], models:{provider:[[v,l]]}, saved, draft:{provider,key,firebase,fbAppCheck,vx,vxLoc,dsKey,dsBase,model,thinking,dsModel,dsThinking,dsCustom,maxMsg,temp,autoMem,memMin,memMax,test} } */
     ai(d) {
       const a = d.draft, ds = a.provider === 'deepseek', models = [...((d.models || {})[a.provider] || [])];
-      const manual = a.provider === 'manual';
+      const manual = a.provider === 'manual', sv = d.saved || {};
+      const firebasePanel = field('Firebase Config', ta(D(d, 'firebase'), a.firebase, 'const firebaseConfig = { apiKey:"…", projectId:"…", appId:"…" };', '100')) + field('App Check 디버그 토큰', inp(D(d, 'fbAppCheck'), a.fbAppCheck || '', sv.firebaseAppCheckDebugToken ? '저장됨 · 새 토큰을 넣으면 교체' : '예: 123a4567-b89c-12d3-e456-789012345678', 'password'), '2026년 11월 2일부터 Firebase AI Logic은 App Check가 필수입니다. Firebase 콘솔 > App Check > 앱 메뉴(⋮) > 디버그 토큰 관리 > 토큰 생성 후 붙여 넣고, App Check의 Firebase AI Logic을 적용(Enforce)으로 바꾸세요.');
+      const vertexPanel = field('서비스 계정 JSON', ta(D(d, 'vx'), a.vx || '', sv.vertexServiceAccount ? '저장됨 · 새 JSON을 붙여 넣으면 교체' : '{ "type": "service_account", "project_id": "…", "private_key": "…", "client_email": "…" }', '100'), 'Google Cloud 콘솔 > IAM 및 관리자 > 서비스 계정 > 키 > JSON으로 받은 파일 내용 전체를 붙여 넣으세요.') + field('Vertex 위치', inp(D(d, 'vxLoc'), a.vxLoc || '', 'global'), 'global 권장 · 지역을 쓰려면 us-central1 · asia-northeast3처럼 입력합니다. 3.6~3.8 Flash는 항상 global로 보냅니다.');
       const manualPanel = manual ? `<div class="m3-panel" data-key="manual-ai-intro"><b>API 키 없이 외부 AI로 진행합니다</b><p class="m3-muted">확인 탭의 [함께 정리]를 누르면 요청문이 복사됩니다. ChatGPT·Gemini·Claude 같은 외부 AI에 붙여 넣고, 답을 복사한 뒤 [답 붙여넣기]를 누르면 API로 받을 때와 같은 검사를 거쳐 기존 기억에 합칩니다. 마지막 정리 이후의 새 대화만 보냅니다.</p><ul class="m3-muted"><li>답을 기다리는 동안 패널을 닫거나 새로고침하고, RP를 계속 진행해도 됩니다.</li><li>자동 정리는 차례가 되면 알림만 드립니다.</li><li>API를 쓰는 버튼·옵션(묶음 정리·다시 시도·텍스트 → 자료·API 전체 재구축·AI 재검토·API 사용량 절약·연결 테스트)은 회색으로 잠기고 [함께 정리]만 씁니다. 전체 재구축은 자료 관리의 [외부 AI로 재구축]을 쓰세요.</li><li>주입 후보는 최근·키워드 검색으로 고르며 에리 의미검색(임베딩)도 쓰지 않습니다.</li><li>저장된 API 키는 그대로 두므로 언제든 API 방식으로 돌아갈 수 있습니다.</li></ul><div class="m3-actions">${btn('복붙 안내 지침 편집', 'promptGuides', { arg: 'manualRelay', cls: 'mini', icon: 'doc' })}</div></div>` : '';
       if(!ds&&a.model&&!models.some(([id])=>id===a.model))models.unshift([a.model,a.model+' · 기존 설정']);
       return sheet(d, { title: '보조 AI 연결', desc: '인지 · 기억 갱신 · 날짜로그 정리 · 자료집 · 전체 재구축이 같은 연결을 씁니다', body: `
-      <section class="m3-grp"><div class="m3-gt">${ic('key')}연결</div>${field('AI 서비스', selc(D(d, 'provider'), a.provider, d.providers || [['ai-studio', 'Google AI Studio'], ['firebase', 'Firebase AI Logic'], ['deepseek', 'DeepSeek API'], ['manual', '외부 AI 복붙 (API 없이)']]))}
-      ${manual ? manualPanel : a.provider === 'firebase' ? field('Firebase Config', ta(D(d, 'firebase'), a.firebase, 'const firebaseConfig = { apiKey:"…", projectId:"…" };', '100')) : ds ? field('DeepSeek API Key', inp(D(d, 'dsKey'), a.dsKey || '', '저장됨 · 새 키를 넣으면 교체', 'password')) + field('Base URL', inp(D(d, 'dsBase'), a.dsBase || '')) : field('Gemini API Key', inp(D(d, 'key'), a.key || '', '저장됨 · 새 키를 넣으면 교체', 'password'), '이 브라우저에만 보관하고 백업에는 넣지 않습니다.')}</section>
+      <section class="m3-grp"><div class="m3-gt">${ic('key')}연결</div>${field('AI 서비스', selc(D(d, 'provider'), a.provider, d.providers || [['ai-studio', 'Google AI Studio'], ['firebase', 'Firebase AI Logic'], ['vertex', 'Vertex AI (JSON 키)'], ['deepseek', 'DeepSeek API'], ['manual', '외부 AI 복붙 (API 없이)']]))}
+      ${manual ? manualPanel : a.provider === 'firebase' ? firebasePanel : a.provider === 'vertex' ? vertexPanel : ds ? field('DeepSeek API Key', inp(D(d, 'dsKey'), a.dsKey || '', '저장됨 · 새 키를 넣으면 교체', 'password')) + field('Base URL', inp(D(d, 'dsBase'), a.dsBase || '')) : field('Gemini API Key', inp(D(d, 'key'), a.key || '', '저장됨 · 새 키를 넣으면 교체', 'password'), '이 브라우저에만 보관하고 백업에는 넣지 않습니다.')}</section>
       ${manual ? '<div hidden>' : ''}<section class="m3-grp"><div class="m3-gt">${ic('spark')}모델 · 생성</div>
       ${ds ? `<div class="m3-grid2">${field('DeepSeek 모델', selc(D(d, 'dsModel'), a.dsModel, models.length ? models : [[a.dsModel, a.dsModel]]))}${field('기억 추출·재구축 추론', selc(D(d, 'dsThinking'), a.dsThinking, [['1', '켜기'], ['0', '끄기']]))}</div>${d.showCustom ? field('커스텀 모델 ID · 서드파티 전용', inp(D(d, 'dsCustom'), a.dsCustom || '')) : ''}` : `<div class="m3-grid2">${field('모델', selc(D(d, 'model'), a.model, models.length ? models : [[a.model, a.model]]))}${field('기억 추출·재구축 추론 강도', selc(D(d, 'thinking'), a.thinking, d.thinkingOptions || [['low', '낮음'], ['medium', '보통'], ['high', '높음']]))}</div>`}
       </section>
@@ -17345,7 +17515,7 @@ async function WUIDeleteMemory(kind,id,expected){
 }
 async function WUIRemoveEditor(d){if(d.editPath&&d.editPath!==location.pathname)throw Error('편집을 시작한 방으로 돌아온 뒤 삭제해 주세요.');if(d.type==='eRelationship')return WishRelationships.save(d,true);if(['ePack','eEntry'].includes(d.type)&&d.wishEditor?.packId){const livePack=await getCharacterLibrary(d.wishEditor.packId);if(livePack?.ownerChatId&&String(livePack.ownerChatId)!==String(state.currentRoom?.chatId||''))throw Error('다른 방 소유 자료집은 현재 방에서 삭제할 수 없습니다.');}if(d.type==='eLog')return WUIDeleteMemory('log',d.wishEditor?.index??d.ref,d.baseline);if(d.type==='eState')return WUIDeleteMemory('state',d.wishEditor?.index??d.ref,d.baseline);if(d.type==='eSlot'&&['char','extra'].includes(d.kind))return WUIDeleteMemory('slot',d.wishEditor?.slotId||d.ref);const action={eSlot:'editor-delete',eSpeech:'speech-delete-editor',ePack:'lore-pack-delete',eEntry:'lore-entry-delete',eActor:'cog-actor-delete',eFact:'cog-fact-delete',}[d.type];if(!action){notify('이 항목의 삭제는 원문 편집에서 처리해 주세요.','warn');return false;}return WUIInvoke(action,'',{},d.wishEditor);}
 
-function WUIAIConfig(d){const x=d.draft,fields={provider:x.provider,key:x.key,'firebase-config':x.firebase,'deepseek-key':x.dsKey,'deepseek-base':x.dsBase,model:x.model,'gemini-thinking':x.thinking,'deepseek-model':x.dsModel,'deepseek-thinking':x.dsThinking,'deepseek-custom':x.dsCustom};return settingsFromAiDialog(WUIForm(Object.fromEntries(Object.entries(fields).map(([k,v])=>['#rpcm-ai-'+k,v]))),loadAiSettings());}
+function WUIAIConfig(d){const x=d.draft,fields={provider:x.provider,key:x.key,'firebase-config':x.firebase,'firebase-appcheck':x.fbAppCheck,'vertex-sa':x.vx,'vertex-location':x.vxLoc,'deepseek-key':x.dsKey,'deepseek-base':x.dsBase,model:x.model,'gemini-thinking':x.thinking,'deepseek-model':x.dsModel,'deepseek-thinking':x.dsThinking,'deepseek-custom':x.dsCustom};return settingsFromAiDialog(WUIForm(Object.fromEntries(Object.entries(fields).map(([k,v])=>['#rpcm-ai-'+k,v]))),loadAiSettings());}
 function WUIDateApply(d){const replacements=[];for(const b of d.blocks){if(b.isSpecialDate||b.isYearOnly)continue;const x=d.draft.dn[String(b.index)];if(!x)continue;const y=String(x.y||'').trim()?Number(x.y):null,m=Number(x.m),day=Number(x.d);if(b.isUnknown&&!y&&!m&&!day)continue;if(b.isUnknown&&y===null&&(m||day))throw Error('날짜 미상 블록은 연도까지 입력해야 합니다.');if(y!==null&&(!Number.isInteger(y)||y<1||y>999999))throw Error('연도는 1~999999로 입력해 주세요.');if(!Number.isInteger(m)||m<1||m>12||!Number.isInteger(day)||day<1||day>new Date(y||2000,m,0).getDate())throw Error('올바른 월과 일을 입력해 주세요.');if(y!==(b.year||null)||m!==b.month||day!==b.day)replacements.push({start:b.sourceStart,end:b.headingEnd,text:formatNormalizedLogHeading(b,y,m,day)});}if(!replacements.length){notify('변경된 날짜가 없습니다.');return;}let next=d.originalText;replacements.sort((a,b)=>b.start-a.start).forEach(r=>next=next.slice(0,r.start)+r.text+next.slice(r.end));const blocks=parseDatedLogBlocks(next);if(blocks.length!==d.blocks.length)throw Error('날짜 수정 후 블록 수가 달라져 적용을 중단했습니다.');const slot=d.wishRoom.slots.find(s=>s.id==='logSummary');if(slot.content!==d.originalText)throw Error('편집 중 로그가 바뀌었습니다. 다시 열어 주세요.');slot.content=next;remapLogSelectionKeysByIndex(d.wishRoom,d.blocks,blocks);WUIResolve(d.id,true);}
 function WUIDedupeApply(d){
  const selected=new Map();
@@ -17400,7 +17570,7 @@ Object.assign(WUI_ADAPTER.act,{
  logPick:()=>openLogRecallManagerDialog(state.currentRoom),lrApply:async id=>{const d=WUI.ui.dlg(id),r=d.wishRoom;if((r.slots.find(s=>s.id==='logSummary')?.content||'')!==d.originalText)throw Error('편집 중 로그가 바뀌었습니다. 다시 열어 주세요.');for(const [field,key] of [['manualLogSelectedKeys','man'],['autoLogPinnedKeys','pin'],['autoLogExcludedKeys','ex']])r[field]=d.blocks.filter(b=>d.draft.lr[String(b.index)]?.[key]).map(b=>b.key);await saveRoom(r);WUIResolve(id,true);},
  logNorm:()=>WUIInvoke('log-normalize'),dnApply:id=>WUIDateApply(WUI.ui.dlg(id)),logDedupe:()=>WUIInvoke('log-dedupe'),ddApply:id=>WUIDedupeApply(WUI.ui.dlg(id)),
  presets:()=>openDefaultExtraPresetDialog(state.currentRoom),psLoad:id=>{const d=WUI.ui.dlg(id);if(d.draft.list.length&&!confirm('현재 방 기타 항목으로 편집 중인 프리셋을 교체할까요?'))return;d.draft.list=state.currentRoom.slots.filter(s=>s.group==='extra').map(s=>({id:makeDefaultExtraPresetId(),title:s.title,content:s.content,enabled:s.enabled,ret:String(s.retentionTurns)}));},psSave:id=>WUIPresetsSave(WUI.ui.dlg(id),false),psSaveApply:id=>WUIPresetsSave(WUI.ui.dlg(id),true),
- aiSave:id=>{const d=WUI.ui.dlg(id),cfg=WUIAIConfig(d);if(!cfg.deepSeekApiKey&&loadAiSettings().deepSeekApiKey&&!confirm('DeepSeek 주소의 서버가 바뀌어 저장된 DeepSeek 키를 새 주소로 보내지 않습니다. 키 없이 저장할까요?\n취소하면 창이 그대로 남으니 키를 다시 입력해 주세요.'))return;saveAiSettings(cfg);WUIRefreshSettings();WUI.closeSheet(d);notify('AI/API 설정을 저장했습니다.','success');},aiTest:async id=>{const d=WUI.ui.dlg(id);d.draft.test='busy';WUI.paint();try{const cfg=WUIAIConfig(d);if(cfg.provider==='manual')throw Error('외부 AI 복붙은 연결 테스트가 필요 없습니다. 저장하면 바로 사용합니다.');if(!isAiProviderReady(cfg))throw Error('인증 정보를 입력해 주세요.');const result=await callAiProvider(cfg,'연결 테스트입니다. 다른 설명 없이 OK 두 글자만 출력하십시오.','OK라고 답하십시오.',{taskKind:'test',maxOutputTokens:512,operationLabel:'AI 연결 테스트'});d.draft.test='ok';d.draft.testMsg=getAiSelectedModel(cfg)+' · '+cleanAiGeneratedText(result.text).slice(0,50);}catch(e){d.draft.test='err';d.draft.testMsg=WLOG.inline("AI 연결 테스트",e);}},aiClear:id=>{const d=WUI.ui.dlg(id),p=normalizeAiProvider(d.draft.provider);if(p==='manual'){notify('외부 AI 복붙은 저장된 인증 정보가 없습니다.','info');return;}if(!confirm(getAiProviderLabel(p)+'의 저장된 인증 정보를 삭제할까요?'))return;const next={...loadAiSettings()};next[p==='deepseek'?'deepSeekApiKey':p==='firebase'?'firebaseConfig':'apiKey']='';saveAiSettings(next);WUIRefreshSettings();WUI.closeSheet(d);},
+ aiSave:id=>{const d=WUI.ui.dlg(id),cfg=WUIAIConfig(d);if(!cfg.deepSeekApiKey&&loadAiSettings().deepSeekApiKey&&!confirm('DeepSeek 주소의 서버가 바뀌어 저장된 DeepSeek 키를 새 주소로 보내지 않습니다. 키 없이 저장할까요?\n취소하면 창이 그대로 남으니 키를 다시 입력해 주세요.'))return;saveAiSettings(cfg);WUIRefreshSettings();WUI.closeSheet(d);notify('AI/API 설정을 저장했습니다.','success');},aiTest:async id=>{const d=WUI.ui.dlg(id);d.draft.test='busy';WUI.paint();try{const cfg=WUIAIConfig(d);if(cfg.provider==='manual')throw Error('외부 AI 복붙은 연결 테스트가 필요 없습니다. 저장하면 바로 사용합니다.');if(!isAiProviderReady(cfg))throw Error('인증 정보를 입력해 주세요.');const result=await callAiProvider(cfg,'연결 테스트입니다. 다른 설명 없이 OK 두 글자만 출력하십시오.','OK라고 답하십시오.',{taskKind:'test',maxOutputTokens:512,operationLabel:'AI 연결 테스트'});d.draft.test='ok';d.draft.testMsg=getAiSelectedModel(cfg)+' · '+cleanAiGeneratedText(result.text).slice(0,50);}catch(e){d.draft.test='err';d.draft.testMsg=WLOG.inline("AI 연결 테스트",e);}},aiClear:id=>{const d=WUI.ui.dlg(id),p=normalizeAiProvider(d.draft.provider);if(p==='manual'){notify('외부 AI 복붙은 저장된 인증 정보가 없습니다.','info');return;}if(!confirm(getAiProviderLabel(p)+'의 저장된 인증 정보를 삭제할까요?'))return;const next={...loadAiSettings()};next[p==='deepseek'?'deepSeekApiKey':p==='firebase'?'firebaseConfig':p==='vertex'?'vertexServiceAccount':'apiKey']='';if(p==='firebase')next.firebaseAppCheckDebugToken='';saveAiSettings(next);WUIRefreshSettings();WUI.closeSheet(d);},
 
  localRooms:()=>WishLocalRooms.open(),localRoomPick:arg=>{const [id,mode]=arg.split('|');WishLocalRooms.pick(id,mode);},localRoomRemove:id=>WishLocalRooms.remove(id),
 
