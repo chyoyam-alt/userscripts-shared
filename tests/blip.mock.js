@@ -9,7 +9,7 @@ const SCRIPT = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'Blip.user.
 const shot = name => path.join(OUT, name + '.png');
 const THEME = process.env.THEME || 'dark';
 
-const html = () => `<!doctype html><html><head><meta charset="utf-8"><style>
+const html = (party = false) => `<!doctype html><html><head><meta charset="utf-8"><style>
 :root{--bg_screen:#fff} body[data-theme=dark]{--bg_screen:#141413}
 body{margin:0;font-family:sans-serif;background:var(--bg_screen);color:#111} body[data-theme=dark]{color:#eee}
 .hdr>div{display:flex;justify-content:space-between;align-items:center;height:48px;padding:0 20px;border-bottom:1px solid #8884}
@@ -20,8 +20,8 @@ em{opacity:.7} .wrtn-codeblock{background:#8882;padding:8px;border-radius:8px}
 </style></head><body data-theme="${THEME}">
 <main><div class="hdr group/header"><div><button class="rm">빗속의 서윤</button><div class="right"><button aria-haspopup="dialog">슈퍼챗 3.0</button><button>⋯</button></div></div></div>
 <div class="stick-to-bottom"><div><div id="list" class="flex flex-col-reverse w-full gap-10">
-<div class="w-full" data-message-group-id="g2"><div class="wrtn-markdown"><p>행동 1</p></div></div>
-<div class="w-full" data-message-group-id="g1"><div class="wrtn-markdown"><p><em>프롤로그. 비가 내리기 시작했다.</em></p></div></div>
+${party ? '<div data-message-item="i2"><div class="wrtn-markdown"><p>행동 1</p></div></div><div data-message-item="i1"><div class="wrtn-markdown"><p><em>파티 프롤로그.</em></p></div></div>' : `<div class="w-full" data-message-group-id="g2"><div class="wrtn-markdown"><p>행동 1</p></div></div>
+<div class="w-full" data-message-group-id="g1"><div class="wrtn-markdown"><p><em>프롤로그. 비가 내리기 시작했다.</em></p></div></div>`}
 </div></div></div></main></body></html>`;
 
 // 크랙 스트리밍 흉내: 40ms마다 토큰 1개, span.animate / em.animate / strong.animate 로 다시 그림
@@ -31,9 +31,10 @@ window.__sim = (() => {
   function inline(t) {
     let out = '', i = 0;
     while (i < t.length) {
+      if (t[i] === '\`') { const j = t.indexOf('\`', i + 1); const inner = j < 0 ? t.slice(i + 1) : t.slice(i + 1, j); out += '<code class="animate">' + esc(inner) + '</code>'; i = j < 0 ? t.length : j + 1; continue; }
       if (t.startsWith('**', i)) { const j = t.indexOf('**', i + 2); const inner = j < 0 ? t.slice(i + 2) : t.slice(i + 2, j); out += '<strong class="animate">' + esc(inner) + '</strong>'; i = j < 0 ? t.length : j + 2; continue; }
       if (t[i] === '*') { const j = t.indexOf('*', i + 1); const inner = j < 0 ? t.slice(i + 1) : t.slice(i + 1, j); out += '<em class="animate">' + esc(inner) + '</em>'; i = j < 0 ? t.length : j + 1; continue; }
-      let j = t.indexOf('*', i); if (j < 0) j = t.length;
+      let j = t.slice(i).search(/[*\`]/); j = j < 0 ? t.length : i + j;
       for (const w of (t.slice(i, j).match(/\\S+\\s*|\\s+/g) || [])) out += '<span class="animate">' + esc(w) + '</span>';
       i = j;
     }
@@ -66,16 +67,24 @@ window.__sim = (() => {
     }
     const tk = tokens(src);
     let k = 0;
+    const box = holder.firstElementChild;
     while (k < tk.length) {
       const n = opt.dumpAt === k ? 30 : 1;
       k = Math.min(tk.length, k + n);
-      md.innerHTML = render(tk.slice(0, k).join(''), false);
+      const prefix = tk.slice(0, k).join('');
+      if (opt.bubbles) {
+        // 캐릭터 채팅: 빈 줄마다 말풍선 하나, 매번 통째로 새로 그림(앞 말풍선도 .animate 유지)
+        box.innerHTML = prefix.split('\\n\\n').filter(x => x.trim()).map(seg => '<div class="bubble"><div class="wrtn-markdown">' + render(seg.trim(), false) + '</div></div>').join('');
+      } else {
+        md.innerHTML = render(prefix, false);
+      }
       await sleep(opt.tick || 40);
     }
     await sleep(120);
     holder.remove();
     const g = document.createElement('div');
-    g.className = 'w-full'; g.dataset.messageGroupId = 'g' + Math.random().toString(16).slice(2);
+    if (opt.party) g.dataset.messageItem = 'i' + k;
+    else { g.className = 'w-full'; g.dataset.messageGroupId = 'g' + Math.random().toString(16).slice(2); }
     g.innerHTML = '<div class="wrtn-markdown">' + render(src, true) + '</div>';
     list.prepend(g);
   }
@@ -103,7 +112,7 @@ HP 100 / MP 30
 (async () => {
   const browser = await chromium.launch({ executablePath: fs.existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined, args: ['--autoplay-policy=no-user-gesture-required'] });
   const ctx = await browser.newContext({ viewport: { width: 1180, height: 820 } });
-  await ctx.route('https://crack.wrtn.ai/**', route => route.fulfill({ status: 200, contentType: 'text/html', body: html() }));
+  await ctx.route('https://crack.wrtn.ai/**', route => route.fulfill({ status: 200, contentType: 'text/html', body: html(route.request().url().includes('/parties/')) }));
   await ctx.addInitScript(`${stub}\ndocument.addEventListener('DOMContentLoaded',()=>{${SIM}\n${SCRIPT}\n});`);
   const pg = await ctx.newPage();
   pg.on('pageerror', e => console.log('[pageerror]', e.message));
@@ -166,6 +175,39 @@ HP 100 / MP 30
   await pg.evaluate(() => { window.__cblLog = []; window.__done = 0; window.__sim.stream('*웃으며* 안녕하세요 오늘 날씨 좋네요', {}).then(() => (window.__done = 1)); });
   await pg.waitForFunction(() => window.__done === 1, null, { timeout: 30000 });
   for (const e of await pg.evaluate(() => window.__cblLog)) console.log('char', (e.role || e.skip).padEnd(6), (e.speaker || '').padEnd(4), e.result || '', JSON.stringify(e.add));
+
+  // 캐릭터 채팅 말풍선: 상태 코드 → 서술 → 대사, 말풍선이 매번 새로 그려져도 소리가 이어져야 함
+  await pg.evaluate(() => { window.__cblLog = []; window.__done = 0; window.__sim.stream('`📍2턴┆2026년 9월 24일┆오후 11시`\n\n*그는 창밖을 내다보았다. 비가 그치지 않았다.*\n\n"오늘은 여기서 쉬어 가자. 내일 다시 출발하면 돼."', { bubbles: true }).then(() => (window.__done = 1)); });
+  await pg.waitForFunction(() => window.__done === 1, null, { timeout: 30000 });
+  const bub = await pg.evaluate(() => window.__cblLog);
+  const played = bub.filter(e => e.result === 'played');
+  console.log('bubbles: mute', bub.filter(e => e.role === 'mute').length, 'narr played', played.filter(e => e.role === 'narr').length, 'dia played', played.filter(e => e.role === 'dia').length, 'dump', bub.filter(e => e.skip === 'dump').length);
+  console.log(played.length >= 8 && !bub.some(e => e.skip === 'dump') ? '  ✓ 말풍선 채팅도 끝까지 소리' : '  ✗ 말풍선 채팅 소리 끊김');
+
+  // 파티챗: [data-message-item] 목록
+  await pg.goto('https://crack.wrtn.ai/stories/s1/parties/p1');
+  await pg.waitForTimeout(1300);
+  await pg.mouse.click(600, 400);
+  await pg.evaluate(() => { window.__cblLog = []; window.__done = 0; window.__sim.stream('**리나 |** "다들 준비됐어? 출발하자!"', { party: true }).then(() => (window.__done = 1)); });
+  await pg.waitForFunction(() => window.__done === 1, null, { timeout: 30000 });
+  const party = await pg.evaluate(() => window.__cblLog);
+  console.log(party.some(e => e.result === 'played' && e.speaker === '리나') ? '  ✓ 파티챗 소리' : '  ✗ 파티챗 무음', JSON.stringify(party.map(e => (e.role || e.skip) + ':' + (e.result || ''))));
+  await pg.goto('https://crack.wrtn.ai/stories/s1/parties/new');
+  await pg.waitForTimeout(3200);
+  console.log((await pg.locator('.cbl-hbtn').count()) === 0 ? '  ✓ 파티 만들기 화면엔 버튼 없음' : '  ✗ 파티 만들기 화면에 버튼');
+  await pg.goto('https://crack.wrtn.ai/characters/ch1/chats/c9');
+  await pg.waitForTimeout(1300);
+
+  // 잠김 점: 클릭 전에는 주황 점이 보이고, 툴팁은 가리지 않음
+  const ctx2 = await browser.newContext({ viewport: { width: 1180, height: 820 } });
+  await ctx2.route('https://crack.wrtn.ai/**', route => route.fulfill({ status: 200, contentType: 'text/html', body: html() }));
+  await ctx2.addInitScript(`${stub}\ndocument.addEventListener('DOMContentLoaded',()=>{${SIM}\n${SCRIPT}\n});`);
+  const pg2 = await ctx2.newPage();
+  await pg2.goto('https://crack.wrtn.ai/stories/s1/episodes/c1');
+  await pg2.waitForTimeout(1300);
+  const dot = await pg2.evaluate(() => { const b = document.querySelector('.cbl-hbtn'); const st = getComputedStyle(b, '::before'); return { cls: b.className, opacity: st.opacity, bg: st.backgroundColor, w: st.width }; });
+  console.log(dot.cls.includes('is-locked') && dot.opacity === '1' && dot.w === '7px' ? '  ✓ 잠김 점 보임' : '  ✗ 잠김 점', JSON.stringify(dot));
+  await ctx2.close();
 
   // 모바일 패널
   await pg.setViewportSize({ width: 390, height: 780 });

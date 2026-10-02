@@ -8,6 +8,7 @@
 // @match        https://crack.wrtn.ai/*
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_addValueChangeListener
 // @grant        unsafeWindow
 // @run-at       document-idle
 // ==/UserScript==
@@ -75,21 +76,77 @@
     return Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
   }
 
-  const saveTimers = {};
-  function saveLater(key, value, delay = 400) {
-    clearTimeout(saveTimers[key]);
-    saveTimers[key] = setTimeout(() => {
-      try { GM_setValue(key, value); } catch (error) { console.warn(LOG, 'save failed', error); }
-    }, delay);
+  // 다른 탭이 그사이 바꾼 설정을 덮지 않도록, 저장할 때 저장된 값을 다시 읽어 이 탭이 바꾼 항목만 고칩니다.
+  const pending = { settings: new Set(), voices: new Map() };
+  let flushTimer = 0;
+  function flushLater() {
+    clearTimeout(flushTimer);
+    flushTimer = setTimeout(flush, 400);
   }
 
-  const saveSettings = () => saveLater(SETTINGS_KEY, { ...S });
+  function flush() {
+    try {
+      if (pending.settings.size) {
+        const stored = readValue(SETTINGS_KEY, {});
+        pending.settings.forEach(field => { stored[field] = S[field]; });
+        pending.settings.clear();
+        GM_setValue(SETTINGS_KEY, stored);
+      }
+      if (pending.voices.size) {
+        const stored = readValue(VOICES_KEY, {});
+        pending.voices.forEach((fields, id) => {
+          const [key, name] = JSON.parse(id);
+          const conf = VOICES[key]?.[name];
+          const book = stored[key] || (stored[key] = {});
+          const target = book[name] || (book[name] = {});
+          fields.forEach(field => {
+            if (conf && field in conf) target[field] = conf[field];
+            else delete target[field];
+          });
+        });
+        pending.voices.clear();
+        pruneVoices(stored);
+        replaceVoices(stored);
+        GM_setValue(VOICES_KEY, stored);
+      }
+    } catch (error) {
+      console.warn(LOG, 'save failed', error);
+    }
+  }
+
+  function replaceVoices(next) {
+    Object.keys(VOICES).forEach(key => delete VOICES[key]);
+    Object.assign(VOICES, next);
+  }
+
+  const saveSettings = field => {
+    pending.settings.add(field);
+    flushLater();
+  };
+
+  // 다른 탭에서 바꾼 설정·목소리를 바로 따라갑니다.
+  if (typeof GM_addValueChangeListener === 'function') {
+    try {
+      GM_addValueChangeListener(SETTINGS_KEY, (name, before, after, remote) => {
+        if (!remote || !after || typeof after !== 'object') return;
+        for (const field of Object.keys(DEFAULTS)) if (field in after && !pending.settings.has(field)) S[field] = after[field];
+        applyVolume();
+        paintButton();
+        if (ui.open) renderPanel();
+      });
+      GM_addValueChangeListener(VOICES_KEY, (name, before, after, remote) => {
+        if (!remote || !after || typeof after !== 'object' || pending.voices.size) return;
+        replaceVoices(after);
+        if (ui.open) renderVoices();
+      });
+    } catch (error) { /* 무시 */ }
+  }
 
   function route() {
     const path = location.pathname;
     let m = path.match(/^\/stories\/([^/]+)\/episodes\/([^/?#]+)/);
     if (m) return { page: 'story', key: m[1] };
-    m = path.match(/^\/stories\/([^/]+)\/parties\/([^/?#]+)/);
+    m = path.match(/^\/stories\/([^/]+)\/parties\/(?!(?:new|enter|host|invitations)(?:[/?#]|$))([^/?#]+)/);
     if (m) return { page: 'party', key: m[1] };
     m = path.match(/^\/characters\/([^/]+)\/chats\/([^/?#]+)/);
     if (m) return { page: 'character', key: `c:${m[1]}` };
@@ -106,8 +163,11 @@
     if (!key) return;
     const book = VOICES[key] || (VOICES[key] = {});
     book[name] = { ...(book[name] || {}), ...patch };
-    pruneVoices();
-    saveLater(VOICES_KEY, VOICES);
+    const id = JSON.stringify([key, name]);
+    const fields = pending.voices.get(id) || new Set();
+    Object.keys(patch).forEach(field => fields.add(field));
+    pending.voices.set(id, fields);
+    flushLater();
   }
 
   // 대사가 나온 이름을 작품별로 모아 두면 설정 창에서 목소리를 바꿀 수 있습니다.
@@ -117,23 +177,24 @@
     const known = VOICES[key]?.[name];
     if (known && now - (known.at || 0) < 60000) return;
     setVoiceConf(key, name, { at: now });
-    if (ui.open) renderVoices();
+    // 창이 열려 있으면 줄 순서를 바꾸지 않고, 새 이름만 아래에 붙입니다(누르던 줄이 움직이지 않게).
+    if (ui.open && !known && key === route().key) appendVoiceRow(name);
   }
 
-  function pruneVoices() {
-    const keys = Object.keys(VOICES);
+  function pruneVoices(voices) {
+    const keys = Object.keys(voices);
     for (const key of keys) {
-      const names = Object.keys(VOICES[key]);
+      const names = Object.keys(voices[key]);
       if (names.length <= 40) continue;
-      names.sort((a, b) => (VOICES[key][b].at || 0) - (VOICES[key][a].at || 0));
+      names.sort((a, b) => (voices[key][b].at || 0) - (voices[key][a].at || 0));
       names.slice(40).forEach(name => {
-        const conf = VOICES[key][name];
-        if (!conf.kind && !conf.shift) delete VOICES[key][name];
+        const conf = voices[key][name];
+        if (!conf.kind && !conf.shift) delete voices[key][name];
       });
     }
     if (keys.length > 80) {
-      const latest = key => Math.max(0, ...Object.values(VOICES[key]).map(conf => conf.at || 0));
-      keys.sort((a, b) => latest(b) - latest(a)).slice(80).forEach(key => delete VOICES[key]);
+      const latest = key => Math.max(0, ...Object.values(voices[key]).map(conf => conf.at || 0));
+      keys.sort((a, b) => latest(b) - latest(a)).slice(80).forEach(key => delete voices[key]);
     }
   }
 
@@ -197,7 +258,8 @@
       } catch (error) { /* 무시 */ }
     }
   }
-  ['pointerdown', 'keydown', 'touchstart'].forEach(type => window.addEventListener(type, unlock, { capture: true, passive: true }));
+  // 휴대폰은 손가락을 뗄 때(touchend·pointerup·click) 허락이 나므로 그때도 시도합니다.
+  ['pointerdown', 'pointerup', 'keydown', 'touchstart', 'touchend', 'click'].forEach(type => window.addEventListener(type, unlock, { capture: true, passive: true }));
 
   // 탭이 뒤로 가면 우리 소리만 멈춥니다. 다른 확프의 소리는 건드리지 않습니다.
   document.addEventListener('visibilitychange', () => {
@@ -480,7 +542,7 @@
   const BLOCK_SEL = 'p, li, blockquote, td, th, dd, dt';
   const DUMP_CHARS = 40;
 
-  const det = { list: null, observer: null, md: null, text: '', lastBlock: null };
+  const det = { list: null, observer: null, streaming: false, text: '', lastBlock: null };
 
   function textNodes(root) {
     const nodes = [];
@@ -601,13 +663,21 @@
     return { role, speaker: role === 'dia' ? speaker : '', block };
   }
 
-  function streamingMarkdown(list) {
+  // 지금 타이핑 중인 칸: 목록의 자식 중 .animate가 든 것.
+  // 캐릭터 채팅은 그 칸 안에 문단마다 말풍선(.wrtn-markdown)이 따로 있고, 타이핑 중인 말풍선은 매번 새로 그려집니다.
+  // 그래서 말풍선 하나가 아니라 칸 전체 글을 이어 붙여 비교합니다.
+  function streamingParts(list) {
     const animated = list.querySelector('.animate');
-    return animated ? animated.closest('.wrtn-markdown') : null;
+    if (!animated) return null;
+    let root = animated;
+    while (root.parentElement && root.parentElement !== list) root = root.parentElement;
+    if (root.parentElement !== list) root = animated.closest('.wrtn-markdown') || animated.parentElement;
+    const mds = root.matches('.wrtn-markdown') ? [root] : Array.from(root.querySelectorAll('.wrtn-markdown')).filter(md => md.querySelector('.animate'));
+    return mds.map(md => ({ md, nodes: textNodes(md) }));
   }
 
   function resetStream() {
-    det.md = null;
+    det.streaming = false;
     det.text = '';
     det.lastBlock = null;
   }
@@ -621,17 +691,13 @@
 
   function onMutations() {
     if (!det.list) return;
-    const md = streamingMarkdown(det.list);
-    if (!md) {
-      if (det.md) resetStream();
+    const parts = streamingParts(det.list);
+    if (!parts || !parts.length) {
+      if (det.streaming) resetStream();
       return;
     }
-    if (md !== det.md) {
-      resetStream();
-      det.md = md;
-    }
-    const nodes = textNodes(md);
-    const text = nodes.map(node => node.nodeValue).join('');
+    det.streaming = true;
+    const text = parts.map(part => part.nodes.map(node => node.nodeValue).join('')).join('\n');
     if (text === det.text) return;
     const prev = det.text;
     det.text = text;
@@ -641,10 +707,13 @@
     if (!S.on || document.hidden) return;
     if (add.length > DUMP_CHARS) return debugLog({ skip: 'dump', add: add.slice(0, 20) });
     if (isWaiting(text)) return debugLog({ skip: 'waiting', add });
+    let index = parts.length - 1;
+    while (index > 0 && !parts[index].nodes.some(node => /\S/.test(node.nodeValue))) index -= 1;
+    const { md, nodes } = parts[index];
     const here = route();
     const info = classify(md, nodes, add, here.page);
-    // 크랙이 문단 칸을 새로 그려도 같은 문단으로 보도록 몇 번째 문단인지로 비교합니다.
-    const blockKey = !info.block ? null : info.block === md ? -1 : Array.prototype.indexOf.call(md.querySelectorAll(BLOCK_SEL), info.block);
+    // 크랙이 문단 칸을 새로 그려도 같은 문단으로 보도록 '몇 번째 말풍선의 몇 번째 문단'으로 비교합니다.
+    const blockKey = !info.block ? null : `${index}:${info.block === md ? -1 : Array.prototype.indexOf.call(md.querySelectorAll(BLOCK_SEL), info.block)}`;
     const newBlock = blockKey !== null && det.lastBlock !== null && blockKey !== det.lastBlock;
     if (blockKey !== null) det.lastBlock = blockKey;
     if (info.role === 'mute' || info.role === 'label') return debugLog({ role: info.role, speaker: info.speaker || '', add });
@@ -654,9 +723,12 @@
   }
 
   // 채팅방을 옮기면 크랙이 메시지 목록을 새로 만들기 때문에, 1초마다 목록이 바뀌었는지 보고 다시 붙습니다.
+  // 파티챗은 [data-message-group-id] 대신 [data-message-item]을 씁니다.
   function attach() {
+    const page = route().page;
+    const item = page === 'party' ? document.querySelector('[data-message-item]') : null;
     const group = document.querySelector('[data-message-group-id]');
-    const list = group?.parentElement || (route().page ? document.querySelector('.stick-to-bottom') : null);
+    const list = item?.parentElement || group?.parentElement || (page ? document.querySelector('.stick-to-bottom') || document.querySelector('main') : null);
     if (list === det.list) return;
     det.observer?.disconnect();
     det.list = list;
@@ -680,8 +752,8 @@
 .cbl-hbtn.is-off{opacity:.45}
 .cbl-hbtn.is-off .cbl-slash{display:inline}
 .cbl-hbtn.is-open{opacity:1;background:rgba(127,127,127,.18)}
-.cbl-hbtn.is-locked::after{content:"";position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:#e0a03a;box-shadow:0 0 0 2px var(--bg_screen,#fff)}
-body[data-theme="dark"] .cbl-hbtn.is-locked::after{box-shadow:0 0 0 2px var(--bg_screen,#141413)}
+.cbl-hbtn.is-locked::before{content:"";position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:#e0a03a;box-shadow:0 0 0 2px var(--bg_screen,#fff)}
+body[data-theme="dark"] .cbl-hbtn.is-locked::before{box-shadow:0 0 0 2px var(--bg_screen,#141413)}
 .cbl-hbtn.is-float{position:fixed;top:64px;right:14px;z-index:40;width:36px;height:36px;border-radius:12px;background:var(--bg_screen,#fff);box-shadow:0 1px 3px rgba(0,0,0,.18);opacity:.9}
 .cbl-hbtn.is-blip svg{animation:cbl-bob .16s ease-out}
 @keyframes cbl-bob{50%{scale:1.12}}
@@ -699,6 +771,7 @@ button{cursor:pointer}
 .stage[data-theme=light]{--canvas:#fff;--surface:#f5f5f4;--surface-2:#ededec;--text:#1c1c1b;--text-2:#6b6b68;--text-3:#a3a3a0;--rule:rgba(0,0,0,.08);--rule-2:rgba(0,0,0,.15);--rail:#d0d0cd;--accent:#4f8a63;--accent-soft:rgba(79,138,99,.1);--accent-on:#fff;--warn:#b7791f;--ring:0 0 0 1px rgba(0,0,0,.06),0 1px 2px -1px rgba(0,0,0,.06);--lift:0 0 0 1px rgba(0,0,0,.06),0 24px 56px -18px rgba(0,0,0,.32)}
 .pn{position:absolute;width:332px;max-height:calc(100vh - 80px);overflow:auto;overscroll-behavior:contain;pointer-events:auto;background:var(--canvas);color:var(--text);border-radius:18px;box-shadow:var(--lift);font-size:13px;line-height:1.45;letter-spacing:-.01em;outline:none;animation:pnIn .24s var(--out) both;scrollbar-width:thin;scrollbar-color:var(--rail) transparent}
 @keyframes pnIn{from{opacity:0;translate:0 -6px;scale:.985}}
+.pn.still{animation:none}
 .pn.out{animation:pnOut .14s var(--out) forwards}
 @keyframes pnOut{to{opacity:0;translate:0 -4px}}
 .hd{display:flex;align-items:center;gap:10px;padding:14px 14px 10px}
@@ -785,12 +858,14 @@ select{height:26px;max-width:74px;padding:0 4px;border:0;border-radius:8px;backg
 
   const chips = (set, value) => KINDS.map(kind => `<button class="chip" data-set="${set}" data-kind="${kind.id}" aria-pressed="${kind.id === value}">${kind.name}</button>`).join('');
 
+  const LOCK_HTML = '<div class="lock">🔇 화면을 한 번 누르면 소리가 켜져요</div>';
+
   function panelHtml() {
-    const locked = S.on && !audioReady();
+    const locked = S.on && !audioReady() && !document.hidden;
     return `<div class="pn${S.on ? '' : ' is-off'}" role="dialog" aria-label="재잘 말소리" tabindex="-1">
   <div class="hd"><div class="mark">${ICON}</div><div class="ttl"><b>재잘 말소리</b><small>답변이 써지는 박자에 맞춰 소리를 내요</small></div>
   <button class="sw" data-act="power" aria-pressed="${S.on}" aria-label="켜기/끄기"><i></i></button></div>
-  ${locked ? '<div class="lock">🔇 화면을 한 번 누르면 소리가 켜져요</div>' : ''}
+  ${locked ? LOCK_HTML : ''}
   <div class="sec"><div class="row"><label for="v">전체 소리</label><input id="v" type="range" min="0" max="100" step="1" value="${S.vol}" data-set="vol"><output>${S.vol}</output></div></div>
   <div class="sec"><div class="lab">대사 소리<span class="grow"></span><button class="play" data-act="try" data-role="dia" aria-label="대사 미리듣기">${PLAY}</button></div>
   <div class="chips">${chips('dia', S.dia)}</div></div>
@@ -805,6 +880,18 @@ select{height:26px;max-width:74px;padding:0 4px;border:0;border-radius:8px;backg
 </div>`;
   }
 
+  const kindOptions = value => [`<option value=""${value ? '' : ' selected'}>기본</option>`]
+    .concat(KINDS.map(kind => `<option value="${kind.id}"${kind.id === value ? ' selected' : ''}>${kind.name}</option>`)).join('');
+
+  function voiceRowHtml(name, conf = {}) {
+    const shift = Number(conf.shift) || 0;
+    const label = name ? esc(name) : '이름 없는 대사';
+    return `<div class="vrow" data-name="${esc(name)}"><span class="vname${name ? '' : ' anon'}" title="${label}">${label}</span>
+<select data-voice="kind" aria-label="소리 종류">${kindOptions(conf.kind || '')}</select>
+<span class="pitch"><button data-voice="down" aria-label="낮게">−</button><span>${shift > 0 ? `+${shift}` : shift}</span><button data-voice="up" aria-label="높게">+</button></span>
+<button class="play" data-act="try" data-role="dia" data-name="${esc(name)}" aria-label="미리듣기">${PLAY}</button></div>`;
+  }
+
   function voicesHtml() {
     const key = route().key;
     const book = VOICES[key] || {};
@@ -812,22 +899,22 @@ select{height:26px;max-width:74px;padding:0 4px;border:0;border-radius:8px;backg
     const head = '<div class="lab">이 작품 목소리</div>';
     if (!key) return `${head}<div class="empty">채팅방에서 열면 캐릭터별 목소리를 바꿀 수 있어요.</div>`;
     if (!names.length) return `${head}<div class="empty">아직 대사가 없어요. 답변이 나오면 말한 사람 이름이 여기에 모여요.</div>`;
-    const options = value => [`<option value=""${value ? '' : ' selected'}>기본</option>`]
-      .concat(KINDS.map(kind => `<option value="${kind.id}"${kind.id === value ? ' selected' : ''}>${kind.name}</option>`)).join('');
-    return head + names.map(name => {
-      const conf = book[name];
-      const shift = Number(conf.shift) || 0;
-      const label = name ? esc(name) : '이름 없는 대사';
-      return `<div class="vrow" data-name="${esc(name)}"><span class="vname${name ? '' : ' anon'}" title="${label}">${label}</span>
-<select data-voice="kind" aria-label="소리 종류">${options(conf.kind || '')}</select>
-<span class="pitch"><button data-voice="down" aria-label="낮게">−</button><span>${shift > 0 ? `+${shift}` : shift}</span><button data-voice="up" aria-label="높게">+</button></span>
-<button class="play" data-act="try" data-role="dia" data-name="${esc(name)}" aria-label="미리듣기">${PLAY}</button></div>`;
-    }).join('');
+    return head + names.map(name => voiceRowHtml(name, book[name])).join('');
   }
 
   function renderVoices() {
     const box = ui.stage?.querySelector('[data-voices]');
-    if (box) box.innerHTML = voicesHtml();
+    if (!box) return;
+    // 사용자가 목소리 줄을 만지는 중이면 다시 그리지 않습니다(열린 선택 상자가 닫히지 않게).
+    if (box.contains(ui.shadow?.activeElement)) return;
+    box.innerHTML = voicesHtml();
+  }
+
+  function appendVoiceRow(name) {
+    const box = ui.stage?.querySelector('[data-voices]');
+    if (!box || [...box.querySelectorAll('.vrow')].some(row => row.dataset.name === name)) return;
+    box.querySelector('.empty')?.remove();
+    box.insertAdjacentHTML('beforeend', voiceRowHtml(name, voiceConf(route().key, name)));
   }
 
   function placePanel() {
@@ -839,11 +926,17 @@ select{height:26px;max-width:74px;padding:0 4px;border:0;border-radius:8px;backg
     panel.style.maxHeight = `${Math.max(240, innerHeight - rect.bottom - 24)}px`;
   }
 
+  // 다시 그릴 때는 들어오는 움직임 없이, 창 안에 있던 포커스도 되돌려 Esc·키 막기가 계속 되게 합니다.
   function renderPanel() {
     const stage = ensureStage();
+    const hadFocus = Boolean(ui.shadow?.activeElement);
+    const again = Boolean(stage.querySelector('.pn'));
     stage.dataset.theme = currentTheme();
     stage.innerHTML = panelHtml();
+    const panel = stage.querySelector('.pn');
+    if (again) panel?.classList.add('still');
     placePanel();
+    if (hadFocus) panel?.focus({ preventScroll: true });
   }
 
   function openPanel() {
@@ -869,7 +962,7 @@ select{height:26px;max-width:74px;padding:0 4px;border:0;border-radius:8px;backg
     if (!target) return;
     if (target.dataset.act === 'power') {
       S.on = !S.on;
-      saveSettings();
+      saveSettings('on');
       if (S.on) unlock();
       else if (A.ctx?.state === 'running') A.ctx.suspend().catch(() => {});
       renderPanel();
@@ -878,7 +971,7 @@ select{height:26px;max-width:74px;padding:0 4px;border:0;border-radius:8px;backg
     }
     if (target.dataset.set) {
       S[target.dataset.set] = target.dataset.kind;
-      saveSettings();
+      saveSettings(target.dataset.set);
       target.parentElement.querySelectorAll('.chip').forEach(chip => chip.setAttribute('aria-pressed', String(chip === target)));
       demo(target.dataset.set, '', target.dataset.kind === 'off' ? '' : target.dataset.kind);
       return;
@@ -919,7 +1012,7 @@ select{height:26px;max-width:74px;padding:0 4px;border:0;border-radius:8px;backg
       if (key === 'vol') applyVolume();
       if (event.type === 'change' && (key === 'vol' || key === 'narrVol')) demo(key === 'vol' ? 'dia' : 'narr');
     }
-    saveSettings();
+    saveSettings(key);
   }
 
   // 창 밖을 누르면 닫습니다.
@@ -940,10 +1033,12 @@ select{height:26px;max-width:74px;padding:0 4px;border:0;border-radius:8px;backg
     const tip = !S.on ? '재잘 말소리 · 꺼짐' : audioReady() ? '재잘 말소리' : '재잘 말소리 · 화면을 한 번 누르면 켜져요';
     button.dataset.tip = tip;
     button.setAttribute('aria-label', tip);
+    // 창 전체를 다시 그리지 않고 '화면을 한 번 누르면…' 줄만 넣고 뺍니다.
     if (ui.open && ui.stage) {
-      const panel = ui.stage.querySelector('.pn');
       const lock = ui.stage.querySelector('.lock');
-      if (panel && Boolean(lock) !== (S.on && !audioReady())) renderPanel();
+      const want = S.on && !audioReady() && !document.hidden;
+      if (want && !lock) ui.stage.querySelector('.hd')?.insertAdjacentHTML('afterend', LOCK_HTML);
+      else if (!want && lock) lock.remove();
     }
   }
 
@@ -1018,7 +1113,7 @@ select{height:26px;max-width:74px;padding:0 4px;border:0;border-radius:8px;backg
 
   pageWindow.CrackBlip = {
     version: VERSION,
-    state: () => ({ on: S.on, audio: A.ctx ? A.ctx.state : 'none', attached: Boolean(det.list), streaming: Boolean(det.md), settings: { ...S } }),
+    state: () => ({ on: S.on, audio: A.ctx ? A.ctx.state : 'none', attached: Boolean(det.list), streaming: det.streaming, settings: { ...S } }),
     demo: (role = 'dia', kind = '') => demo(role, '', kind),
     classify: md => {
       const nodes = textNodes(md);

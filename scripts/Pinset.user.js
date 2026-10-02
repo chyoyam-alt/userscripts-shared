@@ -9,6 +9,7 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_deleteValue
+// @grant        GM_addValueChangeListener
 // @grant        unsafeWindow
 // @run-at       document-idle
 // ==/UserScript==
@@ -60,21 +61,52 @@
 
   const settings = { paint: true, ...readValue(SETTINGS_KEY, {}) };
   const books = new Map();
+  const dirty = new Map();
+  const watchedKeys = new Set();
 
   // 방마다 { 메시지id: { base, current, spans, edits, at } }
   // base: 처음 본 원문, current: 마지막으로 확인한 서버 원문, spans: current 안에서 바뀐 자리 [시작, 끝] (끝=시작이면 지운 자리)
   function book(chatId) {
     if (!chatId) return {};
-    if (!books.has(chatId)) books.set(chatId, readValue(chatKey(chatId), {}));
+    if (!books.has(chatId)) {
+      books.set(chatId, readValue(chatKey(chatId), {}));
+      // 다른 탭이 같은 방 기록을 바꾸면 다시 읽습니다.
+      if (!watchedKeys.has(chatId) && typeof GM_addValueChangeListener === 'function') {
+        watchedKeys.add(chatId);
+        try {
+          GM_addValueChangeListener(chatKey(chatId), (name, before, after, remote) => {
+            if (!remote) return;
+            books.delete(chatId);
+            schedulePaint();
+          });
+        } catch (error) { /* 무시 */ }
+      }
+    }
     return books.get(chatId);
   }
 
-  function saveBook(chatId) {
+  function putRecord(chatId, msgId, record) {
     const records = book(chatId);
+    if (record) records[msgId] = record;
+    else delete records[msgId];
+    const changes = dirty.get(chatId) || new Map();
+    changes.set(msgId, record || null);
+    dirty.set(chatId, changes);
+  }
+
+  // 다른 탭이 그사이 저장한 기록을 지우지 않도록, 저장된 것을 다시 읽어 이 탭이 바꾼 메시지만 덮어씁니다.
+  function saveBook(chatId) {
+    const records = readValue(chatKey(chatId), {});
+    (dirty.get(chatId) || new Map()).forEach((record, msgId) => {
+      if (record) records[msgId] = record;
+      else delete records[msgId];
+    });
+    dirty.delete(chatId);
     const ids = Object.keys(records);
     if (ids.length > LIMITS.messages) {
       ids.sort((a, b) => (records[b].at || 0) - (records[a].at || 0)).slice(LIMITS.messages).forEach(id => delete records[id]);
     }
+    books.set(chatId, records);
     const index = readValue(INDEX_KEY, {});
     if (Object.keys(records).length) {
       writeValue(chatKey(chatId), records);
@@ -160,6 +192,16 @@
     return values;
   }
 
+  // 화면 요소에 붙은 fiber는 처음 만들어질 때의 것이라, 위로 따라가다 보면 한 번 전 렌더의 값(alternate)을 만날 수 있습니다.
+  // 맨 위(HostRoot)가 지금 화면의 것이 아니면 짝(alternate) 쪽 값을 씁니다.
+  function isCurrentTree(fiber) {
+    let top = fiber;
+    for (let depth = 0; top.return && depth < 3000; depth += 1) top = top.return;
+    const current = top.stateNode && top.stateNode.current;
+    return !current || current === top;
+  }
+  const liveProps = fiber => ((fiber.alternate && !isCurrentTree(fiber) ? fiber.alternate : fiber).memoizedProps || fiber.memoizedProps);
+
   const isMapLike = value => Boolean(value && typeof value.get === 'function' && typeof value.has === 'function' && typeof value.forEach === 'function');
   const isActions = value => typeof value?.updateMessage === 'function' && typeof value.resyncMessage === 'function' && typeof value.removeMessage === 'function';
   const isChatState = value => Boolean(value && typeof value.status === 'string' && 'selectedMessageId' in value && 'chatId' in value);
@@ -176,9 +218,11 @@
     for (let fiber = start, depth = 0; fiber && depth < 500; fiber = fiber.return, depth += 1) {
       for (const value of propValues(fiber)) {
         try {
-          if (!out.actions && isActions(value)) out.actions = value;
-          else if (!out.state && isChatState(value)) out.state = value;
-          else if (!out.store && isStore(value)) out.store = value;
+          for (const [slot, test] of [['actions', isActions], ['state', isChatState], ['store', isStore]]) {
+            if (out[slot] || !test(value)) continue;
+            const live = liveProps(fiber)?.value;
+            out[slot] = live && test(live) ? live : value;
+          }
         } catch (error) { /* 무시 */ }
       }
       if (out.actions && out.state && out.store) break;
@@ -191,19 +235,25 @@
     return out;
   }
 
-  // 화면의 .wrtn-markdown 하나가 어느 메시지인지 찾습니다. 그룹 id는 첫 메시지 id라서, 답변 비교 중이면 실제로 보이는 메시지와 다를 수 있습니다.
-  function messageOf(md, bridge) {
-    const group = md.closest('[data-message-group-id]');
+  // 메시지 한 개의 화면 = 그룹 안의 .wrtn-markdown 전부. 캐릭터 채팅은 문단마다 말풍선(.wrtn-markdown)이 따로 있습니다.
+  const groupOf = node => (node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement)?.closest('[data-message-group-id]') || null;
+  const mdsOf = group => Array.from(group.querySelectorAll('.wrtn-markdown'));
+
+  // 그룹이 어느 메시지인지 찾습니다. 그룹 id는 첫 메시지 id라서, 답변 비교 중이면 실제로 보이는 메시지와 다를 수 있습니다.
+  // wanted가 있으면 그 id가 이 그룹에 없을 때 바로 null을 돌려줍니다(칠하기를 가볍게).
+  function messageOf(group, bridge, wanted) {
     if (!group) return null;
     const groupId = group.dataset.messageGroupId;
+    const mds = mdsOf(group);
+    if (!mds.length) return null;
     let shown = null;
     let ids = null;
-    for (let fiber = fiberOf(md), depth = 0; fiber && depth < 80; fiber = fiber.return, depth += 1) {
-      const props = fiber.memoizedProps;
-      if (!props || typeof props !== 'object') continue;
-      if (shown === null && typeof props.content === 'string' && 'isUserMessage' in props) shown = props.content;
-      if (Array.isArray(props.messageIds)) {
-        ids = Array.from(props.messageIds);
+    for (let fiber = fiberOf(mds[0]), depth = 0; fiber && depth < 80; fiber = fiber.return, depth += 1) {
+      const raw = fiber.memoizedProps;
+      if (!raw || typeof raw !== 'object') continue;
+      if (shown === null && typeof raw.content === 'string' && 'isUserMessage' in raw) shown = liveProps(fiber)?.content ?? raw.content;
+      if (Array.isArray(raw.messageIds)) {
+        ids = Array.from(liveProps(fiber)?.messageIds || raw.messageIds);
         break;
       }
     }
@@ -213,10 +263,23 @@
       if (found) ids = Array.from(found);
     }
     if (!ids) ids = [groupId];
+    if (wanted && !ids.some(id => wanted.has(id))) return null;
     let message = null;
     if (state) {
-      const candidates = ids.map(id => state.messages.get(id)).filter(Boolean);
+      const candidates = ids.map(id => state.messages.get(id)).filter(item => item && typeof item.content === 'string');
       message = (shown !== null && candidates.find(item => item.content === shown)) || null;
+      if (!message && candidates.length > 1) {
+        // 문단별 말풍선이라 props가 문단 하나뿐이면, 화면 글과 가장 잘 맞는 답변을 고릅니다.
+        let best = -1;
+        for (const item of candidates) {
+          const score = coverage(item.content, mds);
+          if (score > best) {
+            best = score;
+            message = item;
+          }
+        }
+        if (best < 0.9) message = null;
+      }
       if (!message && candidates.length) {
         const index = ids.indexOf(bridge.state?.selectedMessageId ?? '');
         message = state.messages.get(ids[index >= 0 ? index : ids.length - 1]) || candidates[candidates.length - 1];
@@ -224,6 +287,7 @@
     }
     return {
       group,
+      mds,
       groupId,
       ids,
       msgId: message?._id || (ids.length === 1 ? ids[0] : null),
@@ -238,12 +302,19 @@
 
   // ---------- 원문 ↔ 화면 글자 맞추기 ----------
 
-  // 화면에 안 그려지는 것: 숨김 주석 줄([//]: # (…)), HTML 주석, 이미지
-  const HIDDEN_RES = [/^[ \t]*\[[^\]\n]*\]:[ \t]*#[^\n]*(?:\n|$)/gm, /<!--[\s\S]*?-->/g, /!\[[^\]\n]*\]\([^)\n]*\)/g];
+  // 화면에 안 그려지는 것: 링크 정의 줄([//]: # (…), [//]: <> (…)), 이미지, 링크 주소 부분(](…)), 줄 앞 목록·인용·제목 기호.
+  // HTML 주석은 크랙이 글자 그대로 보여 주므로, 화면에 '<!--'가 없을 때(다른 확프가 지운 경우)만 뺍니다.
+  const LINK_DEF_RE = /^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*(?:<[^>\n]*>|[^\s<>]+)(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?[ \t]*(?:\n|$)/gm;
+  const IMAGE_RE = /!\[[^\]\n]*\]\([^)\n]*\)/g;
+  const LINK_DEST_RE = /\]\([^)\n]*\)/g;
+  const COMMENT_RE = /<!--[\s\S]*?-->/g;
+  const BLOCK_MARK_RE = /^[ \t]*(?:>[ \t]?|(?:\d{1,9}[.)]|[-+*]|#{1,6})[ \t]+)+/gm;
 
-  function stripHidden(src) {
+  function stripHidden(src, ren) {
     const drop = new Uint8Array(src.length);
-    for (const re of HIDDEN_RES) {
+    const res = [LINK_DEF_RE, IMAGE_RE, LINK_DEST_RE, BLOCK_MARK_RE];
+    if (!ren.includes('<!--')) res.push(COMMENT_RE);
+    for (const re of res) {
       re.lastIndex = 0;
       let m;
       while ((m = re.exec(src))) {
@@ -263,21 +334,27 @@
 
   const SKIP_SEL = 'button, svg, style, script, textarea, input, select, [aria-hidden="true"], .cpn-ui';
 
-  function renderedText(md) {
+  function renderedText(mds) {
     const nodes = [];
     let text = '';
-    const walker = document.createTreeWalker(md, NodeFilter.SHOW_TEXT, {
-      acceptNode: node => (node.parentElement?.closest(SKIP_SEL) && md.contains(node.parentElement.closest(SKIP_SEL)) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
-    });
-    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      nodes.push({ node, start: text.length });
-      text += node.nodeValue;
+    for (const md of mds) {
+      const walker = document.createTreeWalker(md, NodeFilter.SHOW_TEXT, {
+        acceptNode: node => {
+          const skip = node.parentElement?.closest(SKIP_SEL);
+          return skip && md.contains(skip) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+        },
+      });
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        nodes.push({ node, start: text.length });
+        text += node.nodeValue;
+      }
     }
     return { text, nodes };
   }
 
   const SYNTAX = new Set('*_~`#>|-+=[]()!\\'.split(''));
   const SPACE = /\s/;
+  const LETTER = /[\p{L}\p{N}]/u;
   const entityBox = document.createElement('textarea');
   function decodeEntity(entity) {
     entityBox.innerHTML = entity;
@@ -285,8 +362,10 @@
   }
 
   // 화면 글자는 원문에서 서식 기호만 빠진 모양이라, 앞에서부터 짝을 지어 갑니다. 어긋나면 다음 몇 글자를 원문에서 찾아 다시 맞춥니다.
+  // 그렇게 건너뛰면서 글자(기호가 아닌 것)를 넘긴 자리는 jumps에 표시해 두고, 그 자리를 고칠 때는 원문 창으로 넘깁니다.
   function align(src, ren) {
     const r2s = new Int32Array(ren.length).fill(-1);
+    const jumps = new Uint8Array(ren.length);
     let i = 0;
     let j = 0;
     while (j < ren.length && i < src.length) {
@@ -301,6 +380,7 @@
       if (a === '&') {
         const entity = /^&(#\d+|#x[0-9a-f]+|[a-z]+);/i.exec(src.slice(i, i + 12));
         if (entity && decodeEntity(entity[0]) === c) {
+          jumps[j] = 1;
           r2s[j] = i;
           i += entity[0].length;
           j += 1;
@@ -312,27 +392,30 @@
         continue;
       }
       if (SYNTAX.has(a) || SPACE.test(a)) {
+        if (a === '\\') jumps[j] = 1;
         i += 1;
         continue;
       }
       const probe = ren.slice(j, j + 6);
       const k = probe.length >= 2 ? src.indexOf(probe, i) : -1;
       if (k >= 0 && k - i < 600) {
+        if (LETTER.test(src.slice(i, k))) jumps[j] = 1;
         i = k;
         continue;
       }
+      jumps[j] = 1;
       j += 1;
     }
-    return r2s;
+    return { r2s, jumps };
   }
 
-  function offsetOf(nodes, md, container, offset) {
+  function offsetOf(nodes, root, container, offset) {
     if (container.nodeType === Node.TEXT_NODE) {
       const hit = nodes.find(item => item.node === container);
       if (hit) return hit.start + offset;
     }
     const before = document.createRange();
-    before.setStart(md, 0);
+    before.setStart(root, 0);
     try { before.setEnd(container, offset); } catch (error) { return -1; }
     let pos = 0;
     for (const item of nodes) {
@@ -367,24 +450,25 @@
     return range;
   }
 
-  // 선택한 화면 글자 → 원문 위치. 숨김 요소와 서식 기호는 그대로 두고 보이는 글자만 바꿉니다.
-  function mapSelection(md, range, src) {
-    const { text: ren, nodes } = renderedText(md);
-    let rs = offsetOf(nodes, md, range.startContainer, range.startOffset);
-    let re = offsetOf(nodes, md, range.endContainer, range.endOffset);
+  // 선택한 화면 글자 → 원문 위치. 결과의 oldText는 '보이는 글자(와 공백)'만 모은 것이고, vpos는 그 글자들의 원문 위치입니다.
+  function mapSelection(mds, range, src) {
+    const { text: ren, nodes } = renderedText(mds);
+    let rs = offsetOf(nodes, mds[0], range.startContainer, range.startOffset);
+    let re = offsetOf(nodes, mds[0], range.endContainer, range.endOffset);
     if (rs < 0 || re < 0) return { ok: false };
     if (rs > re) [rs, re] = [re, rs];
     while (rs < re && SPACE.test(ren[rs])) rs += 1;
     while (re > rs && SPACE.test(ren[re - 1])) re -= 1;
     if (rs >= re) return { ok: false };
-    const stripped = stripHidden(src);
-    const r2s = align(stripped.text, ren);
+    const stripped = stripHidden(src, ren);
+    const { r2s, jumps } = align(stripped.text, ren);
     const visible = new Uint8Array(src.length);
     let first = -1;
     let last = -1;
     let missing = 0;
     for (let j = rs; j < re; j += 1) {
       const s = r2s[j];
+      if (jumps[j]) missing += 1;
       if (s < 0) {
         if (!SPACE.test(ren[j])) missing += 1;
         continue;
@@ -402,18 +486,20 @@
     const inStripped = new Uint8Array(src.length);
     stripped.keep.forEach(index => { inStripped[index] = 1; });
     let oldText = '';
-    let kept = '';
+    const vpos = [];
     for (let i = a; i < b; i += 1) {
-      if (visible[i] || (inStripped[i] && SPACE.test(src[i]))) oldText += src[i];
-      else kept += src[i];
+      if (visible[i] || (inStripped[i] && SPACE.test(src[i]))) {
+        oldText += src[i];
+        vpos.push(i);
+      }
     }
-    return { ok: true, a, b, oldText, kept, shownText };
+    return { ok: true, a, b, oldText, vpos, shownText };
   }
 
-  // 화면 글자 중 원문과 짝이 맞은 비율. 크랙 내부를 못 찾았을 때 "이 메시지가 그 원문이 맞는지" 판단하는 데 씁니다.
-  function coverage(src, md) {
-    const { text: ren } = renderedText(md);
-    const r2s = align(stripHidden(src).text, ren);
+  // 화면 글자 중 원문과 짝이 맞은 비율. 화면이 정말 그 원문인지 판단하는 데 씁니다.
+  function coverage(src, mds) {
+    const { text: ren } = renderedText(mds);
+    const { r2s } = align(stripHidden(src, ren).text, ren);
     let total = 0;
     let hit = 0;
     for (let j = 0; j < ren.length; j += 1) {
@@ -425,10 +511,10 @@
   }
 
   // 원문 위치(spans) → 화면 Range
-  function rangesFor(md, record) {
-    const { text: ren, nodes } = renderedText(md);
-    const stripped = stripHidden(record.current);
-    const r2s = align(stripped.text, ren);
+  function rangesFor(mds, record) {
+    const { text: ren, nodes } = renderedText(mds);
+    const stripped = stripHidden(record.current, ren);
+    const { r2s } = align(stripped.text, ren);
     const s2r = new Int32Array(record.current.length).fill(-1);
     for (let j = 0; j < r2s.length; j += 1) if (r2s[j] >= 0) s2r[stripped.keep[r2s[j]]] = j;
     const ranges = [];
@@ -464,6 +550,69 @@
       }
     }
     return { ranges, cuts };
+  }
+
+  // ---------- 바꿀 자리 계산 ----------
+
+  const isDelim = ch => ch === '*' || ch === '_' || ch === '~';
+
+  // 선택한 글(oldText)과 새 글을 앞뒤로 비교해 실제로 달라진 가운데만 원문에서 바꿉니다. 그래서 서식 기호는 대부분 제자리에 남습니다.
+  // 바뀌는 자리 안에 기울임·굵게 기호가 아닌 것(목록·인용·링크·이미지·이스케이프)이 끼어 있으면 null → 원문 창으로 넘깁니다.
+  function planSplice(src, mapped, replacement) {
+    const old = mapped.oldText;
+    const vpos = mapped.vpos;
+    const max = Math.min(old.length, replacement.length);
+    let p = 0;
+    while (p < max && old[p] === replacement[p]) p += 1;
+    let s = 0;
+    while (s < max - p && old[old.length - 1 - s] === replacement[replacement.length - 1 - s]) s += 1;
+    const oldEnd = old.length - s;
+    const ins = replacement.slice(p, replacement.length - s);
+    let a;
+    let b;
+    if (oldEnd > p) {
+      a = vpos[p];
+      b = vpos[oldEnd - 1] + 1;
+    } else {
+      a = p > 0 ? vpos[p - 1] + 1 : vpos[0];
+      b = a;
+    }
+    const changed = new Set(vpos.slice(p, oldEnd));
+    let kept = '';
+    for (let i = a; i < b; i += 1) if (!changed.has(i)) kept += src[i];
+    if (kept && !/^[*_~]+$/.test(kept)) return null;
+    if (!ins) [a, b] = tidyDelete(src, a, b, kept);
+    return { a, b, ins, kept, next: src.slice(0, a) + ins + kept + src.slice(b) };
+  }
+
+  // 지운 뒤 서식이 깨지지 않게 다듬습니다.
+  // 1) *글*의 글을 통째로 지우면 남는 빈 기호 쌍(**, ****)도 지웁니다.
+  // 2) 기호 바로 앞뒤에 공백이 남으면(*글 *, * 글*) 그 공백도 지웁니다. 크랙에서는 기울임이 풀려 별표가 그대로 보이기 때문입니다.
+  function tidyDelete(src, a, b, kept) {
+    if (!kept) {
+      for (let guard = 0; guard < 3; guard += 1) {
+        const left = /[*_~]+$/.exec(src.slice(Math.max(0, a - 4), a))?.[0] || '';
+        const right = /^[*_~]+/.exec(src.slice(b, b + 4))?.[0] || '';
+        if (!left || !right) break;
+        const ch = right[0];
+        let l = 0;
+        while (l < left.length && left[left.length - 1 - l] === ch) l += 1;
+        let r = 0;
+        while (r < right.length && right[r] === ch) r += 1;
+        const k = Math.min(l, r);
+        if (!k) break;
+        a -= k;
+        b += k;
+      }
+    }
+    const next = kept ? kept[0] : src[b];
+    const lineStart = a === 0 || src[a - 1] === '\n';
+    if (/[ \t]/.test(src[a - 1] || '') && (next === undefined || next === '\n' || isDelim(next))) {
+      while (a > 0 && /[ \t]/.test(src[a - 1])) a -= 1;
+    } else if (!kept && /[ \t]/.test(src[b] || '') && (lineStart || isDelim(src[a - 1]))) {
+      while (b < src.length && /[ \t]/.test(src[b])) b += 1;
+    }
+    return [a, b];
   }
 
   // ---------- 흔적 계산 ----------
@@ -508,13 +657,6 @@
     return { a: p, b: before.length - s, newLen: after.length - s - p, oldText: before.slice(p, before.length - s), newText: after.slice(p, after.length - s) };
   }
 
-  // 굵은 글씨를 통째로 지우면 빈 기호(****)가 남아 화면에 보이므로 지웁니다.
-  function tidyAfterDelete(text, from, to) {
-    const start = Math.max(0, from - 2);
-    const hit = text.slice(start, to + 2).indexOf('****');
-    return hit < 0 ? text : text.slice(0, start + hit) + text.slice(start + hit + 4);
-  }
-
   // ---------- 저장 경로 ----------
 
   // 우리가 쓴 내용은 '크랙 수정창 기록'으로 잘못 남지 않게 잠깐 표시해 둡니다. 저장이 끝나면 2초 뒤 풀어서, 곧이어 크랙 수정창으로 고친 것은 기록되게 합니다.
@@ -532,6 +674,8 @@
   }
   const isOwn = (id, content) => (ownWrites.get(id)?.get(normalize(content)) || 0) > Date.now();
 
+  // 저장 중인 메시지. 이 동안에는 화면이 잠깐 원문으로 보여도 기록을 지우지 않습니다.
+  const inFlight = new Set();
   // 크랙 내부를 못 찾아 서버에만 저장한 메시지(새로고침 전까지 화면은 옛 글)
   const reloadNeeded = new Set();
   const diagState = { lastPath: '', lastError: '', xhrHooked: false, fetchHooked: false, nativeCaptured: 0 };
@@ -541,15 +685,19 @@
     const h = here();
     if (h.chatId !== target.chatId) throw new UserError('다른 방으로 옮겨져서 취소했어요.');
     if (!normalize(next)) throw new UserError('메시지를 전부 비울 수는 없어요.');
-    const bridge = findBridge(target.md?.isConnected ? target.md : null);
+    if (inFlight.has(target.msgId)) throw new UserError('아직 앞의 수정을 저장하고 있어요.');
+    const anchor = target.group?.isConnected ? mdsOf(target.group)[0] : null;
+    const bridge = findBridge(anchor);
     if ((bridge.state && String(bridge.state.status).toUpperCase() !== 'IDLE') || streamingNow()) throw new UserError('답변이 만들어지는 중에는 고칠 수 없어요.');
-    if (nativeEditorOpen(target.group)) throw new UserError('크랙 수정창이 열려 있어요. 먼저 닫아 주세요.');
+    if (nativeEditorOpen(target.group) || bridge.state?.isEdit) throw new UserError('크랙 수정창이 열려 있어요. 먼저 끝내거나 닫아 주세요.');
     const fresh = bridge.store?.getState().messages.get(target.msgId);
     if (fresh && fresh.content !== target.content) throw new UserError('그사이 메시지가 바뀌었어요. 다시 선택해 주세요.');
     markOwn(target.msgId, 30000, next, target.content);
+    inFlight.add(target.msgId);
     try {
       return await sendContent(h, bridge, fresh, target, next);
     } finally {
+      inFlight.delete(target.msgId);
       settleOwn(target.msgId);
     }
   }
@@ -589,12 +737,13 @@
     return { content, reload: true };
   }
 
-  // 화면에서 고칠 메시지와 그 원문을 찾습니다.
-  async function resolveTarget(md) {
+  // 화면에서 고칠 메시지와 그 원문을 찾습니다. node는 그 메시지 그룹 안의 아무 요소나 됩니다.
+  async function resolveTarget(node) {
     const h = here();
     if (!h.chatId) throw new UserError('채팅방에서만 쓸 수 있어요.');
-    const bridge = findBridge(md);
-    const info = messageOf(md, bridge);
+    const group = groupOf(node);
+    const bridge = findBridge(group ? mdsOf(group)[0] : null);
+    const info = messageOf(group, bridge);
     if (!info) throw new UserError('이 글은 메시지가 아니라서 고칠 수 없어요.');
     let { msgId, content } = info;
     if (!info.fromStore) {
@@ -602,79 +751,78 @@
       msgId = msgId || info.groupId;
       if (!ID_RE.test(msgId)) throw new UserError('메시지 id를 찾지 못했어요.');
       const data = await api('GET', messagePath(h, msgId));
-      content = typeof data?.content === 'string' ? data.content : content;
-      if (typeof content !== 'string' || coverage(content, md) < 0.9) throw new UserError('화면 글과 서버 원문이 달라요. 새로고침한 뒤 다시 해 주세요. (답변 비교 중이면 크랙 수정창을 써 주세요)');
+      content = typeof data?.content === 'string' ? data.content : null;
+      if (content === null || coverage(content, info.mds) < 0.9) throw new UserError('화면 글과 서버 원문이 달라요. 새로고침한 뒤 다시 해 주세요. (답변 비교 중이면 크랙 수정창을 써 주세요)');
     }
     if (typeof content !== 'string') throw new UserError('메시지 원문을 읽지 못했어요.');
-    return { chatId: h.chatId, msgId, content, md, group: info.group, via: info.fromStore ? 'store' : 'api' };
+    return { chatId: h.chatId, msgId, content, group: info.group, mds: info.mds, via: info.fromStore ? 'store' : 'api' };
   }
 
-  // 수정 1번을 저장하고 흔적을 남깁니다. a~b: 원문에서 바뀌는 자리, kept: 그 안에서 그대로 둘 서식 기호
-  async function commitEdit(target, change) {
-    const { a, b, replacement, kept = '', oldText, kind } = change;
-    let next = target.content.slice(0, a) + replacement + kept + target.content.slice(b);
-    if (!replacement) next = tidyAfterDelete(next, a, a + kept.length);
-    const result = await writeContent(target, next);
-    const records = book(target.chatId);
-    const prev = records[target.msgId];
-    const record = prev && prev.current === target.content
-      ? prev
-      : { base: prev?.base ?? target.content, current: target.content, spans: [], edits: prev?.edits || [] };
+  // 지금 원문(content)에 맞는 기록을 돌려줍니다. 그사이 다른 곳에서 바뀌었으면 거기서부터 새로 시작하고,
+  // 옛 수정들은 보기용으로만 남깁니다(되돌리기가 남이 쓴 글을 지우지 않게).
+  function recordFor(prev, content) {
+    if (prev && normalize(prev.current) === normalize(content)) return prev;
+    const edits = (prev?.edits || []).map(edit => ({ at: edit.at, kind: edit.kind, before: edit.before, after: edit.after, old: true }));
+    return { base: content, origin: prev?.origin ?? prev?.base, current: content, spans: [], edits, rebased: Boolean(prev) };
+  }
+
+  // 수정 1번을 저장하고 흔적을 남깁니다. plan: { a, b, ins, kept, next } (원문에서 바뀌는 자리와 새 원문)
+  async function commitEdit(target, plan, meta) {
+    const snapshot = book(target.chatId)[target.msgId] || null;
+    const result = await writeContent(target, plan.next);
+    const record = recordFor(book(target.chatId)[target.msgId] || snapshot, target.content);
     const prevSpans = (record.spans || []).map(span => span.slice());
-    const removed = next.length - (target.content.length - (b - a)) - replacement.length - kept.length;
-    record.spans = shiftSpans(record.spans, a, b, replacement.length + kept.length + removed, replacement.length);
-    record.edits.push({ at: Date.now(), kind, before: oldText, after: replacement, prev: target.content, prevSpans });
+    record.spans = shiftSpans(record.spans, plan.a, plan.b, plan.ins.length + plan.kept.length, plan.ins.length);
+    record.edits.push({ at: Date.now(), kind: meta.kind, before: meta.before, after: meta.after, prev: target.content, prevSpans });
     finishRecord(target.chatId, target.msgId, record, result.content);
     return result;
   }
 
   function finishRecord(chatId, msgId, record, content) {
-    const records = book(chatId);
     record.current = content;
     record.at = Date.now();
     record.edits = record.edits.slice(-LIMITS.edits);
     record.edits.slice(0, -LIMITS.undo).forEach(edit => { delete edit.prev; delete edit.prevSpans; });
-    if (normalize(record.current) === normalize(record.base)) delete records[msgId];
-    else records[msgId] = record;
+    putRecord(chatId, msgId, normalize(record.current) === normalize(record.base) ? null : record);
     saveBook(chatId);
     schedulePaint(0);
   }
 
-  async function undoLast(chatId, msgId, md) {
+  async function undoLast(chatId, msgId, node) {
     const record = book(chatId)[msgId];
     const edit = record?.edits[record.edits.length - 1];
     if (!edit || typeof edit.prev !== 'string') throw new UserError('되돌릴 수정이 없어요.');
-    const target = await resolveTarget(md);
+    const target = await resolveTarget(node);
     if (target.msgId !== msgId) throw new UserError('보이는 답변이 바뀌었어요.');
     if (normalize(target.content) !== normalize(record.current)) throw new UserError('그사이 다른 곳에서 바뀌어서 되돌리지 않았어요.');
     const result = await writeContent(target, edit.prev);
-    record.edits.pop();
-    record.spans = edit.prevSpans || [];
-    finishRecord(chatId, msgId, record, result.content);
+    const live = book(chatId)[msgId] || record;
+    live.edits.pop();
+    live.spans = edit.prevSpans || [];
+    finishRecord(chatId, msgId, live, result.content);
     return result;
   }
 
-  async function restoreBase(chatId, msgId, md) {
+  async function restoreBase(chatId, msgId, node) {
     const record = book(chatId)[msgId];
     if (!record) throw new UserError('흔적이 없어요.');
-    const target = await resolveTarget(md);
+    const target = await resolveTarget(node);
     if (target.msgId !== msgId) throw new UserError('보이는 답변이 바뀌었어요.');
     if (normalize(target.content) !== normalize(record.current)) throw new UserError('그사이 다른 곳에서 바뀌어서 되돌리지 않았어요.');
     const result = await writeContent(target, record.base);
-    delete book(chatId)[msgId];
-    saveBook(chatId);
-    schedulePaint(0);
+    forget(chatId, msgId);
     return result;
   }
 
   function forget(chatId, msgId) {
-    delete book(chatId)[msgId];
+    putRecord(chatId, msgId, null);
     saveBook(chatId);
     schedulePaint(0);
   }
 
   // ---------- 크랙 수정창으로 고친 것도 기록 ----------
-  // 크랙은 저장소를 먼저 바꾼 뒤 PATCH를 보냅니다. 저장소 변화(전/후)를 잡아 두었다가 PATCH가 성공하면 확정합니다.
+  // 크랙은 저장소를 먼저 바꾼 뒤 PATCH를 보냅니다. 저장소 변화(전/후)를 잡아 두었다가 그 메시지의 PATCH가 성공하면 확정합니다.
+  // 답변 생성·재생성·resync는 PATCH가 없으므로 기록되지 않습니다.
 
   const watchedStores = new WeakSet();
   const pendingNative = new Map();
@@ -686,7 +834,6 @@
       store.subscribe((state, prev) => {
         if (!prev || state.messages === prev.messages) return;
         schedulePaint();
-        if (streamingNow()) return;
         state.messages.forEach((message, id) => {
           const old = prev.messages.get(id);
           if (!old || old === message || typeof old.content !== 'string' || typeof message.content !== 'string' || old.content === message.content) return;
@@ -721,11 +868,7 @@
       if (typeof json?.data?.content === 'string') content = json.data.content;
     } catch (error) { /* 무시 */ }
     if (isOwn(msgId, content)) return;
-    const records = book(chatId);
-    const prev = records[msgId];
-    const record = prev && normalize(prev.current) === normalize(entry.before)
-      ? prev
-      : { base: prev?.base ?? entry.before, current: entry.before, spans: [], edits: prev?.edits || [] };
+    const record = recordFor(book(chatId)[msgId], entry.before);
     const change = wholeChange(entry.before, content);
     const prevSpans = (record.spans || []).map(span => span.slice());
     record.spans = shiftSpans(record.spans, change.a, change.b, change.newLen, change.newLen);
@@ -810,41 +953,43 @@
     hits.clear();
     const edits = [];
     const cuts = [];
-    const seen = new Set();
-    if (h.chatId && Object.keys(records).length) {
+    const keep = new Set();
+    const wanted = new Set(Object.keys(records));
+    if (h.chatId && wanted.size) {
       const bridge = findBridge();
       let changed = false;
-      for (const md of document.querySelectorAll('[data-message-group-id] .wrtn-markdown')) {
-        const info = messageOf(md, bridge);
+      for (const group of document.querySelectorAll('[data-message-group-id]')) {
+        const info = messageOf(group, bridge, wanted);
         if (!info) continue;
         const id = info.msgId || info.groupId;
         const record = records[id];
         if (!record) continue;
+        // 저장 중이거나 확정을 기다리는 동안에는 화면이 잠깐 원문과 같아도 기록을 지우지 않습니다.
+        const busy = inFlight.has(id) || pendingNative.has(id) || reloadNeeded.has(id);
         let status;
-        if (info.fromStore || (info.content !== null && info.msgId)) {
+        if (info.fromStore) {
           if (info.content === record.current) status = 'ok';
-          else if (normalize(info.content) === normalize(record.base)) {
-            delete records[id];
+          else if (!busy && normalize(info.content) === normalize(record.base)) {
+            putRecord(h.chatId, id, null);
             changed = true;
             continue;
           } else status = 'stale';
         } else {
-          status = coverage(record.current, md) > 0.97 ? 'ok' : 'stale';
+          status = coverage(record.current, info.mds) > 0.97 ? 'ok' : 'stale';
         }
-        seen.add(md);
-        ensureBadge(md, id, record, status);
+        keep.add(ensureBadge(info.mds[info.mds.length - 1], id, record, status));
         if (status === 'ok' && settings.paint) {
-          const painted = rangesFor(md, record);
+          const painted = rangesFor(info.mds, record);
           edits.push(...painted.ranges);
           cuts.push(...painted.cuts);
-          hits.set(md, { id, ranges: painted.ranges.concat(painted.cuts) });
+          const hit = { id, group, ranges: painted.ranges.concat(painted.cuts) };
+          info.mds.forEach(md => hits.set(md, hit));
         }
       }
       if (changed) saveBook(h.chatId);
     }
     document.querySelectorAll('.cpn-badge').forEach(badge => {
-      const md = badge.previousElementSibling;
-      if (!md || !seen.has(md)) badge.remove();
+      if (!keep.has(badge)) badge.remove();
     });
     if (reg && HL) {
       try {
@@ -856,6 +1001,7 @@
     }
   }
 
+  // 배지는 .wrtn-markdown 안이 아니라 바로 뒤에 붙입니다(크랙이 본문을 다시 그려도 지워지지 않게).
   function ensureBadge(md, id, record, status) {
     let badge = md.nextElementSibling;
     if (!badge?.classList.contains('cpn-badge')) {
@@ -865,7 +1011,7 @@
       badge.addEventListener('click', event => {
         event.preventDefault();
         event.stopPropagation();
-        openTrace(badge.previousElementSibling, badge.dataset.id, badge.getBoundingClientRect());
+        openTrace(groupOf(badge), badge.dataset.id, badge.getBoundingClientRect());
       });
       md.after(badge);
     }
@@ -877,6 +1023,7 @@
       badge.innerHTML = `${ICONS.pen}<span>${label}</span>`;
     }
     badge.classList.toggle('is-stale', status === 'stale');
+    return badge;
   }
 
   // ---------- 화면 (선택 막대, 편집 창, 흔적 창, 알림) ----------
@@ -943,6 +1090,7 @@ textarea:focus{box-shadow:inset 0 0 0 1.5px var(--pink)}
 .it{padding:9px 10px;border-radius:12px;background:var(--surface)}
 .it .meta{display:flex;gap:6px;color:var(--text-3);font-size:11px;font-weight:700;margin-bottom:4px}
 .it .meta b{color:var(--text-2)}
+.it.old{opacity:.55}
 .del,.ins{display:block;white-space:pre-wrap;word-break:break-all;font-size:12.5px}
 .del{color:var(--text-3);text-decoration:line-through;text-decoration-color:var(--danger)}
 .ins{color:var(--text)}
@@ -1078,9 +1226,17 @@ textarea:focus{box-shadow:inset 0 0 0 1.5px var(--pink)}
 
   // 선택 → 대상 메시지 확인 → 원문 위치 찾기
   async function prepare(sel) {
-    const target = await resolveTarget(sel.md);
-    const mapped = mapSelection(sel.md, sel.range, target.content);
+    const target = await resolveTarget(sel.group);
+    const mapped = mapSelection(target.mds, sel.range, target.content);
     return { target, mapped };
+  }
+
+  const liveGroup = target => (target.group?.isConnected ? target.group : findGroup(target.msgId));
+  const undoAction = target => () => undoLast(target.chatId, target.msgId, liveGroup(target)).then(r => doneToast(r, '되돌렸어요')).catch(failed);
+
+  function sourceFallback(target, region, why) {
+    toast(why, { ms: 3400 });
+    openSource(target, region);
   }
 
   async function startEdit(mode) {
@@ -1097,15 +1253,23 @@ textarea:focus{box-shadow:inset 0 0 0 1.5px var(--pink)}
     const { target, mapped } = prepared;
     const rect = sel.range.getBoundingClientRect();
     document.getSelection()?.removeAllRanges();
-    if (mode === 'source' || !mapped.ok) {
-      if (mode !== 'source') toast('이 부분은 원문에서 정확히 못 찾아서, 원문 전체를 열었어요.', { ms: 3200 });
+    if (mode === 'source') {
       openSource(target, mapped.ok ? [mapped.a, mapped.b] : mapped.approx || null);
       return;
     }
+    if (!mapped.ok) {
+      sourceFallback(target, mapped.approx || null, '이 부분은 원문에서 정확히 못 찾아서, 원문 전체를 열었어요.');
+      return;
+    }
     if (mode === 'erase') {
+      const plan = planSplice(target.content, mapped, '');
+      if (!plan) {
+        sourceFallback(target, [mapped.a, mapped.b], '목록·링크 같은 서식이 섞여 있어서 원문 창으로 열었어요.');
+        return;
+      }
       try {
-        const result = await commitEdit(target, { a: mapped.a, b: mapped.b, replacement: '', kept: mapped.kept, oldText: mapped.oldText, kind: 'pin' });
-        doneToast(result, '지웠어요', () => undoLast(target.chatId, target.msgId, target.md.isConnected ? target.md : findMd(target.msgId)).then(r => doneToast(r, '되돌렸어요')).catch(failed));
+        const result = await commitEdit(target, plan, { kind: 'pin', before: mapped.oldText, after: '' });
+        doneToast(result, '지웠어요', undoAction(target));
       } catch (error) {
         failed(error);
       }
@@ -1114,11 +1278,12 @@ textarea:focus{box-shadow:inset 0 0 0 1.5px var(--pink)}
     openEditor(target, mapped, rect);
   }
 
-  function findMd(msgId) {
+  function findGroup(msgId) {
     const bridge = findBridge();
-    for (const md of document.querySelectorAll('[data-message-group-id] .wrtn-markdown')) {
-      const info = messageOf(md, bridge);
-      if (info && (info.msgId || info.groupId) === msgId) return md;
+    const wanted = new Set([msgId]);
+    for (const group of document.querySelectorAll('[data-message-group-id]')) {
+      const info = messageOf(group, bridge, wanted);
+      if (info && (info.msgId || info.groupId) === msgId) return group;
     }
     return null;
   }
@@ -1152,9 +1317,9 @@ textarea:focus{box-shadow:inset 0 0 0 1.5px var(--pink)}
     pop.querySelector('.ft').innerHTML = '<span class="grow"></span><button class="btn" data-act="close">취소</button><button class="btn pri" data-act="save">고치기</button>';
     const area = pop.querySelector('textarea');
     area.value = mapped.oldText;
-    const rest = target.content.length - (mapped.b - mapped.a);
-    area.addEventListener('input', () => lengthNote(target, rest + area.value.length + mapped.kept.length));
-    lengthNote(target, rest + area.value.length + mapped.kept.length);
+    const rest = target.content.length - mapped.oldText.length;
+    area.addEventListener('input', () => lengthNote(target, rest + area.value.length));
+    lengthNote(target, rest + area.value.length);
     pop.edit = { target, mapped };
     place(pop, rect, 'below');
     area.focus({ preventScroll: true });
@@ -1196,17 +1361,24 @@ textarea:focus{box-shadow:inset 0 0 0 1.5px var(--pink)}
           return;
         }
         const change = wholeChange(target.content, next);
-        result = await commitEdit(target, { a: change.a, b: change.b, replacement: change.newText, kept: '', oldText: change.oldText, kind: 'source' });
+        const plan = { a: change.a, b: change.b, ins: change.newText, kept: '', next };
+        result = await commitEdit(target, plan, { kind: 'source', before: change.oldText, after: change.newText });
       } else {
         const replacement = area.value;
         if (replacement === mapped.oldText) {
           closePop();
           return;
         }
-        result = await commitEdit(target, { a: mapped.a, b: mapped.b, replacement, kept: mapped.kept, oldText: mapped.oldText, kind: 'pin' });
+        const plan = planSplice(target.content, mapped, replacement);
+        if (!plan) {
+          closePop();
+          sourceFallback(target, [mapped.a, mapped.b], '목록·링크 같은 서식이 섞여 있어서 원문 창으로 열었어요.');
+          return;
+        }
+        result = await commitEdit(target, plan, { kind: 'pin', before: mapped.oldText, after: replacement });
       }
       closePop();
-      doneToast(result, '고쳤어요', () => undoLast(target.chatId, target.msgId, target.md.isConnected ? target.md : findMd(target.msgId)).then(r => doneToast(r, '되돌렸어요')).catch(failed));
+      doneToast(result, '고쳤어요', undoAction(target));
     } catch (error) {
       ui.busy = false;
       button.classList.remove('busy');
@@ -1226,21 +1398,25 @@ textarea:focus{box-shadow:inset 0 0 0 1.5px var(--pink)}
 
   const clip = (text, max = 160) => (text.length > max ? `${text.slice(0, max)}…` : text);
 
-  function openTrace(md, msgId, rect) {
+  function openTrace(group, msgId, rect) {
     const chatId = here().chatId;
     const record = book(chatId)[msgId];
-    if (!record || !md) return;
+    if (!record || !group) return;
     hideToolbar();
     const pop = popShell('수정 흔적', `${record.edits.length}번 고침`);
-    const bridge = findBridge(md);
-    const info = messageOf(md, bridge);
-    const stale = info && info.content !== null && info.content !== record.current;
-    const items = record.edits.slice().reverse().map(edit => `<div class="it"><div class="meta"><b>${KIND_LABEL[edit.kind] || '수정'}</b><span>${ago(edit.at)}</span></div>${edit.before ? `<span class="del">${esc(clip(edit.before))}</span>` : ''}<span class="ins">${edit.after ? `<mark>${esc(clip(edit.after))}</mark>` : '<i>(지움)</i>'}</span></div>`).join('');
-    pop.querySelector('.bd').innerHTML = `${stale ? '<div class="stale">이 메시지가 다른 곳에서 바뀌어서 흔적을 칠하지 못했어요. 되돌리기도 막아 두었어요.</div>' : ''}<div class="list">${items || '<div class="empty">기록이 없어요.</div>'}</div>`;
+    const bridge = findBridge(mdsOf(group)[0]);
+    const info = messageOf(group, bridge, new Set([msgId]));
+    const stale = !info || (info.fromStore ? info.content !== record.current : reloadNeeded.has(msgId) || coverage(record.current, info.mds) <= 0.97);
+    const items = record.edits.slice().reverse().map(edit => `<div class="it${edit.old ? ' old' : ''}"><div class="meta"><b>${KIND_LABEL[edit.kind] || '수정'}</b><span>${ago(edit.at)}</span></div>${edit.before ? `<span class="del">${esc(clip(edit.before))}</span>` : ''}<span class="ins">${edit.after ? `<mark>${esc(clip(edit.after))}</mark>` : '<i>(지움)</i>'}</span></div>`).join('');
+    const notes = [
+      stale ? '<div class="stale">이 메시지가 다른 곳에서 바뀌어서 흔적을 칠하지 못했어요. 되돌리기도 막아 두었어요.</div>' : '',
+      record.rebased ? '<div class="stale">중간에 다른 곳에서 글이 바뀌어서, 그 뒤의 수정만 되돌릴 수 있어요. 흐린 기록은 보기만 돼요.</div>' : '',
+    ].join('');
+    pop.querySelector('.bd').innerHTML = `${notes}<div class="list">${items || '<div class="empty">기록이 없어요.</div>'}</div>`;
     const last = record.edits[record.edits.length - 1];
     const canUndo = !stale && last && typeof last.prev === 'string';
     pop.querySelector('.ft').innerHTML = `<button class="sw" data-act="paint" aria-pressed="${settings.paint}"><i></i>색칠</button><span class="grow"></span><button class="btn danger" data-act="forget" title="글은 그대로 두고 기록만 지워요">기록 지우기</button><button class="btn" data-act="undo"${canUndo ? '' : ' disabled'}>${ICONS.undo}방금 것</button><button class="btn pri" data-act="restore"${stale ? ' disabled' : ''}>처음 글로</button>`;
-    pop.trace = { chatId, msgId, md };
+    pop.trace = { chatId, msgId, group };
     place(pop, rect, 'below');
     pop.focus({ preventScroll: true });
   }
@@ -1248,6 +1424,7 @@ textarea:focus{box-shadow:inset 0 0 0 1.5px var(--pink)}
   function onPanelKey(event) {
     if (event.key === 'Escape') {
       event.preventDefault();
+      swallowKeyUp('Escape');
       if (ui.pop) closePop();
       else hideToolbar();
       return;
@@ -1257,18 +1434,30 @@ textarea:focus{box-shadow:inset 0 0 0 1.5px var(--pink)}
     if (!pop?.edit || event.target.tagName !== 'TEXTAREA') return;
     if (pop.edit.source ? (event.ctrlKey || event.metaKey) : !event.shiftKey && !coarse()) {
       event.preventDefault();
+      swallowKeyUp('Enter');
       saveEditor();
     }
   }
 
+  // 키를 누르는 순간 창이 닫히면, 손을 뗄 때의 keyup이 본문으로 가서 크랙 단축키(Enter → 입력창 이동)가 움직입니다. 그 keyup 하나를 삼킵니다.
+  function swallowKeyUp(key) {
+    const handler = event => {
+      if (event.key !== key) return;
+      event.stopPropagation();
+      window.removeEventListener('keyup', handler, true);
+    };
+    window.addEventListener('keyup', handler, true);
+    setTimeout(() => window.removeEventListener('keyup', handler, true), 1500);
+  }
+
   async function runTrace(action) {
-    const { chatId, msgId, md } = ui.pop.trace;
-    const liveMd = md.isConnected ? md : findMd(msgId);
+    const { chatId, msgId, group } = ui.pop.trace;
+    const live = group.isConnected ? group : findGroup(msgId);
     const button = ui.pop.querySelector(`[data-act="${action}"]`);
     button?.classList.add('busy');
     try {
-      if (action === 'undo') doneToast(await undoLast(chatId, msgId, liveMd), '방금 수정을 되돌렸어요');
-      if (action === 'restore') doneToast(await restoreBase(chatId, msgId, liveMd), '처음 글로 되돌렸어요');
+      if (action === 'undo') doneToast(await undoLast(chatId, msgId, live), '방금 수정을 되돌렸어요');
+      if (action === 'restore') doneToast(await restoreBase(chatId, msgId, live), '처음 글로 되돌렸어요');
       closePop();
     } catch (error) {
       button?.classList.remove('busy');
@@ -1308,10 +1497,11 @@ textarea:focus{box-shadow:inset 0 0 0 1.5px var(--pink)}
     if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
     const range = sel.getRangeAt(0);
     const md = mdOf(range.startContainer);
-    if (!md || md !== mdOf(range.endContainer)) return null;
-    if (!md.closest('[data-message-group-id]') || md.closest('[contenteditable="true"]')) return null;
+    const group = groupOf(md);
+    if (!md || !group || !mdOf(range.endContainer) || groupOf(range.endContainer) !== group) return null;
+    if (md.closest('[contenteditable="true"]')) return null;
     if (!here().chatId || !/[\p{L}\p{N}]/u.test(range.toString())) return null;
-    return { md, range: range.cloneRange() };
+    return { md, group, range: range.cloneRange() };
   }
 
   // 이미 더 빨리 확인하기로 한 게 있으면 미루지 않습니다(마우스를 뗀 직후에 막대가 바로 뜨게).
@@ -1360,6 +1550,7 @@ textarea:focus{box-shadow:inset 0 0 0 1.5px var(--pink)}
   window.addEventListener('resize', () => hideToolbar());
 
   // 칠해진 흔적을 누르면 흔적 창을 엽니다.
+  // 크랙 메시지 칸이 클릭 전파를 막아 두어서, 잡는 단계(capture)에서 듣습니다.
   document.addEventListener('click', event => {
     if (!document.getSelection()?.isCollapsed || event.composedPath().includes(ui.host)) return;
     const md = event.target instanceof Element ? event.target.closest('.wrtn-markdown') : null;
@@ -1384,8 +1575,8 @@ textarea:focus{box-shadow:inset 0 0 0 1.5px var(--pink)}
         return false;
       }
     });
-    if (inside) openTrace(md, hit.id, { left: event.clientX, right: event.clientX, top: event.clientY, bottom: event.clientY + 8, width: 0, height: 8 });
-  });
+    if (inside) openTrace(hit.group, hit.id, { left: event.clientX, right: event.clientX, top: event.clientY, bottom: event.clientY + 8, width: 0, height: 8 });
+  }, true);
 
   // ---------- 시작 ----------
 
@@ -1429,7 +1620,7 @@ textarea:focus{box-shadow:inset 0 0 0 1.5px var(--pink)}
       const md = document.querySelector('[data-message-group-id] .wrtn-markdown');
       const bridge = findBridge(md);
       const state = bridge.store ? bridge.store.getState() : null;
-      const info = md ? messageOf(md, bridge) : null;
+      const info = md ? messageOf(groupOf(md), bridge) : null;
       return {
         version: VERSION,
         route: h,
@@ -1438,7 +1629,7 @@ textarea:focus{box-shadow:inset 0 0 0 1.5px var(--pink)}
         chatState: bridge.state ? { status: bridge.state.status, chatId: bridge.state.chatId, selectedMessageId: bridge.state.selectedMessageId } : null,
         chatIdMismatch: bridge.mismatch,
         store: state ? { messages: state.messages.size, groups: state.messageGroups ? state.messageGroups.length : null, updateMessage: typeof state.updateMessage === 'function' } : null,
-        firstMessage: info ? { groupId: info.groupId, ids: info.ids, msgId: info.msgId, fromStore: info.fromStore, contentLength: info.content?.length ?? null, coverage: info.content ? Number(coverage(info.content, md).toFixed(3)) : null } : null,
+        firstMessage: info ? { groupId: info.groupId, ids: info.ids, msgId: info.msgId, fromStore: info.fromStore, contentLength: info.content?.length ?? null, mds: info.mds.length, coverage: info.content ? Number(coverage(info.content, info.mds).toFixed(3)) : null } : null,
         highlightApi: Boolean(HL && registry()),
         network: { xhr: diagState.xhrHooked, fetch: diagState.fetchHooked },
         lastPath: diagState.lastPath,
@@ -1458,7 +1649,9 @@ textarea:focus{box-shadow:inset 0 0 0 1.5px var(--pink)}
       const sel = currentSelection();
       if (!sel) return '메시지 안에서 글자를 먼저 선택해 주세요.';
       const { target, mapped } = await prepare(sel);
-      return { msgId: target.msgId, via: target.via, ...mapped, sourceSlice: mapped.ok ? target.content.slice(mapped.a, mapped.b) : null };
+      const { vpos, ...rest } = mapped;
+      const erase = mapped.ok ? planSplice(target.content, mapped, '') : null;
+      return { msgId: target.msgId, via: target.via, ...rest, sourceSlice: mapped.ok ? target.content.slice(mapped.a, mapped.b) : null, eraseWouldGive: erase ? erase.next.slice(Math.max(0, erase.a - 30), erase.a + erase.kept.length + 30) : '(원문 창으로 넘어감)' };
     },
   };
   console.info(LOG, `v${VERSION} 준비됨`);
