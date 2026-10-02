@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🧭 Crack AI Companion (크랙 AI 도우미)
 // @namespace    https://crack.wrtn.ai/
-// @version      1.4.0
+// @version      1.4.1
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/AICompanion.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/AICompanion.user.js
 // @description  Crack RP 로그를 ChatGPT로 보내고 찐빠 검사·질문·장기기억·유저노트·로어·커스텀 작업을 작업별 대화와 증분 전달로 관리합니다.
@@ -42,7 +42,7 @@
     'use strict';
 
     /*
-     * Crack AI Companion v1.4.0
+     * Crack AI Companion v1.4.1
      * - Job-first transport with durable task conversations and verified submit/result handling.
      * - PC Chrome/iOS/Android delivery behavior is preserved from the proven pre-release build.
      * - Firefox TXT attachment runs inside a page-side runner on both desktop and Android to avoid userscript/page realm boundaries.
@@ -54,11 +54,15 @@
 
     const APP = Object.freeze({
         id: 'cgc',
-        version: '1.4.0',
+        version: '1.4.1',
         protocol: 'crack-gpt-companion/v4.2.0-durable-web-delivery',
         name: 'Crack AI Companion',
     });
 
+    // v1.4.1: iPhone Safari — the send button no longer locks after one send: every wait on the Userscripts app
+    //         (tab open, storage writes, the one-tap open panel) is bounded by visible time, the send latch expires,
+    //         the audit button is never disabled, a job the suspended ChatGPT tab never took can be cancelled and
+    //         resent from the same tap, and finished answers are announced on return / in the ChatGPT tab.
     // v1.4.0: never store ChatGPT's client-only chat id (/c/local-chatgpt:...) as the conversation address; repair
     //         addresses saved that way with job-marker proof; two-phase dispatch with Crack confirmation; a tab that
     //         navigates for its own job keeps its claim; event-driven waits that also work in background windows;
@@ -416,23 +420,27 @@
     let cgcSettingsWatchInstalled = false;
 
     const CGC_STORAGE_FAILED = new Map();
-    function cgcQueueStorageOperation(key, value, removing = false) {
+    const CGC_STORAGE_OP_TIMEOUT_MS = 4000;
+    function cgcQueueStorageOperation(key, value, removing = false, size = 0) {
         const epoch=(CGC_STORAGE_EPOCH.get(key)||0)+1;
         CGC_STORAGE_EPOCH.set(key,epoch);CGC_STORAGE_WRITES.set(key,epoch);
         CGC_STORAGE_FAILED.delete(key);
         if(removing)CGC_ASYNC_CACHE.delete(key);else CGC_ASYNC_CACHE.set(key,value);
-        const operation={key,value,removing,epoch};
+        const operation={key,value,removing,epoch,size};
         cgcAsyncWriteBarrier=cgcAsyncWriteBarrier.then(()=>cgcRunStorageOperation(operation));
     }
     async function cgcRunStorageOperation(operation) {
-        const {key,value,removing,epoch}=operation;
+        const {key,value,removing,epoch,size=0}=operation;
         if(CGC_STORAGE_EPOCH.get(key)!==epoch)return;
         for(let attempt=0;attempt<3;attempt++){
             if(CGC_STORAGE_EPOCH.get(key)!==epoch)return;
             try{
                 const api=modernGM();
-                if(removing&&typeof api.deleteValue==='function')await api.deleteValue(key);
-                else await api.setValue(key,removing?null:value);
+                // v1.4.1: an iOS extension reply lost while Safari suspended the page must not hold the whole
+                // write queue (and every flush waiting on it) forever; a stalled write is retried like a failure.
+                // Large TXT chunks get more time so a slow but working store is never mistaken for a stalled one.
+                const done=await cgcSettleWhileVisible(()=>removing&&typeof api.deleteValue==='function'?api.deleteValue(key):api.setValue(key,removing?null:value),CGC_STORAGE_OP_TIMEOUT_MS+Math.min(30000,Math.round(size/20000)*1000));
+                if(!done.ok)throw done.error||new Error('저장소 응답 지연');
                 if(CGC_STORAGE_WRITES.get(key)===epoch){CGC_STORAGE_WRITES.delete(key);CGC_STORAGE_FAILED.delete(key);}
                 return;
             }catch(error){
@@ -456,7 +464,7 @@
 
     function writeValue(key, value) {
         if(key===KEY.settings)cgcSettingsCache=null;
-        if(CGC_ASYNC_GM_STORAGE){cgcQueueStorageOperation(key,JSON.parse(JSON.stringify(value)));return;}
+        if(CGC_ASYNC_GM_STORAGE){const json=JSON.stringify(value);cgcQueueStorageOperation(key,JSON.parse(json),false,json?.length||0);return;}
         try{GM_setValue(key,value);}catch(error){console.error('[cgc] storage write failed',key,error);throw error;}
     }
 
@@ -470,6 +478,7 @@
 
     async function flushStorageWrites() {
         if(!CGC_ASYNC_GM_STORAGE)return;
+        // Every queued write is bounded (cgcRunStorageOperation), so this drain always finishes.
         const drain=async()=>{let barrier;do{barrier=cgcAsyncWriteBarrier;await barrier;}while(barrier!==cgcAsyncWriteBarrier);};
         await drain();
         // Retry only the still-current failed values; superseded writes must never return.
@@ -505,6 +514,24 @@
                 new Promise(resolve=>{timer=setTimeout(()=>resolve({ok:false,timeout:true}),timeoutMs);}),
             ]);
         }finally{if(timer)clearTimeout(timer);}
+    }
+
+    // iOS Safari suspends a hidden page and fires its overdue timers on return, so a plain timeout would
+    // report a Promise that was merely paused as stalled. Only a window the page spent visible counts.
+    let cgcPageShownAt=0;
+    try{
+        const markVisibility=()=>{cgcPageShownAt=document.visibilityState==='hidden'?Infinity:Date.now();};
+        document.addEventListener('visibilitychange',markVisibility,true);
+        window.addEventListener('pagehide',()=>{cgcPageShownAt=Infinity;},true);
+        window.addEventListener('pageshow',markVisibility,true);
+    }catch{}
+    async function cgcSettleWhileVisible(factory,timeoutMs) {
+        const work=Promise.resolve().then(factory).then(value=>({ok:true,value}),error=>({ok:false,error}));
+        for(;;){
+            const start=Date.now(),result=await settleWithTimeout(()=>work,timeoutMs);
+            if(!result.timeout)return result.value; // work never rejects; unwrap its own {ok,value|error}
+            if(document.visibilityState!=='hidden'&&cgcPageShownAt<=start)return result;
+        }
     }
 
     async function hydrateAsyncStorageKeys(keys,timeoutMs=1500) {
@@ -2425,6 +2452,11 @@
         },
     };
 
+    const CGC_IOS_OPEN_TAB_TIMEOUT_MS = 4000;
+    const CGC_START_LATCH_STALE_MS = 90000;
+    const CGC_MOBILE_PENDING_GRACE_MS = 20000;
+    const CGC_MANUAL_OPEN_TIMEOUT_MS = 3*60*1000;
+    let cgcManualOpenSettle = null;
     async function openPrivilegedChatGptTab(url, preferredMode='popup') {
         let target = CHATGPT_HOME;
         target=cgcSafeChatGptUrl(url)||CHATGPT_HOME;
@@ -2432,10 +2464,22 @@
         // iOS Userscripts provides only Promise-based GM.openInTab. Prefer it because an ordinary
         // window.open after Crack's network work has lost Safari's transient user activation.
         if(CGC_PLATFORM?.iOS){
-            try{
-                const api=modernGM();
-                if(typeof api?.openInTab==='function'){const tabTarget=withSurfaceMarker(target,'tab');const handle=await api.openInTab(tabTarget,false);return {mode:'tab-ios',surfaceMode:'tab',handle};}
-            }catch(error){console.warn(`[${APP.id}] GM.openInTab failed`,error);}
+            const api=modernGM();
+            if(typeof api?.openInTab==='function'){
+                // v1.4.1: the Userscripts app answers through an extension message that Safari can drop while
+                // this page is suspended behind the new tab. An unanswered call used to hold the send latch for
+                // good ("버튼이 안 눌림"). The page going hidden is proof the tab opened; a second openInTab or a
+                // late window.open could only duplicate it, so a silent failure goes to the one-tap fallback.
+                let wentHidden=document.visibilityState==='hidden';
+                const onHide=()=>{if(document.visibilityState==='hidden')wentHidden=true;};
+                document.addEventListener('visibilitychange',onHide,true);
+                try{
+                    const opened=await settleWithTimeout(()=>api.openInTab(withSurfaceMarker(target,'tab'),false),CGC_IOS_OPEN_TAB_TIMEOUT_MS);
+                    if(opened.ok||wentHidden)return {mode:'tab-ios',surfaceMode:'tab',handle:opened.ok?opened.value:null};
+                    console.warn(`[${APP.id}] GM.openInTab did not open a tab`,opened.error||'timeout');
+                }finally{document.removeEventListener('visibilitychange',onHide,true);}
+                return null;
+            }
         }
         if(mode==='tab'){
             try {
@@ -2446,7 +2490,7 @@
             }catch(error){console.warn(`[${APP.id}] GM_openInTab failed`,error);}
             try{
                 const api=modernGM();
-                if(typeof api?.openInTab==='function'){const handle=await api.openInTab(withSurfaceMarker(target,'tab'),false);return {mode:'tab-modern',surfaceMode:'tab',handle};}
+                if(typeof api?.openInTab==='function'){const opened=await settleWithTimeout(()=>api.openInTab(withSurfaceMarker(target,'tab'),false),CGC_IOS_OPEN_TAB_TIMEOUT_MS);if(opened.ok)return {mode:'tab-modern',surfaceMode:'tab',handle:opened.value};}
             }catch(error){console.warn(`[${APP.id}] GM.openInTab failed`,error);}
             try {
                 const opened=window.open(target,'_blank');
@@ -2466,15 +2510,27 @@
         }catch(error){console.warn(`[${APP.id}] GM_openInTab failed`,error);}
         try{
             const api=modernGM();
-            if(typeof api?.openInTab==='function'){const handle=await api.openInTab(withSurfaceMarker(target,'tab'),false);return {mode:'tab-modern-fallback',surfaceMode:'tab',handle};}
+            if(typeof api?.openInTab==='function'){const opened=await settleWithTimeout(()=>api.openInTab(withSurfaceMarker(target,'tab'),false),CGC_IOS_OPEN_TAB_TIMEOUT_MS);if(opened.ok)return {mode:'tab-modern-fallback',surfaceMode:'tab',handle:opened.value};}
         }catch(error){console.warn(`[${APP.id}] GM.openInTab failed`,error);}
         return null;
     }
 
     function waitForManualChatGptOpen(url,job=null) {
         return new Promise((resolve,reject)=>{
+            // v1.4.1: a replaced panel used to leave its caller waiting forever (and the send latch held).
+            // Every panel now settles exactly once: link tap, cancel, replacement, removal or deadline.
+            cgcManualOpenSettle?.(new Error('새 ChatGPT 열기 안내로 바뀌었어요. 이전 작업은 전송 안 됨 상태로 복구됩니다.'));
             document.querySelector('.cgc-crack-ios-handoff')?.remove();
             const panel=document.createElement('div');panel.className='cgc-crack-ios-handoff';
+            let settled=false,deadline=0;
+            const settle=(error,value)=>{
+                if(settled)return;settled=true;clearTimeout(deadline);
+                if(cgcManualOpenSettle===settle)cgcManualOpenSettle=null;
+                cleanup();
+                if(error)reject(error);else resolve(value);
+            };
+            cgcManualOpenSettle=settle;
+            deadline=setTimeout(()=>settle(new Error('ChatGPT 열기 안내가 시간 초과로 닫혔어요. 작업은 전송 안 됨 상태로 복구됩니다.')),CGC_MANUAL_OPEN_TIMEOUT_MS);
             Object.assign(panel.style,{position:'fixed',zIndex:2147483647,background:'#1f1f1d',color:'#fff',border:'1px solid rgba(255,255,255,.17)',borderRadius:'16px',boxShadow:'0 16px 48px rgba(0,0,0,.44)',padding:'14px',font:'13px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',boxSizing:'border-box'});
             const title=document.createElement('div');title.textContent=job?'📱 ChatGPT에 작업 이어서기':'📱 ChatGPT 새 탭 열기';Object.assign(title.style,{fontWeight:'850',fontSize:'14px',marginBottom:'6px'});
             const text=document.createElement('div');text.textContent=job?`${jobDisplayLabel(job)} 작업은 안전하게 저장됐어요. Safari가 자동 탭 열기를 막아 아래 버튼을 한 번 눌러야 합니다.`:'Safari가 새 탭 자동 열기를 막았어요. 아래 버튼을 한 번 누르면 연결된 GPT 대화를 새 탭으로 엽니다.';Object.assign(text.style,{opacity:'.86',marginBottom:'11px'});
@@ -2483,10 +2539,11 @@
             const cancel=document.createElement('button');cancel.type='button';cancel.textContent='취소';Object.assign(cancel.style,{minWidth:'72px',minHeight:'48px',border:'1px solid rgba(255,255,255,.18)',borderRadius:'11px',background:'transparent',color:'#fff',fontWeight:'750'});
             const position=()=>{const box=cgcViewportBox();panel.style.left=`${Math.round(box.left+10)}px`;panel.style.top=`${Math.round(box.top+Math.max(10,box.height*.08))}px`;panel.style.width=`${Math.max(240,Math.round(box.width-20))}px`;};
             const cleanup=()=>{try{window.visualViewport?.removeEventListener('resize',position);window.visualViewport?.removeEventListener('scroll',position);}catch{}panel.remove();};
-            link.addEventListener('click',()=>{setTimeout(()=>{cleanup();resolve({mode:'ios-manual-open'});},0);},{once:true});
-            cancel.addEventListener('click',()=>{cleanup();reject(new Error('ChatGPT 열기를 취소했어요. 작업은 전송 안 됨 상태로 복구됩니다.'));},{once:true});
+            // Resolve inside the tap: Safari suspends this page as the new tab opens, so a deferred resolve would wait for the return.
+            link.addEventListener('click',()=>{if(settled)return;settled=true;clearTimeout(deadline);if(cgcManualOpenSettle===settle)cgcManualOpenSettle=null;resolve({mode:'ios-manual-open'});setTimeout(cleanup,0);},{once:true});
+            cancel.addEventListener('click',()=>settle(new Error('ChatGPT 열기를 취소했어요. 작업은 전송 안 됨 상태로 복구됩니다.')),{once:true});
             row.append(link,cancel);panel.append(title,text,row);(document.body||document.documentElement).appendChild(panel);position();
-            try{window.visualViewport?.addEventListener('resize',position,{passive:true});window.visualViewport?.addEventListener('scroll',position,{passive:true});const observer=new MutationObserver(()=>{if(!panel.isConnected){window.visualViewport?.removeEventListener('resize',position);window.visualViewport?.removeEventListener('scroll',position);observer.disconnect();}});observer.observe(document.body,{childList:true});}catch{}
+            try{window.visualViewport?.addEventListener('resize',position,{passive:true});window.visualViewport?.addEventListener('scroll',position,{passive:true});const observer=new MutationObserver(()=>{if(!panel.isConnected){window.visualViewport?.removeEventListener('resize',position);window.visualViewport?.removeEventListener('scroll',position);observer.disconnect();settle(new Error('ChatGPT 열기 안내가 닫혔어요. 작업은 전송 안 됨 상태로 복구됩니다.'));}});observer.observe(document.body,{childList:true});}catch{}
         });
     }
 
@@ -5551,6 +5608,22 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
         launcherSessionKey: '',
         pendingRecoveryTimer: 0,
         startingSessionKey: '',
+        startingAt: 0,
+        startingToken: '',
+        // v1.4.1: the per-room send latch is owned by a token and expires. Every await in the send path is now
+        // bounded, so a latch older than CGC_START_LATCH_STALE_MS can only be one an iOS suspension orphaned.
+        startBusy(sessionKey) {
+            if(!this.startingSessionKey||this.startingSessionKey!==sessionKey)return false;
+            if(Date.now()-Number(this.startingAt||0)<CGC_START_LATCH_STALE_MS)return true;
+            console.warn(`[${APP.id}] stale send latch released`,sessionKey);
+            this.startingSessionKey='';this.startingToken='';this.startingAt=0;return false;
+        },
+        beginStart(sessionKey) {
+            const token=uid('start');this.startingSessionKey=sessionKey;this.startingToken=token;this.startingAt=Date.now();return token;
+        },
+        endStart(token) {
+            if(token&&this.startingToken===token){this.startingSessionKey='';this.startingToken='';this.startingAt=0;}
+        },
         duplicateWarningShown: false,
         uiBooted: false,
         storageFeaturesBooted: false,
@@ -5587,7 +5660,8 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
 
         storageReadyForAction() {
             if(!CGC_ASYNC_GM_STORAGE||cgcStorageReady)return true;
-            void warmAsyncStorageInBackground().then(()=>{this.placeLauncher();if(this.panel)this.refreshPanel();});
+            // The boot gate skips listener/lifecycle setup when its first reads were slow; install them once warm.
+            void warmAsyncStorageInBackground().then(()=>{this.finishStorageInit();this.placeLauncher();if(this.panel)this.refreshPanel();});
             this.toast('iOS 저장소가 아직 준비 중이에요. 버튼은 유지하고 준비가 끝나면 다시 누를 수 있게 할게요.',true);
             return false;
         },
@@ -6022,6 +6096,28 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             }finally{this.reconcilingResults=false;}
         },
 
+        // v1.4.1: answers that arrived while this tab was in the background are applied silently by the replay;
+        // on return, tell the user once (iOS cannot notify while either tab is in the background).
+        answeredSnapshot() {
+            const route=CrackAdapter.getRouteInfo(),session=route?readValue(KEY.state,null)?.sessions?.[route.sessionKey]:null;
+            const out={};for(const [slotId,slot] of Object.entries(session?.conversations||{}))out[slotId]=slot?.lastAnswerJobId||'';
+            return {sessionKey:route?.sessionKey||'',answers:out};
+        },
+        announceAfterResume(before) {
+            const route=CrackAdapter.getRouteInfo();if(!route||route.sessionKey!==before?.sessionKey)return;
+            const session=readValue(KEY.state,null)?.sessions?.[route.sessionKey];if(!session)return;
+            const done=Object.entries(session.conversations||{}).filter(([slotId,slot])=>slot?.lastAnswerJobId&&slot.lastAnswerJobId===slot.lastRequestId&&before.answers[slotId]!==slot.lastAnswerJobId);
+            if(done.length){this.toast(`${done.map(([slotId])=>conversationSlotLabel(slotId)).join(' · ')} · GPT 답변 완료`);return;}
+            // A job the ChatGPT tab never picked up keeps the room waiting; say how to get out of it.
+            const id=getPendingJobId(session);
+            if(!CGC_PLATFORM.mobile||!id||readValue(WebDelivery.key(id),null))return;
+            const job=readJob(id),age=Date.now()-Number(job?.createdAt||0);
+            const noticed=this.resumeNoticeIds||(this.resumeNoticeIds=new Set());
+            if(!validV3Job(job)||age<CGC_MOBILE_PENDING_GRACE_MS||noticed.has(id))return;
+            noticed.add(id);this.setInlineStatus('GPT 시작 대기',true);
+            this.toast('ChatGPT 탭이 아직 작업을 받지 못했어요. 같은 작업 버튼을 다시 누르면 취소하고 다시 보낼 수 있어요.',true);
+        },
+
         installLifecycleRefresh() {
             if(this.lifecycleRefreshInstalled)return;this.lifecycleRefreshInstalled=true;
             this.resultRefreshTimer=setInterval(()=>{void this.reconcileLiveResults().catch(error=>console.warn('[cgc] result refresh',error));},3000);
@@ -6030,16 +6126,20 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 if(document.visibilityState==='hidden')return;
                 clearTimeout(timer);
                 timer=setTimeout(async()=>{
-                    try{await pollAsyncStorageListeners();if(CGC_ASYNC_GM_STORAGE)await refreshAsyncStorageKey(KEY.settings);for(const id of peekBootstrapJobIds())await hydrateAsyncJobStorage(id);}catch(error){console.warn('[cgc] resume storage',error);}
+                    try{await pollAsyncStorageListeners();if(CGC_ASYNC_GM_STORAGE)await Promise.allSettled([KEY.settings,KEY.submitted,KEY.roomCheckpoints].map(refreshAsyncStorageKey));for(const id of peekBootstrapJobIds())await hydrateAsyncJobStorage(id);}catch(error){console.warn('[cgc] resume storage',error);}
                     this.updateMobileViewportVars();
+                    const before=this.answeredSnapshot();
                     // Mobile browsers may suspend background tabs and defer GM change callbacks.
                     // Replay only durable ACK/result records here; do not auto-reconcile/rollback live jobs on resume.
-                    this.recoverSubmittedAcks();
-                    await this.replayDurableCompletions(true);
-                    this.replayDurableTransformResults();
-                    await this.replayAnswerHistory(true);
+                    try{
+                        this.recoverSubmittedAcks();
+                        await this.replayDurableCompletions(true);
+                        this.replayDurableTransformResults();
+                        await this.replayAnswerHistory(true);
+                    }catch(error){console.warn('[cgc] resume replay',error);}
                     this.placeLauncher();
                     if(this.panel)this.refreshPanel();
+                    this.announceAfterResume(before);
                 },180);
             };
             document.addEventListener('visibilitychange',resume,{passive:true});
@@ -7109,12 +7209,12 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             if(!this.storageReadyForAction())return;
             const route=CrackAdapter.getRouteInfo(); if(!route)return this.toast('크랙 채팅 세션에서만 사용할 수 있어요.',true);
             const slotId=toolConversationSlot(toolId);this.recoverSubmittedAcks(route.sessionKey);
-            if(this.startingSessionKey===route.sessionKey)return this.toast('같은 채팅방의 GPT 작업을 이미 준비 중이에요.');
+            if(this.startBusy(route.sessionKey))return this.toast('같은 채팅방의 GPT 작업을 이미 준비 중이에요. 잠시 뒤 다시 눌러 주세요.');
             const settings=getSettings(),conversationMode=getToolConversationMode(toolId,settings),openMode=getToolOpenMode(toolId,settings);
             let state=getState(),session=getSession(state,route.sessionKey),createdJobId='';
             if(await this.handleExistingPending(route.sessionKey))return;
             state=getState();session=getSession(state,route.sessionKey);
-            this.startingSessionKey=route.sessionKey;const reservedPopup=openMode==='popup'&&!CGC_PLATFORM.mobile?ChatGptPopup.reserve(slotId,route.sessionKey,'',{focus:false}):null;
+            const startToken=this.beginStart(route.sessionKey);const reservedPopup=openMode==='popup'&&!CGC_PLATFORM.mobile?ChatGptPopup.reserve(slotId,route.sessionKey,'',{focus:false}):null;
             this.setInlineStatus('자료 확인 중',true);
             try{
                 state=getState();session=getSession(state,route.sessionKey);let slot=ensureConversationSlot(session,slotId);
@@ -7306,7 +7406,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 if(toolId==='memory1'&&failSlot.memory1State.awaitingResultJobId===createdJobId){failSlot.memory1State.awaitingResultJobId='';failSlot.memory1State.awaitingResultAt=0;}
                 if(toolId==='usernote'&&failSlot.usernoteState.awaitingResultJobId===createdJobId){failSlot.usernoteState.awaitingResultJobId='';failSlot.usernoteState.awaitingResultAt=0;}
                 saveState(failState);this.rollbackPendingJob(createdJobId,route.sessionKey,{phase:'dispatch',message:error.message||String(error),toast:false,status:'전송 실패'});
-            }ChatGptPopup.closeIfWaiting(reservedPopup);this.setInlineStatus();this.updatePanelStatus(error.message,true);this.toast(error.message,true);}finally{if(this.startingSessionKey===route.sessionKey)this.startingSessionKey='';}
+            }ChatGptPopup.closeIfWaiting(reservedPopup);this.setInlineStatus();this.updatePanelStatus(error.message,true);this.toast(error.message,true);}finally{this.endStart(startToken);}
         },
 
         async startTool(toolId, question='', options={}) {
@@ -7315,12 +7415,12 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             if(['memory1','memory2','usernote'].includes(toolId))return this.startStandaloneMemoryTool(toolId);
             const route=CrackAdapter.getRouteInfo();if(!route)return this.toast('크랙 채팅 세션에서만 사용할 수 있어요.',true);
             const {expectedSessionKey=''}=options||{};if(expectedSessionKey&&expectedSessionKey!==route.sessionKey)return this.toast('크랙 세션이 바뀌어 작업을 멈췄어요.',true);
-            this.recoverSubmittedAcks(route.sessionKey);if(this.startingSessionKey===route.sessionKey)return this.toast('같은 채팅방의 GPT 작업을 이미 준비 중이에요.');
+            this.recoverSubmittedAcks(route.sessionKey);if(this.startBusy(route.sessionKey))return this.toast('같은 채팅방의 GPT 작업을 이미 준비 중이에요. 잠시 뒤 다시 눌러 주세요.');
             const settings=getSettings(),customTask=isCustomTaskId(toolId)?customTaskDefinition(toolId,settings):null;if(isCustomTaskId(toolId)&&!customTask)return this.toast('이 커스텀 작업을 찾지 못했어요. 설정에서 다시 확인해 주세요.',true);const slotId=toolConversationSlot(toolId),conversationMode=getToolConversationMode(toolId,settings),openMode=getToolOpenMode(toolId,settings);let state=getState(),session=getSession(state,route.sessionKey),createdJobId='';
             if(toolId==='audit'){const notesEl=this.panel?.querySelector('#cgc-audit-notes');if(notesEl){session.auditNotes=cleanText(notesEl.value||'');saveState(state);}}
             if(await this.handleExistingPending(route.sessionKey))return;
             state=getState();session=getSession(state,route.sessionKey);
-            this.startingSessionKey=route.sessionKey;const reservedPopup=openMode==='popup'&&!CGC_PLATFORM.mobile?ChatGptPopup.reserve(slotId,route.sessionKey,'',{focus:false}):null;this.setInlineStatus('자료 확인 중',true);
+            const startToken=this.beginStart(route.sessionKey);const reservedPopup=openMode==='popup'&&!CGC_PLATFORM.mobile?ChatGptPopup.reserve(slotId,route.sessionKey,'',{focus:false}):null;this.setInlineStatus('자료 확인 중',true);
             try{
                 const fetched=await CrackAdapter.fetchMessages();const all=fetched.messages||[];if(!all.length)throw new Error('RP 로그를 찾지 못했어요.');state=getState();session=getSession(state,route.sessionKey);let slot=ensureConversationSlot(session,slotId);
                 // A custom task can switch between persistent and fresh-session delivery. Fresh runs do not
@@ -7367,7 +7467,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 const resetsBaseline=['BASELINE_REPLACE','SESSION_ROTATE'].includes(syncOp);const job={schema:12,protocol:APP.protocol,bridgeRevision:BRIDGE_REVISION,conversationSlot:slotId,scope:jobScopeOf({conversationSlot:slotId}),desiredChatTitle:`[${session.title||CrackAdapter.getTitle()}] ${ChatGptPopup.label(slotId)}`,displayLabel:customTask?.name||ChatGptPopup.label(slotId),id:jobId,batchId:uid('sync'),chainId:uid('chain'),partIndex:1,initialChain:syncOp==='BASELINE_INIT',resyncMode:resetsBaseline,resyncResetBaseline:resetsBaseline,conversationMode,openMode,syncTracking:!fresh,persistConversation:!fresh,sessionKey:route.sessionKey,storyId:route.storyId,episodeId:route.episodeId,title:session.title||CrackAdapter.getTitle(),toolId,requestedToolId:toolId,question,sessionResetAt:Number(runEpoch.sessionResetAt||0),slotResetAt:Number(runEpoch.slotResetAt||0),transportBaseRevision:Number(runEpoch.transportRevision||0),targetUrl:canonicalChatGptUrl(target)||CHATGPT_HOME,gptBaseUrl:getConfiguredGptUrl(settings),conversationUrl:(fresh||rotating)?'':(slot.url||''),messages:!fresh?batch.map(m=>({id:m.id,hash:m.hash})):[],contextHashUpdates:!fresh?compiled.refs.hashUpdates:{},contextChangedLabels:compiled.refs.changedLabels,contextInitializedAfter:!fresh,sourceCount:batch.length,sourceLabel:syncOp==='APPEND'?'신규 RP 원문':'RP 최신 기준선',sentCount:batch.length,remainingCount:0,transferMode:'txt',txtFileName,createdAt:Date.now(),syncOp,deliveryOp,branchCorrection:branchCorrection?cloneStateValue(branchCorrection):null,baselineLease:lease,rawCoverage:compiled.cov.rawCoverage,coverageQuality:compiled.cov.coverageQuality,acquisitionComplete:compiled.cov.acquisitionComplete===true,taskEvidenceComplete:compiled.cov.taskEvidenceComplete===true,sourceStatuses:compiled.refs.statuses||[],payloadChars:fullPrompt.length,appendedSourceChars,componentHashes:compiled.hashes,transportRevision:Number(transportAfter.revision||0),transportCursorAfter:{...transportAfter,lastJobId:jobId}};
                 await cgcAssertRunEpoch(route.sessionKey,slotId,runEpoch,{checkTransport:slotIsSync(slotId)&&!fresh});
                 createdJobId=jobId;setPendingJob(session,jobId,slotId);saveState(state);writeJobBundle(job,{jobId,prompt,attachment,recordPreview:makeRecordPreview(fullPrompt),createdAt:Date.now()});this.setInlineStatus('GPT 전달 중',true);this.updatePanelStatus(`TXT 1개 · ${syncOp} · ${openMode==='popup'?'팝업':'새 탭'}으로 전달 중...`);const handoff=await dispatchJobToChatGpt(job,settings,reservedPopup);this.setInlineStatus(handoff.mode==='reused'?(handoff.surfaceMode==='popup'?'기존 GPT 작은 창 전달':'기존 GPT 탭 전달'):handoff.surfaceMode==='popup'?'GPT 작은 창 열림':'GPT 새 탭 열림',true);this.watchJobProgress(jobId,route.sessionKey);
-            }catch(error){console.error(`[${APP.id}] start tool failed`,error);if(createdJobId)this.rollbackPendingJob(createdJobId,route.sessionKey,{phase:'dispatch',message:error.message||String(error),toast:false,status:'전송 실패'});ChatGptPopup.closeIfWaiting(reservedPopup);this.setInlineStatus();this.updatePanelStatus(error.message,true);this.toast(error.message,true);}finally{if(this.startingSessionKey===route.sessionKey)this.startingSessionKey='';}
+            }catch(error){console.error(`[${APP.id}] start tool failed`,error);if(createdJobId)this.rollbackPendingJob(createdJobId,route.sessionKey,{phase:'dispatch',message:error.message||String(error),toast:false,status:'전송 실패'});ChatGptPopup.closeIfWaiting(reservedPopup);this.setInlineStatus();this.updatePanelStatus(error.message,true);this.toast(error.message,true);}finally{this.endStart(startToken);}
         },
 
         watchJobProgress(jobId, sessionKey) {
@@ -7536,9 +7636,17 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             let state=getState(),session=getSession(state,sessionKey),id=getPendingJobId(session);
             if(!id)return false;
             await hydrateAsyncJobStorage(id);
+            // v1.4.1: iOS delivers no change events while Crack sits suspended behind the ChatGPT tab. Read the
+            // shared records fresh so a delivered job is applied, and the same tap goes on to send.
+            const cleared=()=>getPendingJobId(getSession(getState(),sessionKey))!==id;
+            if(CGC_ASYNC_GM_STORAGE){
+                await Promise.allSettled([KEY.state,KEY.roomCheckpoints,KEY.ack,KEY.error,KEY.progress,KEY.submitted].map(refreshAsyncStorageKey));
+                this.recoverSubmittedAcks(sessionKey);
+                if(cleared())return false;
+            }
             const slotId=session.transport?.pendingSlot||'audit';
             const ack=readValue(KEY.ack,null),error=readValue(KEY.error,null);
-            if(ack?.jobId===id&&ack?.sessionKey===sessionKey){this.applyAck(ack,{allowLate:true,silent:true});return true;}
+            if(ack?.jobId===id&&ack?.sessionKey===sessionKey){this.applyAck(ack,{allowLate:true,silent:true});if(cleared())return false;}
             if(error?.jobId===id&&error?.sessionKey===sessionKey){this.rollbackPendingJob(id,sessionKey,{phase:error.phase||'error',message:error.message||'GPT 전송 실패',status:'전송 복구'});return false;}
 
             const job=readJob(id),receipt=readValue(WebDelivery.key(id),null),now=Date.now(),age=now-Number(job?.createdAt||receipt?.at||0);
@@ -7577,6 +7685,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             }
 
             if(receipt&&['submitted','result'].includes(receipt.phase)){
+                if(receipt.ack?.jobId===id){this.applyAck(receipt.ack,{allowLate:true,silent:true});if(cleared())return false;}
                 this.toast('이전 요청은 이미 GPT에 전달됐어요. 답변 확인을 이어갑니다.');
                 void this.openCurrentGpt(slotId);return true;
             }
@@ -7597,9 +7706,32 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 return false;
             }
 
+            // Mobile tabs cannot be watched for closing (no window handle), so "tap again to cancel" never
+            // fired there and the room stayed blocked for the job's full 15-minute lifetime. Ask instead.
+            if(CGC_PLATFORM.mobile&&!recentProgress&&age>=CGC_MOBILE_PENDING_GRACE_MS)return this.offerMobileResend(id,sessionKey);
             this.setInlineStatus('GPT 시작 대기',true);this.refreshPanel();
-            this.toast('GPT 창이 아직 시작 중이에요. 창을 닫았다면 다시 누르면 자동으로 취소돼요.');
+            this.toast(CGC_PLATFORM.mobile?'ChatGPT 탭이 작업을 받는 중이에요. ChatGPT 탭을 확인하거나 잠시 뒤 다시 눌러 주세요.':'GPT 창이 아직 시작 중이에요. 창을 닫았다면 다시 누르면 자동으로 취소돼요.');
             return true;
+        },
+        async offerMobileResend(id,sessionKey){
+            this.setInlineStatus('GPT 시작 대기',true);this.refreshPanel();
+            if(!confirm('ChatGPT 탭이 아직 이 작업을 받지 못했어요.\n(iPhone Safari는 뒤에 있는 탭을 멈추기 때문에 탭이 로딩 중에 멈췄거나 닫혔을 수 있어요.)\n\n확인: 이전 요청을 취소하고 지금 다시 보내기\n취소: 그대로 두고 ChatGPT 탭 확인하기'))return true;
+            // The dialog can stay open for a while; a ChatGPT tab may have taken the job meanwhile.
+            await hydrateAsyncJobStorage(id);
+            if(CGC_ASYNC_GM_STORAGE)await Promise.allSettled([KEY.state,KEY.ack,KEY.progress,KEY.submitted].map(refreshAsyncStorageKey));
+            this.recoverSubmittedAcks(sessionKey);
+            if(getPendingJobId(getSession(getState(),sessionKey))!==id)return false;
+            const receipt=readValue(WebDelivery.key(id),null),progress=readValue(KEY.progress,null);
+            if(receipt||(progress?.jobId===id&&Date.now()-Number(progress.at||0)<30000)){
+                this.toast('확인하는 동안 ChatGPT 탭이 작업을 받았어요. 중복 전송을 막기 위해 다시 보내지 않습니다.',true);this.refreshPanel();return true;
+            }
+            // A cancelled receipt is final for the ChatGPT side too: it re-reads the receipt right before
+            // clicking send, so a tab that wakes up later stands down instead of sending twice.
+            this.rollbackPendingJob(id,sessionKey,{phase:'mobile_resend',status:'다시 보내기',forceUnsubmitted:true});
+            await flushStorageWrites().catch(()=>{});
+            if(getPendingJobId(getSession(getState(),sessionKey))===id){this.toast('이전 요청 상태가 바뀌어 다시 보내지 않았어요.',true);return true;}
+            this.toast('이전 요청을 취소했어요. 지금 다시 보냅니다.');
+            return false;
         },
         async releaseUnsentDelivery(){
             const route=CrackAdapter.getRouteInfo();if(!route)return;
@@ -7862,7 +7994,10 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             if(here)return {kind:'run',group:'todo',chip:'GPT 입력 전달 중'};
             if(slot.lastRequestId&&slot.lastAnswerJobId!==slot.lastRequestId){
                 const tx=(session.transmissions||[]).find(row=>row?.jobId===slot.lastRequestId),age=Date.now()-Number(tx?.createdAt||slot.lastSyncAt||Date.now());
-                return age>10*60*1000?{kind:'att',group:'todo',chip:'GPT 답변 확인 필요'}:{kind:'run',group:'todo',chip:'GPT 답변 생성 중'};
+                // A suspended iOS ChatGPT tab cannot report its finished answer, so on mobile an old unanswered
+                // request is the normal state until that tab is opened again, not something that needs attention.
+                if(age>10*60*1000)return CGC_PLATFORM.mobile?{kind:'run',group:'todo',chip:'GPT 탭에서 답변 확인'}:{kind:'att',group:'todo',chip:'GPT 답변 확인 필요'};
+                return {kind:'run',group:'todo',chip:'GPT 답변 생성 중'};
             }
             if(slot.lastRequestId&&slot.lastAnswerJobId===slot.lastRequestId)return {kind:'done',group:'ready',chip:'GPT 답변 완료 ✓'};
             return {kind:'',group:'ready',chip:slot.url?'전용 대화 연결됨':'처음 실행 전'};
@@ -7871,7 +8006,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             const host=this.panel?.querySelector('#cgc-custom-list'),heading=this.panel?.querySelector('#cgc-custom-heading'),countEl=this.panel?.querySelector('#cgc-custom-count');if(!host||!heading)return;
             const settings=getSettings(),tasks=settings.customTasks||[],pending=getPendingJobId(session);heading.hidden=!tasks.length;if(countEl)countEl.textContent=String(tasks.length);
             if(!tasks.length){host.innerHTML='';return;}
-            const html=tasks.map((task,index)=>{const slot=ensureConversationSlot(session,task.id),here=pending&&session.transport?.pendingSlot===task.id,receipt=here?readValue(WebDelivery.key(pending),null):null,answered=!here&&slot.lastRequestId&&slot.lastAnswerJobId===slot.lastRequestId,awaiting=!here&&slot.lastRequestId&&slot.lastAnswerJobId!==slot.lastRequestId,tx=awaiting?(session.transmissions||[]).find(row=>row?.jobId===slot.lastRequestId):null,answerStale=awaiting&&Date.now()-Number(tx?.createdAt||slot.lastSyncAt||Date.now())>10*60*1000,status=here?(receipt?.phase==='uncertain'?'제출 여부 확인 필요':receipt?.phase==='submitting'?'전송 확인 중':'GPT 입력 전달 중'):awaiting?(answerStale?'GPT 답변 확인 필요':'GPT 답변 생성 중'):answered?'GPT 답변 완료 ✓':(task.conversationMode==='fresh_full'?'매번 새 GPT 대화':slot.url?'전용 대화 연결됨':'처음 실행 전'),mode=this.MODE_LABEL[task.conversationMode]||'이어보내기',sourceCount=(task.sources||[]).filter(key=>isSourceGloballyEnabled(key,settings)).length,openOnly=here||awaiting;return `<article class="job st ${openOnly?'run':''}" data-custom-row="${escapeHtml(task.id)}" style="--i:${index+8}"><button class="job-main" ${openOnly?`data-action="open-slot" data-slot="${escapeHtml(task.id)}"`:`data-action="custom-run" data-custom-id="${escapeHtml(task.id)}"`}><span class="ic">${this.uiIcon('note')}</span><span class="tx"><span class="a">${escapeHtml(task.name)}</span><span class="desc">내 지침 + RP 로그${sourceCount?` · 참고자료 ${sourceCount}개`:''}</span><span class="meta"><span class="chip ${openOnly||answered?'on':''}" data-custom-status="${escapeHtml(task.id)}">${escapeHtml(status)}</span><span class="chip ${this.uiCustomCounts?.[task.id]?.on?'on':''}" data-custom-count="${escapeHtml(task.id)}">${escapeHtml(this.uiCustomCounts?.[task.id]?.label||'로그 확인 중')}</span><span class="chip">${escapeHtml(mode)}</span></span></span><span class="right">${this.uiIcon('chev','sm')}</span></button>${openOnly?`<div class="job-extra"><button class="mn" data-action="open-slot" data-slot="${escapeHtml(task.id)}">GPT에서 확인</button>${here&&(!receipt||receipt?.phase==='uncertain')?'<button class="mn" data-action="release-unsent">미전송 확정</button>':''}</div>`:''}</article>`;}).join('');
+            const html=tasks.map((task,index)=>{const slot=ensureConversationSlot(session,task.id),here=pending&&session.transport?.pendingSlot===task.id,receipt=here?readValue(WebDelivery.key(pending),null):null,answered=!here&&slot.lastRequestId&&slot.lastAnswerJobId===slot.lastRequestId,awaiting=!here&&slot.lastRequestId&&slot.lastAnswerJobId!==slot.lastRequestId,tx=awaiting?(session.transmissions||[]).find(row=>row?.jobId===slot.lastRequestId):null,answerStale=awaiting&&Date.now()-Number(tx?.createdAt||slot.lastSyncAt||Date.now())>10*60*1000,status=here?(receipt?.phase==='uncertain'?'제출 여부 확인 필요':receipt?.phase==='submitting'?'전송 확인 중':'GPT 입력 전달 중'):awaiting?(answerStale?(CGC_PLATFORM.mobile?'GPT 탭에서 답변 확인':'GPT 답변 확인 필요'):'GPT 답변 생성 중'):answered?'GPT 답변 완료 ✓':(task.conversationMode==='fresh_full'?'매번 새 GPT 대화':slot.url?'전용 대화 연결됨':'처음 실행 전'),mode=this.MODE_LABEL[task.conversationMode]||'이어보내기',sourceCount=(task.sources||[]).filter(key=>isSourceGloballyEnabled(key,settings)).length,openOnly=here||awaiting;return `<article class="job st ${openOnly?'run':''}" data-custom-row="${escapeHtml(task.id)}" style="--i:${index+8}"><button class="job-main" ${openOnly?`data-action="open-slot" data-slot="${escapeHtml(task.id)}"`:`data-action="custom-run" data-custom-id="${escapeHtml(task.id)}"`}><span class="ic">${this.uiIcon('note')}</span><span class="tx"><span class="a">${escapeHtml(task.name)}</span><span class="desc">내 지침 + RP 로그${sourceCount?` · 참고자료 ${sourceCount}개`:''}</span><span class="meta"><span class="chip ${openOnly||answered?'on':''}" data-custom-status="${escapeHtml(task.id)}">${escapeHtml(status)}</span><span class="chip ${this.uiCustomCounts?.[task.id]?.on?'on':''}" data-custom-count="${escapeHtml(task.id)}">${escapeHtml(this.uiCustomCounts?.[task.id]?.label||'로그 확인 중')}</span><span class="chip">${escapeHtml(mode)}</span></span></span><span class="right">${this.uiIcon('chev','sm')}</span></button>${openOnly?`<div class="job-extra"><button class="mn" data-action="open-slot" data-slot="${escapeHtml(task.id)}">GPT에서 확인</button>${here&&(!receipt||receipt?.phase==='uncertain')?'<button class="mn" data-action="release-unsent">미전송 확정</button>':''}</div>`:''}</article>`;}).join('');
             cgcSetUiHtml(host,html);
         },
         renderWorkStatusAndResults(session) {
@@ -7932,7 +8067,9 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             if(!this.panel)return;
             const route=CrackAdapter.getRouteInfo();session=session||(route?cgcUiSession(route.sessionKey):null);
             const cta=this.panel.querySelector('#cgc-audit-cta'),count=this.dashUnsentCount;
-            if(cta){const blocked=!!this.dashAttention;cta.disabled=blocked;cta.classList.toggle('calm',blocked||count===0);cta.querySelector('span').textContent=blocked?'확인 후 진행할 수 있어요':count===0?'그래도 검사하기':'찐빠 검사 시작';}
+            // v1.4.1: never disable the CTA. A disabled button swallowed every tap without a word on iOS, where
+            // the ChatGPT tab cannot report back while suspended; the start path explains or resolves what is pending.
+            if(cta){const pending=Boolean(session&&getPendingJobId(session)),blocked=pending||!!this.dashAttention;cta.disabled=false;cta.classList.toggle('calm',blocked||count===0);cta.querySelector('span').textContent=pending?'이전 요청 확인 후 검사':count===0?'그래도 검사하기':'찐빠 검사 시작';}
             const latest=(session?.transmissions||[]).find(r=>r.toolId==='audit'),time=Number(latest?.submittedAt||latest?.createdAt||0),last=this.panel.querySelector('#cgc-last-audit-time');if(last)last.textContent=time?new Date(time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'아직 없음';
             const sources=this.referenceSnapshot?.sources||{},memory=sources.longMemory,note=sources.userNote,lore=sources.lore;
             const values={memory:memory?.available&&Number.isFinite(memory.count)?`${memory.count.toLocaleString()}칸`:'—',usernote:note?.available?`${String(note.text||'').length.toLocaleString()}자`:'—',lore:lore?.available&&Number.isFinite(lore.packCount)&&Number.isFinite(lore.count)?`${lore.packCount}팩 · ${lore.count}개`:'—'};
@@ -10406,7 +10543,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 const event=this.completionEvent(job,fresh,verified);
                 fresh.answerCompletedAt=event.completedAt;
                 await WebDelivery.save(fresh);
-                writeCompletionEvent(event);await flushStorageWrites();
+                writeCompletionEvent(event);await flushStorageWrites();this.mobileDoneCue(job);
                 void CompanionTaskUI.refresh(fresh).catch(()=>{});
                 void CgcReturnDelivery.publishSaved(fresh).catch(error=>console.warn('[cgc] return wake',error));
                 return true;
@@ -10416,7 +10553,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             receipt.answerFinishedAt=Number(receipt.answerFinishedAt||event.completedAt);
             receipt.answerCompletedAt=event.completedAt;receipt.answerVerified=verified;
             await WebDelivery.save(receipt);
-            writeCompletionEvent(event);await flushStorageWrites();
+            writeCompletionEvent(event);await flushStorageWrites();this.mobileDoneCue(job);
             void CompanionTaskUI.refresh(receipt).catch(()=>{});
             if(text)this.queueAnswerHistory(job,receipt,text,verified);
             void CgcReturnDelivery.publishSaved(receipt).catch(error=>console.warn('[cgc] return wake',error));
@@ -10680,6 +10817,13 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             }finally{this.harvestingJobs.delete(job.id);}
         },
 
+        // v1.4.1: iOS Safari has no notifications or sound for a page in another tab, and the Crack tab is
+        // suspended until it is opened again. Say it here, where the user is looking, once per job.
+        mobileDoneCue(job){
+            if(!CGC_PLATFORM.mobile||!job?.id||document.visibilityState==='hidden')return;
+            const shown=this.doneCueIds||(this.doneCueIds=new Set());if(shown.has(job.id))return;shown.add(job.id);
+            this.localToast(`${jobDisplayLabel(job)} · GPT 답변 완료. 크랙 탭으로 돌아가면 자동으로 반영돼요.`);
+        },
         async confirmAutoSubmitted(job,submittedPrompt='',assistantBefore={}) {
             this.scheduleConversationRename(job); // No await: do not wait for link publication or submitted ACK.
             let conversationUrl=persistentConversationUrl(location.href);
