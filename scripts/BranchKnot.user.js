@@ -12,6 +12,8 @@
 // @run-at       document-idle
 // ==/UserScript==
 
+// 아이콘: Tabler Icons (MIT)
+
 (() => {
   'use strict';
 
@@ -20,7 +22,7 @@
   pageWindow.__crackBranchKnotRunning = true;
 
   const APP = Object.freeze({
-    version: '1.1.3',
+    version: '1.1.4',
     apiBase: 'https://crack-api.wrtn.ai/crack-gen',
     listPageSize: 40,
     messagePageSize: 300,
@@ -1555,6 +1557,7 @@ body[data-theme="dark"] .cbk-origin.is-cur{background:#8cc59e;color:#122018}`;
       ensureUi();
     }, 400);
   });
-  observer.observe(document.body, { childList: true, subtree: true });
+  // 채팅 목록은 스크롤할 때 행을 지우지 않고 주소(href)만 바꿔 다른 방으로 재사용하므로, 주소 변화도 지켜봅니다.
+  observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['href'] });
   ensureUi();
 })();
