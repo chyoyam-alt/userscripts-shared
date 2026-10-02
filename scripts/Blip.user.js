@@ -146,7 +146,7 @@
     const path = location.pathname;
     let m = path.match(/^\/stories\/([^/]+)\/episodes\/([^/?#]+)/);
     if (m) return { page: 'story', key: m[1] };
-    m = path.match(/^\/stories\/([^/]+)\/parties\/(?!(?:new|enter|host|invitations)(?:[/?#]|$))([^/?#]+)/);
+    m = path.match(/^\/stories\/([^/]+)\/parties\/(?!new\/?$)([^/?#]+)\/?$/);
     if (m) return { page: 'party', key: m[1] };
     m = path.match(/^\/characters\/([^/]+)\/chats\/([^/?#]+)/);
     if (m) return { page: 'character', key: `c:${m[1]}` };

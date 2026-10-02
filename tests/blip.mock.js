@@ -192,9 +192,9 @@ HP 100 / MP 30
   await pg.waitForFunction(() => window.__done === 1, null, { timeout: 30000 });
   const party = await pg.evaluate(() => window.__cblLog);
   console.log(party.some(e => e.result === 'played' && e.speaker === '리나') ? '  ✓ 파티챗 소리' : '  ✗ 파티챗 무음', JSON.stringify(party.map(e => (e.role || e.skip) + ':' + (e.result || ''))));
-  await pg.goto('https://crack.wrtn.ai/stories/s1/parties/new');
+  await pg.goto('https://crack.wrtn.ai/stories/s1/parties/p1/enter');
   await pg.waitForTimeout(3200);
-  console.log((await pg.locator('.cbl-hbtn').count()) === 0 ? '  ✓ 파티 만들기 화면엔 버튼 없음' : '  ✗ 파티 만들기 화면에 버튼');
+  console.log((await pg.locator('.cbl-hbtn').count()) === 0 ? '  ✓ 파티 입장 화면엔 버튼 없음' : '  ✗ 파티 입장 화면에 버튼');
   await pg.goto('https://crack.wrtn.ai/characters/ch1/chats/c9');
   await pg.waitForTimeout(1300);
 

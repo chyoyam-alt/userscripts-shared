@@ -557,7 +557,7 @@
   const isDelim = ch => ch === '*' || ch === '_' || ch === '~';
 
   // 선택한 글(oldText)과 새 글을 앞뒤로 비교해 실제로 달라진 가운데만 원문에서 바꿉니다. 그래서 서식 기호는 대부분 제자리에 남습니다.
-  // 바뀌는 자리 안에 기울임·굵게 기호가 아닌 것(목록·인용·링크·이미지·이스케이프)이 끼어 있으면 null → 원문 창으로 넘깁니다.
+  // 바꾸면 서식이 깨질 수 있는 경우는 null을 돌려주고, 그때는 원문 창으로 넘깁니다.
   function planSplice(src, mapped, replacement) {
     const old = mapped.oldText;
     const vpos = mapped.vpos;
@@ -580,37 +580,68 @@
     const changed = new Set(vpos.slice(p, oldEnd));
     let kept = '';
     for (let i = a; i < b; i += 1) if (!changed.has(i)) kept += src[i];
-    if (kept && !/^[*_~]+$/.test(kept)) return null;
-    if (!ins) [a, b] = tidyDelete(src, a, b, kept);
+    const removed = src.slice(a, b);
+    // 바뀌는 가운데에 기울임·굵게 기호가 끼어 있으면 그 기호를 새 글 바로 뒤에 둡니다.
+    // 기호 양옆이 글자일 때만 서식이 유지되므로, 공백·줄바꿈이 닿거나 다른 기호(목록·링크·이스케이프)가 끼면 원문 창으로 넘깁니다.
+    if (kept) {
+      if (!/^[*_~]+$/.test(kept) || removed.includes('\n') || ins.includes('\n')) return null;
+      const before = ins ? ins[ins.length - 1] : src[a - 1];
+      const after = src[b];
+      if (!before || !after || SPACE.test(before) || SPACE.test(after)) return null;
+    }
+    // 서식이 있는 문단 안에 줄바꿈을 넣으면 기울임이 풀려 별표가 보이므로 원문 창에서 합니다.
+    if (ins.includes('\n')) {
+      const ps = src.lastIndexOf('\n\n', a);
+      const pe = src.indexOf('\n\n', b);
+      if (/[*_~`]/.test(src.slice(ps < 0 ? 0 : ps, pe < 0 ? src.length : pe))) return null;
+    }
+    // 줄을 합치면 다음 줄 앞의 목록·인용·제목 기호가 글자로 남으므로 원문 창에서 합니다.
+    if (removed.includes('\n')) {
+      const lineAt = src.lastIndexOf('\n', b - 1) + 1;
+      if (lineAt > a && /^[ \t]*(?:>|(?:\d{1,9}[.)]|[-+*]|#{1,6})[ \t])/.test(src.slice(lineAt))) return null;
+    }
+    if (!ins && !kept) [a, b] = tidyDelete(src, a, b);
     return { a, b, ins, kept, next: src.slice(0, a) + ins + kept + src.slice(b) };
   }
 
+  const isBlank = ch => ch === ' ' || ch === '\t';
+  const CLOSE_NEXT = /[\s.,!?…~"'”’」』)\]]/;
+
   // 지운 뒤 서식이 깨지지 않게 다듬습니다.
-  // 1) *글*의 글을 통째로 지우면 남는 빈 기호 쌍(**, ****)도 지웁니다.
-  // 2) 기호 바로 앞뒤에 공백이 남으면(*글 *, * 글*) 그 공백도 지웁니다. 크랙에서는 기울임이 풀려 별표가 그대로 보이기 때문입니다.
-  function tidyDelete(src, a, b, kept) {
-    if (!kept) {
-      for (let guard = 0; guard < 3; guard += 1) {
-        const left = /[*_~]+$/.exec(src.slice(Math.max(0, a - 4), a))?.[0] || '';
-        const right = /^[*_~]+/.exec(src.slice(b, b + 4))?.[0] || '';
-        if (!left || !right) break;
-        const ch = right[0];
-        let l = 0;
-        while (l < left.length && left[left.length - 1 - l] === ch) l += 1;
-        let r = 0;
-        while (r < right.length && right[r] === ch) r += 1;
-        const k = Math.min(l, r);
-        if (!k) break;
-        a -= k;
-        b += k;
-      }
+  // 1) *글*·`코드`의 글을 통째로 지우면 남는 빈 기호 쌍(**, ****, ``)도 지웁니다.
+  // 2) 닫는 기호 바로 앞(*글 *)이나 여는 기호 바로 뒤(* 글*)에 공백이 남으면 그 공백을 지웁니다.
+  //    크랙에서는 이럴 때 기울임이 풀려 별표가 그대로 보이기 때문입니다. 단어 사이 공백(**철수** 학교)은 건드리지 않습니다.
+  function tidyDelete(src, a, b) {
+    for (let guard = 0; guard < 3; guard += 1) {
+      const left = /[*_~`]+$/.exec(src.slice(Math.max(0, a - 4), a))?.[0] || '';
+      const right = /^[*_~`]+/.exec(src.slice(b, b + 4))?.[0] || '';
+      if (!left || !right) break;
+      const ch = right[0];
+      let l = 0;
+      while (l < left.length && left[left.length - 1 - l] === ch) l += 1;
+      let r = 0;
+      while (r < right.length && right[r] === ch) r += 1;
+      const k = Math.min(l, r);
+      if (!k) break;
+      a -= k;
+      b += k;
     }
-    const next = kept ? kept[0] : src[b];
+    const closerAt = i => {
+      if (!isDelim(src[i])) return false;
+      let j = i;
+      while (isDelim(src[j])) j += 1;
+      return j >= src.length || CLOSE_NEXT.test(src[j]);
+    };
+    const openerBefore = i => {
+      let j = i;
+      while (j > 0 && isDelim(src[j - 1])) j -= 1;
+      return j < i && (j === 0 || SPACE.test(src[j - 1]));
+    };
     const lineStart = a === 0 || src[a - 1] === '\n';
-    if (/[ \t]/.test(src[a - 1] || '') && (next === undefined || next === '\n' || isDelim(next))) {
-      while (a > 0 && /[ \t]/.test(src[a - 1])) a -= 1;
-    } else if (!kept && /[ \t]/.test(src[b] || '') && (lineStart || isDelim(src[a - 1]))) {
-      while (b < src.length && /[ \t]/.test(src[b])) b += 1;
+    if (isBlank(src[a - 1]) && (b >= src.length || src[b] === '\n' || closerAt(b))) {
+      while (a > 0 && isBlank(src[a - 1])) a -= 1;
+    } else if (isBlank(src[b]) && (lineStart || openerBefore(a))) {
+      while (b < src.length && isBlank(src[b])) b += 1;
     }
     return [a, b];
   }
@@ -1264,7 +1295,7 @@ textarea:focus{box-shadow:inset 0 0 0 1.5px var(--pink)}
     if (mode === 'erase') {
       const plan = planSplice(target.content, mapped, '');
       if (!plan) {
-        sourceFallback(target, [mapped.a, mapped.b], '목록·링크 같은 서식이 섞여 있어서 원문 창으로 열었어요.');
+        sourceFallback(target, [mapped.a, mapped.b], '고치면 서식(기울임·목록·링크)이 깨질 수 있어서 원문 창으로 열었어요.');
         return;
       }
       try {
@@ -1372,7 +1403,7 @@ textarea:focus{box-shadow:inset 0 0 0 1.5px var(--pink)}
         const plan = planSplice(target.content, mapped, replacement);
         if (!plan) {
           closePop();
-          sourceFallback(target, [mapped.a, mapped.b], '목록·링크 같은 서식이 섞여 있어서 원문 창으로 열었어요.');
+          sourceFallback(target, [mapped.a, mapped.b], '고치면 서식(기울임·목록·링크)이 깨질 수 있어서 원문 창으로 열었어요.');
           return;
         }
         result = await commitEdit(target, plan, { kind: 'pin', before: mapped.oldText, after: replacement });

@@ -43,6 +43,7 @@ const MOCK = String.raw`
     let h = esc(t);
     h = h.replace(/!\[[^\]]*\]\(([^)]*)\)/g, '<img src="$1" alt="">');
     h = h.replace(/\[([^\]]+)\]\(([^)]*)\)/g, '<a href="$2">$1</a>');
+    h = h.replace(/\`([^\`]+)\`/g, '<code>$1</code>');
     h = h.replace(/\*\*(?=\S)([^*]*?\S)\*\*/g, '<strong>$1</strong>');
     h = h.replace(/\*(?=\S)([^*]*?\S)\*/g, '<em>$1</em>');
     h = h.replace(/\u0001(\d)\u0002/g, (m, i) => esc(ENT[Object.keys(ENT)[i]]));
@@ -273,8 +274,14 @@ const msg = (n, content, role = 'assistant', chat = CHAT) => ({ _id: M(n), chatI
       msg(11, 'Tom &amp; Jerry 놀이'),
       msg(12, '[//]: <> (서윤은 화가 났다. 오늘은 비)\n\n서윤은 화가 났다. 오늘은 비가 왔다.'),
       msg(13, '<!-- 메모 -->\n\n서윤은 웃었다.'),
+      msg(14, '**철수**는 학교에 갔다.'),
+      msg(15, '그는 *한숨*을 쉬었다.'),
+      msg(16, '말했다. *그리고 웃었다.*'),
+      msg(17, '*그는 웃었다.*'),
+      msg(18, '- 첫째\n- 둘째'),
+      msg(19, '이건 `코드` 다'),
     ],
-    groups: [[M(1)], [M(2)], [M(3)], [M(5), M(6)], [M(7)], [M(8)], [M(9)], [M(10)], [M(11)], [M(12)], [M(13)]],
+    groups: [[M(1)], [M(2)], [M(3)], [M(5), M(6)], [M(7)], [M(8)], [M(9)], [M(10)], [M(11)], [M(12)], [M(13)], [M(14)], [M(15)], [M(16)], [M(17)], [M(18)], [M(19)]],
   };
   await scenario(browser, story, async T => {
     const { pg, server } = T;
@@ -335,6 +342,28 @@ const msg = (n, content, role = 'assistant', chat = CHAT) => ({ _id: M(n), chatI
     check('[//]: <> 주석은 그대로, 보이는 글만', server[M(12)] === '[//]: <> (서윤은 화가 났다. 오늘은 비)\n\n서윤은 기분이 좋았다. 오늘은 비가 왔다.', JSON.stringify(server[M(12)]));
     await T.edit(M(13), '웃었다', '울었다');
     check('글자 그대로 보이는 HTML 주석', server[M(13)] === '<!-- 메모 -->\n\n서윤은 울었다.', JSON.stringify(server[M(13)]));
+
+    // 2차 검토에서 나온 경우들
+    await T.erase(M(14), '는');
+    check('굵은 이름 뒤 조사 지우기 → 띄어쓰기 유지', server[M(14)] === '**철수** 학교에 갔다.', JSON.stringify(server[M(14)]));
+    await T.erase(M(15), '을');
+    check('기울임 뒤 조사 지우기 → 띄어쓰기 유지', server[M(15)] === '그는 *한숨* 쉬었다.', JSON.stringify(server[M(15)]));
+    await T.erase(M(16), '말했다. 그리고');
+    check('여는 기호를 넘는 지우기는 원문 창으로', (await T.pop()).startsWith('원문 고치기') && server[M(16)] === '말했다. *그리고 웃었다.*', JSON.stringify(server[M(16)]));
+    await pg.keyboard.press('Escape');
+    await T.select(M(17), '웃었다.');
+    await T.click('.tb [data-act="edit"]'); await pg.waitForTimeout(200);
+    await pg.keyboard.press('End'); await pg.keyboard.press('Shift+Enter'); await pg.keyboard.press('Shift+Enter'); await pg.keyboard.type('그리고 떠났다.');
+    await pg.keyboard.press('Enter'); await pg.waitForTimeout(700);
+    check('기울임 안에 문단 넣기는 원문 창으로', (await T.pop()).startsWith('원문 고치기') && server[M(17)] === '*그는 웃었다.*', JSON.stringify(server[M(17)]));
+    await pg.keyboard.press('Escape');
+    await T.select(M(18), '첫째둘째');
+    await T.click('.tb [data-act="edit"]'); await pg.waitForTimeout(200);
+    await pg.keyboard.press('Control+A'); await pg.keyboard.type('첫째와 둘째'); await pg.keyboard.press('Enter'); await pg.waitForTimeout(700);
+    check('목록 줄 합치기는 원문 창으로', (await T.pop()).startsWith('원문 고치기') && server[M(18)] === '- 첫째\n- 둘째', JSON.stringify(server[M(18)]));
+    await pg.keyboard.press('Escape');
+    await T.erase(M(19), '코드');
+    check('인라인 코드 통째로 지우기 → `` 안 남음', !server[M(19)].includes('``'), JSON.stringify(server[M(19)]));
 
     // 크랙 수정창으로 고친 것 기록
     await pg.evaluate(id => { const m = window.__store.getState().messages.get(id); return window.__actions.updateMessage(m, m.content.replace('둘러본다', '천천히 둘러본다')); }, M(2));
