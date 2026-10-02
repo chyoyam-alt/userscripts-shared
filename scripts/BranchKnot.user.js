@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🌳 Crack Branch Knot (갈래 매듭)
 // @namespace    crack-branch-knot
-// @version      1.1.3
+// @version      1.1.4
 // @description  분기로 갈라진 채팅방을 원본 방에 매듭지어 나무 모양 지도로 보여줍니다. 채팅방 상단과 채팅 목록에서 열고, 채팅 목록에는 원본 방과 분기 방을 표시합니다.
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/BranchKnot.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/BranchKnot.user.js
@@ -22,7 +22,7 @@
   pageWindow.__crackBranchKnotRunning = true;
 
   const APP = Object.freeze({
-    version: '1.1.3',
+    version: '1.1.4',
     apiBase: 'https://crack-api.wrtn.ai/crack-gen',
     listPageSize: 40,
     messagePageSize: 300,
@@ -1557,6 +1557,7 @@ body[data-theme="dark"] .cbk-origin.is-cur{background:#8cc59e;color:#122018}`;
       ensureUi();
     }, 400);
   });
-  observer.observe(document.body, { childList: true, subtree: true });
+  // 채팅 목록은 스크롤할 때 행을 지우지 않고 주소(href)만 바꿔 다른 방으로 재사용하므로, 주소 변화도 지켜봅니다.
+  observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['href'] });
   ensureUi();
 })();
