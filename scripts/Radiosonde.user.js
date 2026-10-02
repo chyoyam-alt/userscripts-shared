@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         📡 Crack Radiosonde (라디오존데)
 // @namespace    igx-radiosonde-live
-// @version      4.3.10
+// @version      4.4.0
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/Radiosonde.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/Radiosonde.user.js
 // @description  크랙(wrtn) 입력창에 Fable 5와 최신 IGX 라디오존데 모델 점수를 표시합니다.
@@ -9,6 +9,7 @@
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @connect      rs.igx.kr
+// @connect      igx-radiosonde-api-striker.b-cdn.net
 // @connect      claude-radiosonde.chyoyam.chatgpt.site
 // ==/UserScript==
 
@@ -16,6 +17,12 @@
   "use strict";
 
   /**
+   * 4.4.0 - 모바일 합본(Radiosonde 4.5.3) 데이터 취득부 이식
+   * - rs.igx.kr/api/v2/*가 CORS 없는 CDN으로 307 리다이렉트되어 수치가 비던 문제 수정
+   * - CDN(igx-radiosonde-api-striker.b-cdn.net/v2/)을 직접 호출하고 rs.igx.kr은 확장 전송 폴백으로만 사용
+   * - 모델 목록: 대시보드 + /v2/models 병합, 6시간 localStorage 캐시, 실패 시 다음 갱신에서 재시도
+   * - deepseek-v4.1-flash 같은 v접두 버전 파싱, Fable 약자, 상태 별칭 보강, 기본 모델 목록 갱신
+   *
    * 4.3.4 - 공식 v2 simple API 우선 사용, 통계 모델 ID 전달 및 최신 기록 선택 수정
    * - 대시보드 한국어 초 파싱 수정, 내부 지연시간 단위 ms로 통일
    *
@@ -130,22 +137,20 @@
     { slug: "yame-fable5", apiId: "fable5", source: "yame", label: "Fable 5.0", short: "F5" },
   ];
 
+  // rs.igx.kr 대시보드 기준(2026-10-01) 내장 목록. 실시간 탐색이 새 모델을 추가한다.
   const FALLBACK_MODELS = [
-    { slug: "claude-fable-5.1", source: "igx", label: "Claude Fable 5.1", short: "F5.1" },
-    { slug: "claude-opus-5", source: "igx", label: "Claude Opus 5", short: "O5" },
-    { slug: "claude-opus-4.8", source: "igx", label: "Claude Opus 4.8", short: "O4.8" },
-    { slug: "claude-opus-4.7", source: "igx", label: "Claude Opus 4.7", short: "O4.7" },
-    { slug: "claude-opus-4.6", source: "igx", label: "Claude Opus 4.6", short: "O4.6" },
-    { slug: "claude-sonnet-5", source: "igx", label: "Claude Sonnet 5", short: "S5" },
-    { slug: "gemini-3.1-pro-preview", source: "igx", label: "Gemini 3.1 Pro Preview", short: "G3.1P" },
-    { slug: "gemini-2.5-pro", source: "igx", label: "Gemini 2.5 Pro", short: "G2.5P" },
-    { slug: "gemini-3.6-flash", source: "igx", label: "Gemini 3.6 Flash", short: "G3.6F" },
-    { slug: "gemini-3.5-flash", source: "igx", label: "Gemini 3.5 Flash", short: "G3.5F" },
-    { slug: "gemini-3.5-flash-lite", source: "igx", label: "Gemini 3.5 Flash Lite", short: "G3.5FL" },
-    { slug: "gpt-5.6-sol", source: "igx", label: "ChatGPT 5.6 Sol", short: "G5.6S" },
-    { slug: "gpt-5.6-terra", source: "igx", label: "ChatGPT 5.6 Terra", short: "G5.6T" },
-    { slug: "gpt-5.6-luna", source: "igx", label: "ChatGPT 5.6 Luna", short: "G5.6L" },
-  ];
+    ["claude-fable-5.1", "Claude Fable 5.1", "F5.1"], ["claude-opus-5.5", "Claude Opus 5.5", "O5.5"],
+    ["claude-opus-5", "Claude Opus 5", "O5"], ["claude-opus-4.8", "Claude Opus 4.8", "O4.8"],
+    ["claude-opus-4.7", "Claude Opus 4.7", "O4.7"], ["claude-opus-4.6", "Claude Opus 4.6", "O4.6"],
+    ["claude-sonnet-5.5", "Claude Sonnet 5.5", "S5.5"], ["claude-sonnet-5", "Claude Sonnet 5", "S5"],
+    ["gemini-3.1-pro-preview", "Gemini 3.1 Pro (Preview)", "G3.1P"], ["gemini-2.5-pro", "Gemini 2.5 Pro", "G2.5P"],
+    ["gemini-3.8-flash", "Gemini 3.8 Flash", "G3.8F"], ["gemini-3.7-flash", "Gemini 3.7 Flash", "G3.7F"],
+    ["gemini-3.6-flash", "Gemini 3.6 Flash", "G3.6F"], ["gemini-3.5-flash", "Gemini 3.5 Flash", "G3.5F"],
+    ["gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite", "G3.5FL"], ["gpt-6-sol", "ChatGPT 6 Sol", "G6S"],
+    ["gpt-6-luna", "ChatGPT 6 Luna", "G6L"], ["gpt-5.6-sol", "ChatGPT 5.6 Sol", "G5.6S"],
+    ["gpt-5.6-terra", "ChatGPT 5.6 Terra", "G5.6T"], ["gpt-5.6-luna", "ChatGPT 5.6 Luna", "G5.6L"],
+    ["deepseek-v4.1-flash", "DeepSeek V4.1 Flash", "D4.1F"], ["deepseek-v4-pro", "DeepSeek V4 Pro", "D4P"],
+  ].map(([slug, label, short]) => ({ slug, source: "igx", label, short }));
 
   const EXCLUDED_MODELS = new Set([
     "gemini-3-pro",
@@ -857,8 +862,8 @@
   function normalizeStatus(status) {
     const value = String(status || "unknown").trim().toLowerCase();
     if (["active", "operational", "ok", "healthy", "online", "normal"].includes(value)) return "active";
-    if (["degraded", "slow", "warning", "warn"].includes(value)) return "degraded";
-    if (["impacted", "down", "offline", "error", "failed", "failure", "unavailable"].includes(value)) return "impacted";
+    if (["degraded", "slow", "warning", "warn", "unstable"].includes(value)) return "degraded";
+    if (["impacted", "down", "offline", "error", "failed", "failure", "unavailable", "critical", "inactive"].includes(value)) return "impacted";
     return VALID_STATUSES.has(value) ? value : "unknown";
   }
 
@@ -986,6 +991,14 @@
       gpt: "GPT",
       claude: "Claude",
       gemini: "Gemini",
+      deepseek: "DeepSeek",
+      qwen: "Qwen",
+      grok: "Grok",
+      llama: "Llama",
+      mistral: "Mistral",
+      kimi: "Kimi",
+      glm: "GLM",
+      fable: "Fable",
       opus: "Opus",
       sonnet: "Sonnet",
       haiku: "Haiku",
@@ -997,6 +1010,9 @@
       turbo: "Turbo",
       preview: "Preview",
       thinking: "Thinking",
+      sol: "Sol",
+      terra: "Terra",
+      luna: "Luna",
       experimental: "Experimental",
       exp: "Exp",
     };
@@ -1004,11 +1020,13 @@
   }
 
   function parseSlug(slug) {
+    // deepseek-v4.1-flash 같은 "v4.1" 토큰도 버전으로 취급한다.
     const tokens = String(slug || "")
       .toLowerCase()
       .split("-")
       .map(value => value.trim())
-      .filter(Boolean);
+      .filter(Boolean)
+      .map((token, index) => index > 0 && /^v\d+(?:\.\d+)*$/.test(token) ? token.slice(1) : token);
 
     const brand = tokens[0] || "model";
     const isNumberToken = token => /^\d+(?:\.\d+)*$/.test(token);
@@ -1052,7 +1070,7 @@
       .join("");
 
     if (brand === "claude") {
-      const family = descriptors.find(v => ["opus", "sonnet", "haiku"].includes(v));
+      const family = descriptors.find(v => ["fable", "opus", "sonnet", "haiku"].includes(v));
       const familyInitial = family ? family.charAt(0).toUpperCase() : "C";
       return `${familyInitial}${version || ""}`;
     }
@@ -1715,8 +1733,15 @@
   }
 
   // Official IGX v2 contract, with cancellable userscript transport.
+  // rs.igx.kr/api/v2/*는 CORS 헤더 없는 CDN으로 307 리다이렉트되므로 브라우저 fetch는 CDN을 직접 호출해야 한다.
+  // CDN은 `Access-Control-Allow-Origin: *`를 보내고, igx 호스트는 확장 전송 폴백으로만 남긴다.
+  const IGX_API_BASES = ['https://igx-radiosonde-api-striker.b-cdn.net/v2/', `${IGX_BASE_URL}/api/v2/`];
+  // CDN은 /v2/models를 고정 캐시하므로(쿼리 무시) 새 모델은 대시보드에서만 확인된다.
+  const IGX_MODEL_CACHE_KEY = 'igx_rs_v2_models_v1';
+  const IGX_MODEL_CACHE_MS = 6 * 60 * 60 * 1000;
   var igxV2Models = null;
   let igxModelListPromise = null;
+  let igxApiBaseIndex = 0;
   const igxMetricCache = new Map();
   const igxMetricInflight = new Map();
   const igxMetricFailures = new Map();
@@ -1753,15 +1778,25 @@
       });
     }
   }
-  function igxRequestJson(endpoint, { rawText = false, withHeaders = false, url = '', envelope = true } = {}) {
-    const target = url || (rawText ? IGX_BASE_URL + '/' : IGX_BASE_URL + '/api/v2/' + endpoint);
-    // Catalog headers need extension access. Statistics use the SDK's browser-fetch path first.
-    const nativeFirst = !rawText && !withHeaders;
+  function igxRequestAttempts(endpoint, rawText, url) {
+    if (url) return [{ target: url, useFetch: true }, { target: url, useFetch: false }];
+    // The dashboard has no CORS headers; only the extension transport can read it.
+    if (rawText) return [{ target: IGX_BASE_URL + '/', useFetch: false }];
+    const order = [igxApiBaseIndex, ...IGX_API_BASES.keys()].filter((value, index, list) => list.indexOf(value) === index);
+    return order.flatMap(base => [
+      { target: IGX_API_BASES[base] + endpoint, useFetch: true, base },
+      { target: IGX_API_BASES[base] + endpoint, useFetch: false, base },
+    ]);
+  }
+  function igxRequestJson(endpoint, { rawText = false, url = '', envelope = true } = {}) {
+    const attempts = igxRequestAttempts(endpoint, rawText, url)
+      .filter(attempt => attempt.useFetch
+        ? typeof fetch === 'function' && typeof AbortController === 'function'
+        : typeof GM_xmlhttpRequest === 'function');
     return new Promise((resolve, reject) => {
       igxPendingRequests.push({ resolve, reject, run: () => new Promise((done, fail) => {
-        let settled = false, stage = 0, phaseTimer, hardTimer, request, controller;
+        let settled = false, stage = -1, phaseTimer, hardTimer, request, controller, lastError = null;
         const closeStage = () => {
-          stage++;
           clearTimeout(phaseTimer);
           try { controller?.abort(); } catch (_) {}
           try { request?.abort?.(); } catch (_) {}
@@ -1785,40 +1820,41 @@
           }
           const payload = JSON.parse(response.responseText);
           if (envelope && payload?.success !== true) throw new Error(payload?.message || 'IGX request failed');
-          const data = envelope ? payload.data : payload;
-          return withHeaders ? { data, headers: response.responseHeaders || '' } : data;
+          return envelope ? payload.data : payload;
         };
-        const start = (useFetch, canFallback) => {
+        // CDN fetch → CDN 확장 → rs.igx.kr fetch → rs.igx.kr 확장 순으로 다음 경로를 시도한다.
+        const next = () => {
           if (settled) return;
           if (!igxCanRequest()) { abort(); return; }
           closeStage();
+          stage++;
+          const attempt = attempts[stage];
+          if (!attempt) { finish(lastError || new Error('Network request failed')); return; }
           const token = stage;
           const current = () => !settled && token === stage;
           const failure = error => {
             if (!current()) return;
-            if (!igxCanRequest()) { abort(); return; }
-            if (canFallback) start(!useFetch, false);
-            else finish(error instanceof Error ? error : new Error('Network request failed'));
+            lastError = error instanceof Error ? error : new Error('Network request failed');
+            next();
           };
           const loaded = response => {
             if (!current()) return;
-            try { finish(null, parse(response)); } catch (error) { failure(error); }
+            try {
+              const value = parse(response);
+              if (attempt.base !== undefined) igxApiBaseIndex = attempt.base;
+              finish(null, value);
+            } catch (error) { failure(error); }
           };
-          if (canFallback) phaseTimer = setTimeout(() => failure(new Error('Request transport timeout')), 8000);
+          phaseTimer = setTimeout(() => failure(new Error('Request transport timeout')), 8000);
           try {
-            if (useFetch) {
-              if (typeof fetch !== 'function' || typeof AbortController !== 'function') throw new Error('Browser fetch unavailable');
+            if (attempt.useFetch) {
               controller = new AbortController();
-              fetch(target, { method: 'GET', credentials: 'omit', cache: 'no-store', signal: controller.signal,
+              fetch(attempt.target, { method: 'GET', credentials: 'omit', cache: 'no-store', signal: controller.signal,
                 headers: { Accept: rawText ? 'text/html' : 'application/json' } }).then(async response => {
-                const responseText = await response.text();
-                let responseHeaders = '';
-                response.headers.forEach((value, name) => { responseHeaders += name + ': ' + value + '\r\n'; });
-                loaded({ status: response.status, responseText, responseHeaders });
+                loaded({ status: response.status, responseText: await response.text() });
               }).catch(failure);
             } else {
-              if (typeof GM_xmlhttpRequest !== 'function') throw new Error('Extension request unavailable');
-              request = GM_xmlhttpRequest({ method: 'GET', url: target, timeout: 18000,
+              request = GM_xmlhttpRequest({ method: 'GET', url: attempt.target, timeout: 18000,
                 headers: { Accept: rawText ? 'text/html' : 'application/json' }, onload: loaded,
                 onerror: () => failure(new Error('Extension network error')),
                 ontimeout: () => failure(new Error('Extension request timeout')),
@@ -1832,8 +1868,8 @@
           } catch (error) { failure(error); }
         };
         igxActiveAborts.add(abort);
-        hardTimer = setTimeout(() => finish(new Error('Request timeout')), 18000);
-        start(nativeFirst, true);
+        hardTimer = setTimeout(() => finish(new Error('Request timeout')), 20000);
+        next();
       }) });
       pumpIgxRequests();
     });
@@ -1871,49 +1907,46 @@
     if (!slugs.length) throw new Error('Empty IGX model list');
     return slugs;
   }
-  function igxCatalogIsStale(headers) {
-    // The CDN can serve an old catalog despite max-age=15 and no-cache requests.
-    const stamp = /^cdn-cachedat:\s*(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})\s*$/im.exec(headers);
-    if (stamp) {
-      const [, month, day, year, hour, minute, second] = stamp.map(Number);
-      return Date.now() - Date.UTC(year, month - 1, day, hour, minute, second) > 5 * 60 * 1000;
-    }
-    const age = /^age:\s*(\d+)\s*$/im.exec(headers);
-    return !!age && Number(age[1]) > 300;
-  }
   function igxDashboardModelSlugs(html) {
     // Read only the serialized model IDs; never evaluate dashboard JavaScript.
     const match = /\bmodels["']?\s*:\s*(\[[a-z0-9._",\s-]{1,32768}\])/i.exec(html);
     if (!match) throw new Error('Missing IGX dashboard model list');
     return igxModelSlugs(JSON.parse(match[1]));
   }
+  function igxLoadCachedModels() {
+    try {
+      const cached = JSON.parse(localStorage.getItem(IGX_MODEL_CACHE_KEY) || 'null');
+      if (cached && Array.isArray(cached.slugs) && cached.slugs.length) return cached;
+    } catch (_) {}
+    return null;
+  }
   async function getIgxOfficialModels() {
     if (igxV2Models) return igxV2Models;
-    // One discovery per page, including its stale-CDN fallback. No polling of catalogs.
+    // One discovery per page at most, and the merged list is reused across pages for six hours.
     if (!igxModelListPromise) igxModelListPromise = (async () => {
-      let slugs;
-      let needsDashboard = false;
+      const cached = igxLoadCachedModels();
+      if (cached && Date.now() - Number(cached.at || 0) < IGX_MODEL_CACHE_MS) return (igxV2Models = cached.slugs);
+      let catalog = [];
+      let dashboard = [];
+      try { catalog = igxModelSlugs(await igxRequestJson('models')); }
+      catch (error) { if (error.name === 'AbortError') throw error; }
       try {
-        const response = await igxRequestJson('models', { withHeaders: true });
-        slugs = igxModelSlugs(response.data);
-        needsDashboard = igxCatalogIsStale(response.headers);
-      } catch (error) {
-        if (error.name === 'AbortError') throw error;
-        needsDashboard = true;
+        const html = await igxRequestJson(null, { rawText: true });
+        dashboard = igxDashboardModelSlugs(html);
+        try { rememberIgxDashboardMetrics(html); } catch (_) { /* Model list remains usable. */ }
+      } catch (error) { if (error.name === 'AbortError') throw error; }
+      // The dashboard lists the newest models; the catalog only adds ones the dashboard missed.
+      const slugs = [...new Set([...dashboard, ...catalog])];
+      if (dashboard.length) {
+        try { localStorage.setItem(IGX_MODEL_CACHE_KEY, JSON.stringify({ at: Date.now(), slugs })); } catch (_) {}
+        return (igxV2Models = slugs);
       }
-      if (needsDashboard) {
-        try {
-          const html = await igxRequestJson(null, { rawText: true });
-          slugs = igxDashboardModelSlugs(html);
-          try { rememberIgxDashboardMetrics(html); } catch (_) { /* Catalog remains usable. */ }
-        } catch (error) {
-          if (error.name === 'AbortError' || !slugs) throw error;
-          // Keep a usable API catalog if the optional dashboard request fails.
-        }
-      }
-      igxV2Models = slugs;
-      return slugs;
-    })();
+      // Without the dashboard, keep models learned earlier and retry discovery on the next page.
+      return (igxV2Models = [...new Set([...(cached?.slugs || []), ...FALLBACK_MODELS.map(model => model.slug), ...slugs])]);
+    })().catch(error => {
+      igxModelListPromise = null;
+      throw error;
+    });
     return igxModelListPromise;
   }
   function fetchIgxOfficialModel(slug, { force = false } = {}) {
