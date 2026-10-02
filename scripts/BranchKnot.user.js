@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🌳 Crack Branch Knot (갈래 매듭)
 // @namespace    crack-branch-knot
-// @version      1.1.1
+// @version      1.1.2
 // @description  분기로 갈라진 채팅방을 원본 방에 매듭지어 나무 모양 지도로 보여줍니다. 채팅방 상단과 채팅 목록에서 열고, 채팅 목록에는 원본 방과 분기 방을 표시합니다.
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/BranchKnot.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/BranchKnot.user.js
@@ -22,7 +22,7 @@
   pageWindow.__crackBranchKnotRunning = true;
 
   const APP = Object.freeze({
-    version: '1.1.1',
+    version: '1.1.2',
     apiBase: 'https://crack-api.wrtn.ai/crack-gen',
     listPageSize: 40,
     messagePageSize: 300,
@@ -877,10 +877,6 @@ body[data-theme="dark"] .cbk-tip::after{background:#ececec;color:#131313}
 .cbk-arrive .cbk-dot{animation:cbk-ping2 1s ease-out 2}
 @keyframes cbk-arrive{0%{scale:.6;rotate:-60deg}60%{scale:1.15}100%{scale:1;rotate:0deg}}
 @keyframes cbk-ping2{50%{box-shadow:0 0 0 2px var(--bg_screen,#fff),0 0 0 6px rgba(127,180,145,.35)}}
-.cbk-bdg{display:inline-flex;flex:0 0 13px;width:13px;height:13px;opacity:.5}
-.cbk-bdg .cbk-lg{width:13px;height:13px}
-.cbk-bdg.is-cur{opacity:1;color:#4f8a63}
-body[data-theme="dark"] .cbk-bdg.is-cur{color:#8cc59e}
 .cbk-origin{display:inline-flex;align-items:center;gap:3px;flex:none;height:17px;padding:0 6px 0 4px;border-radius:999px;background:rgba(127,127,127,.16);font-size:10.5px;font-weight:700;line-height:1;letter-spacing:-.01em;white-space:nowrap}
 .cbk-origin svg{width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
 .cbk-origin b{font-weight:700;font-variant-numeric:tabular-nums}
@@ -920,7 +916,7 @@ body[data-theme="dark"] .cbk-origin.is-cur{background:#8cc59e;color:#122018}`;
     closedGroups: new Set(),
     folded: new Set(),
     returnFocus: null,
-    marks: { branch: new Set(), origin: new Map(), stories: new Set() },
+    marks: { origin: new Map(), stories: new Set() },
   };
 
   // 창은 Shadow DOM 안에 띄워 크랙이나 다른 확프의 스타일과 섞이지 않게 합니다.
@@ -1398,16 +1394,14 @@ body[data-theme="dark"] .cbk-origin.is-cur{background:#8cc59e;color:#122018}`;
   // ---------- 크랙 화면에 붙이는 것 ----------
 
   function computeMarks() {
-    const branch = new Set();
     const origin = new Map();
     const stories = new Set();
     const { nodes } = buildForest();
     for (const node of nodes.values()) {
       if (node.room?.storyId) stories.add(node.room.storyId);
-      if (node.room?.isBranch) branch.add(node.id);
-      else if (node.room && !node.room.missing && node.desc > 0) origin.set(node.id, node.desc);
+      if (node.room && !node.room.isBranch && !node.room.missing && node.desc > 0) origin.set(node.id, node.desc);
     }
-    ui.marks = { branch, origin, stories };
+    ui.marks = { origin, stories };
   }
 
   function iconButton(className, tip, onClick) {
@@ -1487,37 +1481,29 @@ body[data-theme="dark"] .cbk-origin.is-cur{background:#8cc59e;color:#122018}`;
 
   const FLAG_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true">${TI.flag}</svg>`;
 
-  // 원본 방에는 깃발과 분기 수, 분기 방에는 작은 매듭 표시를 제목 앞에 둡니다.
-  // 제목 글자를 크랙이 다시 그릴 때 함께 지워지지 않도록 제목 span 안이 아니라 바로 앞에 둡니다.
+  // 원본 방 제목 뒤에 깃발과 분기 수를 붙입니다. 분기 방은 크랙이 제목 뒤에 갈래 아이콘을 그려 주므로 따로 표시하지 않습니다.
+  // 제목 글자를 크랙이 다시 그릴 때 함께 지워지지 않도록 제목 span 안이 아니라 바로 뒤에 둡니다.
   function markSidebarRows() {
-    const { branch, origin } = ui.marks;
+    const { origin } = ui.marks;
     const cur = parseLocation().chatId;
     document.querySelectorAll('a.group\\/chat-list-item[href*="/episodes/"]').forEach(link => {
       const id = (link.getAttribute('href').match(/\/episodes\/([a-f0-9]{24})/i) || [])[1] || '';
-      const want = origin.has(id) ? 'origin' : branch.has(id) ? 'branch' : '';
       const count = String(origin.get(id) || '');
-      let mark = link.querySelector('[data-cbk-mark]');
-      if (mark && (mark.dataset.cbkMark !== want || (want === 'origin' && mark.dataset.count !== count))) {
+      let mark = link.querySelector('.cbk-origin');
+      if (mark && mark.dataset.count !== count) {
         mark.remove();
         mark = null;
       }
-      if (!want) return;
+      if (!count) return;
       if (!mark) {
         const title = link.querySelector('span.typo-text-sm_leading-none_medium');
-        if (!title?.parentElement) return;
+        if (!title) return;
         mark = document.createElement('span');
-        mark.dataset.cbkMark = want;
-        if (want === 'origin') {
-          mark.className = 'cbk-origin';
-          mark.dataset.count = count;
-          mark.title = `원본 방 · 분기 ${count}개`;
-          mark.innerHTML = `${FLAG_ICON}<b>${count}</b>`;
-        } else {
-          mark.className = 'cbk-bdg';
-          mark.title = '분기로 만든 방';
-          mark.innerHTML = logo('', 'cbk-');
-        }
-        title.parentElement.insertBefore(mark, title);
+        mark.className = 'cbk-origin';
+        mark.dataset.count = count;
+        mark.title = `원본 방 · 분기 ${count}개`;
+        mark.innerHTML = `${FLAG_ICON}<b>${count}</b>`;
+        title.after(mark);
       }
       mark.classList.toggle('is-cur', id === cur);
     });
