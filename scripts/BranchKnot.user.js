@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🌳 Crack Branch Knot (갈래 매듭)
 // @namespace    crack-branch-knot
-// @version      1.1.2
+// @version      1.1.3
 // @description  분기로 갈라진 채팅방을 원본 방에 매듭지어 나무 모양 지도로 보여줍니다. 채팅방 상단과 채팅 목록에서 열고, 채팅 목록에는 원본 방과 분기 방을 표시합니다.
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/BranchKnot.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/BranchKnot.user.js
@@ -22,7 +22,7 @@
   pageWindow.__crackBranchKnotRunning = true;
 
   const APP = Object.freeze({
-    version: '1.1.2',
+    version: '1.1.3',
     apiBase: 'https://crack-api.wrtn.ai/crack-gen',
     listPageSize: 40,
     messagePageSize: 300,
@@ -916,7 +916,8 @@ body[data-theme="dark"] .cbk-origin.is-cur{background:#8cc59e;color:#122018}`;
     closedGroups: new Set(),
     folded: new Set(),
     returnFocus: null,
-    marks: { origin: new Map(), stories: new Set() },
+    marks: { origin: new Map(), stories: new Set(), tree: new Set() },
+    roomChecks: new Map(),
   };
 
   // 창은 Shadow DOM 안에 띄워 크랙이나 다른 확프의 스타일과 섞이지 않게 합니다.
@@ -1145,7 +1146,9 @@ body[data-theme="dark"] .cbk-origin.is-cur{background:#8cc59e;color:#122018}`;
     postRender();
     scrollToCurrent();
     listenDocumentKeys(true);
-    if (!state.refreshing && Date.now() - state.store.updatedAt > APP.autoRefreshMs) refresh();
+    // 방금 만든 분기 방처럼 지도에 아직 없는 방에서 열면 바로 새로 훑습니다.
+    const unseenBranch = ui.roomChecks.get(here.chatId) === true && !ui.marks.tree.has(here.chatId);
+    if (!state.refreshing && (unseenBranch || Date.now() - state.store.updatedAt > APP.autoRefreshMs)) refresh();
   }
 
   function closePanel(after) {
@@ -1396,13 +1399,31 @@ body[data-theme="dark"] .cbk-origin.is-cur{background:#8cc59e;color:#122018}`;
   function computeMarks() {
     const origin = new Map();
     const stories = new Set();
+    const tree = new Set();
     const { nodes } = buildForest();
     for (const node of nodes.values()) {
-      if (node.room?.storyId) stories.add(node.room.storyId);
-      if (node.room && !node.room.isBranch && !node.room.missing && node.desc > 0) origin.set(node.id, node.desc);
+      if (!node.room || node.room.missing) continue;
+      tree.add(node.id);
+      if (node.room.storyId) stories.add(node.room.storyId);
+      if (!node.room.isBranch && node.desc > 0) origin.set(node.id, node.desc);
     }
-    ui.marks = { origin, stories };
+    ui.marks = { origin, stories, tree };
   }
+
+  // 지도에 아직 없는 방은 크랙에 한 번만 물어봐서, 방금 만든 분기 방에도 바로 버튼이 뜨게 합니다.
+  function checkRoom(chatId) {
+    if (ui.roomChecks.has(chatId)) return;
+    ui.roomChecks.set(chatId, false);
+    apiGet(`/v3/chats/${encodeURIComponent(chatId)}`)
+      .then(data => {
+        if (data?.isCreatedFromBranch !== true) return;
+        ui.roomChecks.set(chatId, true);
+        ensureHeaderButton();
+      })
+      .catch(error => console.warn(LOG, 'room check failed', chatId, error));
+  }
+
+  const isTreeRoom = chatId => ui.marks.tree.has(chatId) || ui.roomChecks.get(chatId) === true;
 
   function iconButton(className, tip, onClick) {
     const button = document.createElement('button');
@@ -1448,13 +1469,18 @@ body[data-theme="dark"] .cbk-origin.is-cur{background:#8cc59e;color:#122018}`;
     toast(`'${flag.title}'(으)로 이동했어요`);
   }
 
-  // 채팅방 상단 줄의 오른쪽 묶음(모델 버튼이 있는 곳) 맨 앞에 붙입니다.
+  // 원본 방이나 분기 방이면 채팅방 상단 줄의 오른쪽 묶음(모델 버튼이 있는 곳) 맨 앞에 붙입니다.
   function ensureHeaderButton() {
     const here = parseLocation();
     if (!here.chatId) return;
     const header = document.querySelector('.group\\/header');
     if (!header) return;
     let button = liveButton(header, '.cbk-hbtn');
+    if (!isTreeRoom(here.chatId)) {
+      button?.remove();
+      checkRoom(here.chatId);
+      return;
+    }
     if (!button) {
       const group = header.querySelector('button[aria-haspopup="dialog"]')?.parentElement;
       if (!group) return;
