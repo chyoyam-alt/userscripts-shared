@@ -240,7 +240,7 @@
         if (!id || seenIds.has(id)) continue;
         seenIds.add(id);
         const owner = String(message?.chatId || '');
-        if (!point && owner && owner !== room.id) {
+        if (!point && ID_RE.test(owner) && owner !== room.id) {
           point = { parentId: owner, messageId: id, tail: plainText(message?.content).slice(-300) };
         }
         if (point && String(message?.role || '').toLowerCase() === 'user') turn++;
@@ -286,8 +286,8 @@
 
     const job = (async () => {
       const { store } = state;
-      if (recheck) store.branches = {};
       const rooms = await fetchAllRooms();
+      if (recheck) store.branches = {};
 
       const branchRooms = [...rooms.values()].filter(room => room.isBranch);
       const todo = branchRooms.filter(room => needsResolve(store.branches[room.id]));
@@ -311,9 +311,10 @@
         const parentId = store.branches[room.id]?.parentId;
         if (parentId && !rooms.has(parentId)) missing.add(parentId);
       }
+      // 목록에 없다는 건 지워졌을 수 있다는 뜻이라, 예전에 저장한 정보가 있어도 다시 확인합니다.
       for (const id of missing) {
         const cached = store.rooms[id];
-        if (cached) {
+        if (cached?.missing && !recheck) {
           rooms.set(id, cached);
           continue;
         }
@@ -322,6 +323,7 @@
           if (detail) rooms.set(id, detail);
         } catch (error) {
           console.warn(LOG, 'parent detail failed', id, error);
+          if (cached) rooms.set(id, cached);
         }
         await sleep(APP.requestGapMs);
       }
@@ -830,6 +832,7 @@ button{font:inherit;color:inherit;letter-spacing:inherit;cursor:pointer}
 :host{all:initial}
 .stage{position:fixed;inset:0;pointer-events:none;container-type:inline-size;font-family:Pretendard,-apple-system,'Apple SD Gothic Neo','Noto Sans KR',sans-serif;font-size:14px;line-height:normal;color:var(--text);letter-spacing:-.01em;-webkit-font-smoothing:antialiased;text-align:left;isolation:isolate}
 .ov{pointer-events:auto}
+.pn:focus{outline:none}
 .seg button:disabled{opacity:.4;cursor:default}`;
 
   // 크랙 화면에 붙이는 버튼과 목록 표시입니다.
@@ -901,6 +904,7 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
     forest: null,
     closedGroups: new Set(),
     folded: new Set(),
+    returnFocus: null,
     marks: { branch: new Set(), origin: new Map(), stories: new Set() },
   };
 
@@ -935,20 +939,20 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
     if (ui.busy) return `<div class="st"><span class="ld">${logo('loader')}</span><span class="grow">${esc(ui.busy.text)}</span></div><div class="prog ${ui.busy.p == null ? 'ind' : ''}"><i style="--w:${Math.round((ui.busy.p || 0) * 100)}%"></i></div>`;
     if (!state.store.updatedAt) return '<div class="st"></div>';
     if (ui.found) return `<div class="st found">${ti('check')}<span>새 분기 <b>${ui.found}</b>개를 찾았어요</span></div>`;
-    const groups = (ui.forest || buildForest()).groups;
+    const { groups } = buildForest();
     const count = groups.reduce((sum, group) => sum + group.count, 0);
     return `<div class="st">${ti('check')}<span>분기 방 <b>${count}</b>개, 작품 <b>${groups.length}</b>개 · ${checkedAtText(state.store.updatedAt)}에 확인</span></div>`;
   }
 
   function cfHtml() {
-    return '<div class="cf" role="alertdialog"><b>처음부터 다시 찾을까요?</b><p>저장해 둔 분기 정보를 지우고 모든 분기 방을 다시 확인해요. 방이 많으면 몇 분 걸릴 수 있어요.</p><div><button type="button" class="btn" data-act="cfno">취소</button><button type="button" class="btn solid" data-act="cfyes">다시 찾기</button></div></div>';
+    return `<div class="cf" role="alertdialog"><b>처음부터 다시 찾을까요?</b><p>저장해 둔 분기 정보를 지우고 모든 분기 방을 다시 확인해요. 방이 많으면 몇 분 걸릴 수 있어요.</p><div><button type="button" class="btn" data-act="cfno">취소</button><button type="button" class="btn solid" data-act="cfyes" ${ui.busy ? 'disabled' : ''}>다시 찾기</button></div></div>`;
   }
 
   function panelHtml() {
     const here = parseLocation();
     const i = ui.scope === 'story' ? 0 : 1;
     const busy = !!ui.busy;
-    return `<div class="ov" data-ov><div class="pn ${busy ? 'busy' : ''}" role="dialog" aria-modal="true" aria-label="루트 지도">
+    return `<div class="ov" data-ov><div class="pn ${busy ? 'busy' : ''}" role="dialog" aria-modal="true" aria-label="루트 지도" tabindex="-1">
 <div class="hd"><span class="mark spin-on-hover">${logo('weave')}</span><span class="ttl"><b>루트 지도</b><small>v${APP.version}</small></span><span class="grow"></span><button type="button" class="ib" data-act="close" aria-label="닫기">${ti('x')}</button></div>
 <div class="tb"><div class="seg" style="--i:${i}"><i></i><button type="button" class="${i === 0 ? 'on' : ''}" data-act="scope" data-arg="story" ${here.storyId ? '' : 'disabled'}>이 작품</button><button type="button" class="${i === 1 ? 'on' : ''}" data-act="scope" data-arg="all">전체</button></div><span class="grow"></span><button type="button" class="btn rf" data-act="refresh" ${busy ? 'disabled' : ''}>${ti('refresh')}새로고침</button></div>
 <div data-st>${statusHtml()}</div>
@@ -1034,16 +1038,17 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
     const fresh = ui.fresh;
     $$('[data-tree]').forEach(tree => {
       const svg = tree.querySelector(':scope > svg');
-      const box = tree.getBoundingClientRect();
       const pos = {};
       let lines = '';
       let dots = '';
       let k = 0;
       let f = 0;
+      // 창이 열리며 움직이는 중에도 어긋나지 않도록 화면 위치 대신 배치 위치(offset)로 잽니다.
       tree.querySelectorAll('.nd').forEach(row => {
         const d = +row.dataset.depth;
-        const rect = (d ? row : row.querySelector('.card')).getBoundingClientRect();
-        pos[row.dataset.id] = { d, x: BASE + d * STEP, y: d ? rect.top - box.top + rect.height / 2 : rect.bottom - box.top, top: !d };
+        const card = d ? null : row.querySelector('.card');
+        const y = d ? row.offsetTop + row.offsetHeight / 2 : row.offsetTop + card.offsetTop + card.offsetHeight;
+        pos[row.dataset.id] = { d, x: BASE + d * STEP, y, top: !d };
       });
       tree.querySelectorAll('.nd.br').forEach(row => {
         const id = row.dataset.id;
@@ -1092,7 +1097,7 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
       holder.innerHTML = statusHtml();
     }
     $('.pn')?.classList.toggle('busy', !!ui.busy);
-    $$('[data-act="refresh"],[data-act="recheck"]').forEach(button => { button.disabled = !!ui.busy; });
+    $$('[data-act="refresh"],[data-act="recheck"],[data-act="cfyes"]').forEach(button => { button.disabled = !!ui.busy; });
   }
 
   function toast(message) {
@@ -1121,19 +1126,25 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
     const stage = ensureStage();
     ui.scope = scope === 'story' && here.storyId ? 'story' : 'all';
     ui.confirm = false;
+    if (!ui.open) ui.returnFocus = document.activeElement;
     ui.open = true;
     ui.closing = false;
     $('[data-ov]')?.remove();
     stage.insertAdjacentHTML('beforeend', panelHtml());
+    $('.pn').focus({ preventScroll: true });
     postRender();
     scrollToCurrent();
-    document.addEventListener('keydown', onDocumentKeydown, true);
+    listenDocumentKeys(true);
     if (!state.refreshing && Date.now() - state.store.updatedAt > APP.autoRefreshMs) refresh();
   }
 
   function closePanel(after) {
     const overlay = $('[data-ov]');
-    document.removeEventListener('keydown', onDocumentKeydown, true);
+    listenDocumentKeys(false);
+    if (ui.open && !after && ui.returnFocus?.isConnected && ui.returnFocus !== document.body) {
+      ui.returnFocus.focus({ preventScroll: true });
+    }
+    ui.returnFocus = null;
     ui.open = false;
     ui.confirm = false;
     if (!overlay) {
@@ -1150,8 +1161,8 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
   }
 
   function onRefreshDone({ firstLoad, newIds }, manual) {
-    if (!ui.open) return;
     ui.forest = buildForest();
+    if (!ui.open) return;
     if (!firstLoad && newIds.size) {
       ui.found = newIds.size;
       ui.newIds = newIds;
@@ -1323,12 +1334,16 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
       if (event.target.matches('[data-ov]')) closePanel();
     });
     shadow.addEventListener('keydown', event => {
+      // 크랙의 단축키(Enter로 입력창 이동 등)가 창 뒤에서 반응하지 않게 막습니다. Esc는 문서 쪽에서 먼저 처리합니다.
+      event.stopPropagation();
       const row = event.target.closest('[data-act="goto"]');
-      if (row && (event.key === 'Enter' || event.key === ' ')) {
+      if (row && event.target === row && (event.key === 'Enter' || event.key === ' ')) {
         event.preventDefault();
         goto(row.dataset.arg, row);
       }
     });
+    shadow.addEventListener('keyup', event => event.stopPropagation());
+    shadow.addEventListener('keypress', event => event.stopPropagation());
     shadow.addEventListener('pointerover', event => {
       if (event.pointerType === 'touch' || ui.stage.clientWidth <= 520) return;
       const tree = event.target.closest('[data-tree]');
@@ -1343,13 +1358,24 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
     });
   }
 
-  function onDocumentKeydown(event) {
-    if (event.key !== 'Escape' || !ui.open) return;
-    event.preventDefault();
+  // 창이 열려 있는 동안 키 입력이 크랙 단축키(Enter로 입력창 이동 등)에 닿지 않게 합니다.
+  // 창 안의 키는 창이 처리하고 거기서 멈추고, 버튼이 잠기거나 다시 그려져 포커스가 본문으로 빠졌을 때의 키는 여기서 막고 포커스를 창으로 돌립니다.
+  function onDocumentKey(event) {
+    if (!ui.open) return;
+    if (event.type === 'keydown' && event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      if (ui.confirm) ACT.cfno();
+      else closePanel();
+      return;
+    }
+    if (event.composedPath().includes(ui.host)) return;
     event.stopPropagation();
-    if (ui.confirm) ACT.cfno();
-    else closePanel();
+    if (event.type === 'keydown') $('.pn')?.focus({ preventScroll: true });
   }
+
+  const DOCUMENT_KEYS = ['keydown', 'keyup', 'keypress'];
+  const listenDocumentKeys = on => DOCUMENT_KEYS.forEach(type => (on ? document.addEventListener : document.removeEventListener).call(document, type, onDocumentKey, true));
 
   window.addEventListener('resize', () => postRender());
 
@@ -1432,15 +1458,15 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
     consumeArrive(button, here);
   }
 
-  // 왼쪽 사이드바의 "채팅 목록" 제목 줄, 목록 메뉴 버튼 앞에 붙입니다.
+  // 데스크톱 사이드바와 모바일 서랍이 따로 있어서 제목 줄마다 확인합니다. 메뉴 버튼이 없는 파티챗 목록에는 붙이지 않습니다.
   function ensureSidebarButton() {
-    const sidebar = document.querySelector('.bg-sidebar');
-    if (!sidebar || liveButton(sidebar, '.crm-mini')) return;
-    const label = [...sidebar.querySelectorAll('div > span')].find(span => span.textContent.trim() === '채팅 목록');
-    const row = label?.parentElement;
-    if (!row) return;
-    const menu = row.querySelector('button[aria-haspopup="menu"]');
-    row.insertBefore(iconButton('crm-mini crm-tip crm-tip-end crm-spin', '루트 지도 · 전체', () => openPanel('all')), menu || null);
+    document.querySelectorAll('.bg-sidebar div > span').forEach(label => {
+      if (label.textContent.trim() !== '채팅 목록') return;
+      const row = label.parentElement;
+      const menu = row?.querySelector(':scope > button[aria-haspopup="menu"]');
+      if (!menu || liveButton(row, '.crm-mini')) return;
+      row.insertBefore(iconButton('crm-mini crm-tip crm-tip-end crm-spin', '루트 지도 · 전체', () => openPanel('all')), menu);
+    });
   }
 
   const FLAG_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true">${TI.flag}</svg>`;
