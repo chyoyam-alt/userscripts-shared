@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🌳 Crack Branch Knot (갈래 매듭)
 // @namespace    crack-branch-knot
-// @version      1.1.0
+// @version      1.1.1
 // @description  분기로 갈라진 채팅방을 원본 방에 매듭지어 나무 모양 지도로 보여줍니다. 채팅방 상단과 채팅 목록에서 열고, 채팅 목록에는 원본 방과 분기 방을 표시합니다.
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/BranchKnot.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/BranchKnot.user.js
@@ -22,7 +22,7 @@
   pageWindow.__crackBranchKnotRunning = true;
 
   const APP = Object.freeze({
-    version: '1.1.0',
+    version: '1.1.1',
     apiBase: 'https://crack-api.wrtn.ai/crack-gen',
     listPageSize: 40,
     messagePageSize: 300,
@@ -883,10 +883,9 @@ body[data-theme="dark"] .cbk-tip::after{background:#ececec;color:#131313}
 body[data-theme="dark"] .cbk-bdg.is-cur{color:#8cc59e}
 .cbk-origin{display:inline-flex;align-items:center;gap:3px;flex:none;height:17px;padding:0 6px 0 4px;border-radius:999px;background:rgba(127,127,127,.16);font-size:10.5px;font-weight:700;line-height:1;letter-spacing:-.01em;white-space:nowrap}
 .cbk-origin svg{width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
-.cbk-origin b{font-weight:600;opacity:.6;font-variant-numeric:tabular-nums}
+.cbk-origin b{font-weight:700;font-variant-numeric:tabular-nums}
 .cbk-origin.is-cur{background:#4f8a63;color:#fff}
-body[data-theme="dark"] .cbk-origin.is-cur{background:#8cc59e;color:#122018}
-.cbk-origin.is-cur b{opacity:.8}`;
+body[data-theme="dark"] .cbk-origin.is-cur{background:#8cc59e;color:#122018}`;
 
   function injectHostStyle() {
     if (document.getElementById('cbk-host-style')) return;
@@ -1488,7 +1487,7 @@ body[data-theme="dark"] .cbk-origin.is-cur{background:#8cc59e;color:#122018}
 
   const FLAG_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true">${TI.flag}</svg>`;
 
-  // 원본 방에는 "원본 · 분기 수" 표, 분기 방에는 작은 매듭 표시를 제목 앞에 둡니다.
+  // 원본 방에는 깃발과 분기 수, 분기 방에는 작은 매듭 표시를 제목 앞에 둡니다.
   // 제목 글자를 크랙이 다시 그릴 때 함께 지워지지 않도록 제목 span 안이 아니라 바로 앞에 둡니다.
   function markSidebarRows() {
     const { branch, origin } = ui.marks;
@@ -1512,7 +1511,7 @@ body[data-theme="dark"] .cbk-origin.is-cur{background:#8cc59e;color:#122018}
           mark.className = 'cbk-origin';
           mark.dataset.count = count;
           mark.title = `원본 방 · 분기 ${count}개`;
-          mark.innerHTML = `${FLAG_ICON}원본<b>${count}</b>`;
+          mark.innerHTML = `${FLAG_ICON}<b>${count}</b>`;
         } else {
           mark.className = 'cbk-bdg';
           mark.title = '분기로 만든 방';
