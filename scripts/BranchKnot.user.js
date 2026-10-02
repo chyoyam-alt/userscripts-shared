@@ -12,7 +12,7 @@
 // @run-at       document-idle
 // ==/UserScript==
 
-// 로고: 효정 제작 · 아이콘: Tabler Icons (MIT)
+// 아이콘: Tabler Icons (MIT)
 
 (() => {
   'use strict';
