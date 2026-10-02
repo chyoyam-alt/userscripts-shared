@@ -1,14 +1,13 @@
 // ==UserScript==
-// @name         🌳 Crack Route Map (루트 지도)
-// @namespace    crack-route-map
-// @version      1.0.0
-// @description  분기로 갈라진 채팅방을 원본 방 기준 나무 모양 지도로 보여줍니다. 채팅방 상단과 채팅 목록에서 열고, 채팅 목록에는 원본 방과 분기 방을 표시합니다.
-// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/RouteMap.user.js
-// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/RouteMap.user.js
+// @name         🌳 Crack Branch Knot (갈래 매듭)
+// @namespace    crack-branch-knot
+// @version      1.1.0
+// @description  분기로 갈라진 채팅방을 원본 방에 매듭지어 나무 모양 지도로 보여줍니다. 채팅방 상단과 채팅 목록에서 열고, 채팅 목록에는 원본 방과 분기 방을 표시합니다.
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/BranchKnot.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/BranchKnot.user.js
 // @match        https://crack.wrtn.ai/*
 // @grant        GM_getValue
 // @grant        GM_setValue
-// @grant        GM_registerMenuCommand
 // @grant        unsafeWindow
 // @run-at       document-idle
 // ==/UserScript==
@@ -19,11 +18,11 @@
   'use strict';
 
   const pageWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  if (pageWindow.__crackRouteMapRunning) return;
-  pageWindow.__crackRouteMapRunning = true;
+  if (pageWindow.__crackBranchKnotRunning) return;
+  pageWindow.__crackBranchKnotRunning = true;
 
   const APP = Object.freeze({
-    version: '1.0.0',
+    version: '1.1.0',
     apiBase: 'https://crack-api.wrtn.ai/crack-gen',
     listPageSize: 40,
     messagePageSize: 300,
@@ -33,11 +32,11 @@
     retryCount: 3,
     autoRefreshMs: 5 * 60 * 1000,
     unresolvedRetryMs: 6 * 60 * 60 * 1000,
-    storeKey: 'crm:store:v1',
-    arriveKey: 'crm:arrive',
+    storeKey: 'cbk:store:v1',
+    arriveKey: 'cbk:arrive',
   });
 
-  const LOG = '[RouteMap]';
+  const LOG = '[BranchKnot]';
   const ID_RE = /^[a-f0-9]{24}$/i;
 
   // 분기 방의 메시지 중 분기 시점까지 복사된 메시지는 chatId가 원본 방 ID로 남아 있습니다.
@@ -142,6 +141,15 @@
     return String(value || '').replace(/\s+/g, ' ').trim();
   }
 
+  // 작품 썸네일: 세로 표지를 먼저 쓰고, 없으면 프로필 사진을 씁니다.
+  function imageOf(story) {
+    for (const image of [story.portraitImage, story.profileImage]) {
+      const url = image?.w200 || image?.w600 || image?.origin || '';
+      if (/^https:\/\//.test(url)) return url;
+    }
+    return '';
+  }
+
   function toRoom(raw) {
     const id = String(raw?._id || '');
     if (!ID_RE.test(id)) return null;
@@ -151,6 +159,7 @@
       title: cleanTitle(raw.title) || cleanTitle(story.name) || '제목 없는 방',
       storyId: String(story._id || ''),
       storyName: cleanTitle(story.name),
+      image: imageOf(story),
       isBranch: raw.isCreatedFromBranch === true,
       createdAt: Date.parse(raw.createdAt || '') || 0,
       messagedAt: Date.parse(raw.messagedAt || raw.updatedAt || raw.createdAt || '') || 0,
@@ -476,8 +485,7 @@
 
   // 갈라지기 직전 장면은 메시지 끝부분이 가장 잘 보여 주므로 마지막 문장을 한 줄로 씁니다.
   function sceneLine(info) {
-    if (!info) return '';
-    if (!info.tail) return info.snippet || '';
+    if (!info?.tail) return '';
     const sentences = info.tail.match(/[^.!?…。]+[.!?…。]+["'”’」』)]*|[^.!?…。]+$/g) || [info.tail];
     let line = sentences.pop().trim();
     while (sentences.length && line.length < 24) {
@@ -536,13 +544,13 @@
   const ti = (name, cls = '') => `<svg class="ti ${cls}" viewBox="0 0 24 24" aria-hidden="true">${TI[name]}</svg>`;
   const LIVE = '<i class="live" aria-hidden="true"></i>';
 
-  // 리본(rb)과 위로 지나가는 조각(ov)을 나눠 움직입니다. 크랙 화면에 붙일 때는 crm- 접두어를 씁니다.
+  // 리본(rb)과 위로 지나가는 조각(ov)을 나눠 움직입니다. 크랙 화면에 붙일 때는 cbk- 접두어를 씁니다.
   let logoSeq = 0;
   function logo(cls = '', prefix = '') {
     const n = ++logoSeq;
     let svg = LOGO_SVG
-      .replace(/id="storyknot-weave"/, `id="crm-lw${n}"`)
-      .replace(/url\(#storyknot-weave\)/, `url(#crm-lw${n})`)
+      .replace(/id="storyknot-weave"/, `id="cbk-lw${n}"`)
+      .replace(/url\(#storyknot-weave\)/, `url(#cbk-lw${n})`)
       .replace(/<path id="ribbon-\d"/g, `<path class="${prefix}rb" pathLength="1"`)
       .replace(/<path id="overpass-\d"/g, `<path class="${prefix}ov" pathLength="1"`)
       .replace('<g id="overpasses">', `<g class="${prefix}ovs">`)
@@ -827,54 +835,63 @@ button{font:inherit;color:inherit;letter-spacing:inherit;cursor:pointer}
 .pn{transition:background .25s var(--out)}
 `;
 
-  // 실제 크랙 화면 위에 띄우기 위한 최소한의 바탕입니다.
+  // 실제 크랙 화면 위에 띄우기 위한 바탕과, 시안 이후에 고친 것(빛 테두리 여백·스크롤바·썸네일)입니다.
   const STAGE_CSS = `
 :host{all:initial}
 .stage{position:fixed;inset:0;pointer-events:none;container-type:inline-size;font-family:Pretendard,-apple-system,'Apple SD Gothic Neo','Noto Sans KR',sans-serif;font-size:14px;line-height:normal;color:var(--text);letter-spacing:-.01em;-webkit-font-smoothing:antialiased;text-align:left;isolation:isolate}
 .ov{pointer-events:auto}
 .pn:focus{outline:none}
-.seg button:disabled{opacity:.4;cursor:default}`;
+.seg button:disabled{opacity:.4;cursor:default}
+.gb>div{padding:0 4px;margin:0 -4px}
+.cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center;border-radius:inherit}
+.bd{scrollbar-width:auto;scrollbar-color:auto}
+.bd::-webkit-scrollbar{width:10px}
+.bd::-webkit-scrollbar-track,.bd::-webkit-scrollbar-corner{background:transparent}
+.bd::-webkit-scrollbar-button{display:none;width:0;height:0}
+.bd::-webkit-scrollbar-thumb{background:var(--rail) padding-box;border:3px solid transparent;border-radius:999px}
+.bd::-webkit-scrollbar-thumb:hover{background-color:var(--text-3)}
+@supports not selector(::-webkit-scrollbar){.bd{scrollbar-width:thin;scrollbar-color:var(--rail) transparent}}`;
 
   // 크랙 화면에 붙이는 버튼과 목록 표시입니다.
   const HOST_CSS = `
-.crm-hbtn,.crm-mini{position:relative;display:inline-grid;place-items:center;flex:none;padding:0;border:0;background:none;color:inherit;cursor:pointer;opacity:.75;transition:background-color .15s,opacity .15s,scale .15s}
-.crm-hbtn{width:32px;height:32px;border-radius:8px}
-.crm-mini{width:24px;height:24px;padding:4px;border-radius:6px}
-.crm-hbtn:hover,.crm-mini:hover{opacity:1;background:rgba(127,127,127,.14)}
-.crm-hbtn:active,.crm-mini:active{scale:.96}
-.crm-lg{display:block;flex:0 0 auto;overflow:visible}
-.crm-lg .crm-ov{transform-box:fill-box;transform-origin:center}
-.crm-hbtn .crm-lg{width:20px;height:20px}
-.crm-mini .crm-lg{width:16px;height:16px}
-.crm-spin .crm-lg{transition:rotate .7s cubic-bezier(.34,1.4,.64,1)}
-.crm-spin:hover .crm-lg{rotate:120deg}
-.crm-dot{position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:#4f8a63;box-shadow:0 0 0 2px var(--bg_screen,#fff)}
-body[data-theme="dark"] .crm-dot{background:#8cc59e;box-shadow:0 0 0 2px var(--bg_screen,#141413)}
-.crm-tip::after{content:attr(data-tip);position:absolute;top:calc(100% + 6px);left:50%;translate:-50% -2px;z-index:60;padding:5px 8px;border-radius:7px;background:#1b1b1b;color:#fff;font-size:11.5px;font-weight:600;line-height:1.2;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .15s cubic-bezier(.2,0,0,1),translate .15s cubic-bezier(.2,0,0,1)}
-body[data-theme="dark"] .crm-tip::after{background:#ececec;color:#131313}
-.crm-tip:hover::after{opacity:1;translate:-50% 0}
-.crm-tip-end::after{left:auto;right:0;translate:0 -2px}
-.crm-tip-end:hover::after{translate:0 0}
-@media (hover:none){.crm-tip::after{display:none}}
-.crm-arrive .crm-lg{animation:crm-arrive .7s cubic-bezier(.34,1.4,.64,1)}
-.crm-arrive .crm-dot{animation:crm-ping2 1s ease-out 2}
-@keyframes crm-arrive{0%{scale:.6;rotate:-60deg}60%{scale:1.15}100%{scale:1;rotate:0deg}}
-@keyframes crm-ping2{50%{box-shadow:0 0 0 2px var(--bg_screen,#fff),0 0 0 6px rgba(127,180,145,.35)}}
-.crm-bdg{display:inline-flex;flex:0 0 13px;width:13px;height:13px;opacity:.5}
-.crm-bdg .crm-lg{width:13px;height:13px}
-.crm-bdg.is-cur{opacity:1;color:#4f8a63}
-body[data-theme="dark"] .crm-bdg.is-cur{color:#8cc59e}
-.crm-origin{display:inline-flex;align-items:center;gap:3px;flex:none;height:17px;padding:0 6px 0 4px;border-radius:999px;background:rgba(127,127,127,.16);font-size:10.5px;font-weight:700;line-height:1;letter-spacing:-.01em;white-space:nowrap}
-.crm-origin svg{width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
-.crm-origin b{font-weight:600;opacity:.6;font-variant-numeric:tabular-nums}
-.crm-origin.is-cur{background:#4f8a63;color:#fff}
-body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
-.crm-origin.is-cur b{opacity:.8}`;
+.cbk-hbtn,.cbk-mini{position:relative;display:inline-grid;place-items:center;flex:none;padding:0;border:0;background:none;color:inherit;cursor:pointer;opacity:.75;transition:background-color .15s,opacity .15s,scale .15s}
+.cbk-hbtn{width:32px;height:32px;border-radius:8px}
+.cbk-mini{width:24px;height:24px;padding:4px;border-radius:6px}
+.cbk-hbtn:hover,.cbk-mini:hover{opacity:1;background:rgba(127,127,127,.14)}
+.cbk-hbtn:active,.cbk-mini:active{scale:.96}
+.cbk-lg{display:block;flex:0 0 auto;overflow:visible}
+.cbk-lg .cbk-ov{transform-box:fill-box;transform-origin:center}
+.cbk-hbtn .cbk-lg{width:20px;height:20px}
+.cbk-mini .cbk-lg{width:16px;height:16px}
+.cbk-spin .cbk-lg{transition:rotate .7s cubic-bezier(.34,1.4,.64,1)}
+.cbk-spin:hover .cbk-lg{rotate:120deg}
+.cbk-dot{position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:#4f8a63;box-shadow:0 0 0 2px var(--bg_screen,#fff)}
+body[data-theme="dark"] .cbk-dot{background:#8cc59e;box-shadow:0 0 0 2px var(--bg_screen,#141413)}
+.cbk-tip::after{content:attr(data-tip);position:absolute;top:calc(100% + 6px);left:50%;translate:-50% -2px;z-index:60;padding:5px 8px;border-radius:7px;background:#1b1b1b;color:#fff;font-size:11.5px;font-weight:600;line-height:1.2;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .15s cubic-bezier(.2,0,0,1),translate .15s cubic-bezier(.2,0,0,1)}
+body[data-theme="dark"] .cbk-tip::after{background:#ececec;color:#131313}
+.cbk-tip:hover::after{opacity:1;translate:-50% 0}
+.cbk-tip-end::after{left:auto;right:0;translate:0 -2px}
+.cbk-tip-end:hover::after{translate:0 0}
+@media (hover:none){.cbk-tip::after{display:none}}
+.cbk-arrive .cbk-lg{animation:cbk-arrive .7s cubic-bezier(.34,1.4,.64,1)}
+.cbk-arrive .cbk-dot{animation:cbk-ping2 1s ease-out 2}
+@keyframes cbk-arrive{0%{scale:.6;rotate:-60deg}60%{scale:1.15}100%{scale:1;rotate:0deg}}
+@keyframes cbk-ping2{50%{box-shadow:0 0 0 2px var(--bg_screen,#fff),0 0 0 6px rgba(127,180,145,.35)}}
+.cbk-bdg{display:inline-flex;flex:0 0 13px;width:13px;height:13px;opacity:.5}
+.cbk-bdg .cbk-lg{width:13px;height:13px}
+.cbk-bdg.is-cur{opacity:1;color:#4f8a63}
+body[data-theme="dark"] .cbk-bdg.is-cur{color:#8cc59e}
+.cbk-origin{display:inline-flex;align-items:center;gap:3px;flex:none;height:17px;padding:0 6px 0 4px;border-radius:999px;background:rgba(127,127,127,.16);font-size:10.5px;font-weight:700;line-height:1;letter-spacing:-.01em;white-space:nowrap}
+.cbk-origin svg{width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.cbk-origin b{font-weight:600;opacity:.6;font-variant-numeric:tabular-nums}
+.cbk-origin.is-cur{background:#4f8a63;color:#fff}
+body[data-theme="dark"] .cbk-origin.is-cur{background:#8cc59e;color:#122018}
+.cbk-origin.is-cur b{opacity:.8}`;
 
   function injectHostStyle() {
-    if (document.getElementById('crm-host-style')) return;
+    if (document.getElementById('cbk-host-style')) return;
     const style = document.createElement('style');
-    style.id = 'crm-host-style';
+    style.id = 'cbk-host-style';
     style.textContent = HOST_CSS;
     document.head.append(style);
   }
@@ -892,7 +909,6 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
     host: null,
     stage: null,
     open: false,
-    closing: false,
     scope: 'story',
     confirm: false,
     busy: null,
@@ -912,7 +928,7 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
   function ensureStage() {
     if (!ui.stage) {
       const host = document.createElement('div');
-      host.id = 'crm-host';
+      host.id = 'cbk-host';
       host.style.cssText = 'position:fixed;inset:0;z-index:2147483000;pointer-events:none;';
       const shadow = host.attachShadow({ mode: 'open' });
       shadow.innerHTML = `<style>${PANEL_CSS}\n${STAGE_CSS}</style><div class="stage"></div>`;
@@ -952,8 +968,8 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
     const here = parseLocation();
     const i = ui.scope === 'story' ? 0 : 1;
     const busy = !!ui.busy;
-    return `<div class="ov" data-ov><div class="pn ${busy ? 'busy' : ''}" role="dialog" aria-modal="true" aria-label="루트 지도" tabindex="-1">
-<div class="hd"><span class="mark spin-on-hover">${logo('weave')}</span><span class="ttl"><b>루트 지도</b><small>v${APP.version}</small></span><span class="grow"></span><button type="button" class="ib" data-act="close" aria-label="닫기">${ti('x')}</button></div>
+    return `<div class="ov" data-ov><div class="pn ${busy ? 'busy' : ''}" role="dialog" aria-modal="true" aria-label="갈래 매듭" tabindex="-1">
+<div class="hd"><span class="mark spin-on-hover">${logo('weave')}</span><span class="ttl"><b>갈래 매듭</b><small>v${APP.version}</small></span><span class="grow"></span><button type="button" class="ib" data-act="close" aria-label="닫기">${ti('x')}</button></div>
 <div class="tb"><div class="seg" style="--i:${i}"><i></i><button type="button" class="${i === 0 ? 'on' : ''}" data-act="scope" data-arg="story" ${here.storyId ? '' : 'disabled'}>이 작품</button><button type="button" class="${i === 1 ? 'on' : ''}" data-act="scope" data-arg="all">전체</button></div><span class="grow"></span><button type="button" class="btn rf" data-act="refresh" ${busy ? 'disabled' : ''}>${ti('refresh')}새로고침</button></div>
 <div data-st>${statusHtml()}</div>
 <div class="bd" data-body>${bodyHtml()}</div>
@@ -1001,7 +1017,7 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
       const missing = !room || room.missing;
       const pending = !missing && room.isBranch;
       const unresolved = pending && info && !info.failed;
-      let cover = esc(firstChar(room?.title));
+      let cover = `${esc(firstChar(room?.title))}${room?.image ? `<img src="${esc(room.image)}" alt="" loading="lazy" decoding="async">` : ''}`;
       let sub = node.desc ? `원본 · 분기 ${node.desc}개` : '원본';
       if (missing) {
         cover = ti('unlink');
@@ -1128,7 +1144,6 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
     ui.confirm = false;
     if (!ui.open) ui.returnFocus = document.activeElement;
     ui.open = true;
-    ui.closing = false;
     $('[data-ov]')?.remove();
     stage.insertAdjacentHTML('beforeend', panelHtml());
     $('.pn').focus({ preventScroll: true });
@@ -1151,11 +1166,9 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
       after?.();
       return;
     }
-    ui.closing = true;
     overlay.classList.add('out');
     setTimeout(() => {
       overlay.remove();
-      ui.closing = false;
       after?.();
     }, 160);
   }
@@ -1342,6 +1355,10 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
         goto(row.dataset.arg, row);
       }
     });
+    // 썸네일을 못 불러오면 그림을 치우고 첫 글자를 보여 줍니다.
+    shadow.addEventListener('error', event => {
+      if (event.target.matches?.('.cover img')) event.target.remove();
+    }, true);
     shadow.addEventListener('keyup', event => event.stopPropagation());
     shadow.addEventListener('keypress', event => event.stopPropagation());
     shadow.addEventListener('pointerover', event => {
@@ -1400,20 +1417,20 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
     button.className = className;
     button.dataset.tip = tip;
     button.setAttribute('aria-label', tip);
-    button.innerHTML = logo('', 'crm-');
+    button.innerHTML = logo('', 'cbk-');
     button.addEventListener('click', event => {
       event.preventDefault();
       event.stopPropagation();
       onClick();
     });
-    button.crmBound = true;
+    button.cbkBound = true;
     return button;
   }
 
   // 크랙이 화면을 다시 그리며 버튼 모양만 복사해 둔 경우(눌러도 반응 없음)에는 새로 만듭니다.
   function liveButton(root, selector) {
     const button = root.querySelector(selector);
-    if (button && !button.crmBound) {
+    if (button && !button.cbkBound) {
       button.remove();
       return null;
     }
@@ -1431,10 +1448,10 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
     }
     if (flag.id !== here.chatId) return;
     try { sessionStorage.removeItem(APP.arriveKey); } catch (error) { /* 무시 */ }
-    button.classList.remove('crm-arrive');
+    button.classList.remove('cbk-arrive');
     void button.offsetWidth;
-    button.classList.add('crm-arrive');
-    setTimeout(() => button.classList.remove('crm-arrive'), 2200);
+    button.classList.add('cbk-arrive');
+    setTimeout(() => button.classList.remove('cbk-arrive'), 2200);
     toast(`'${flag.title}'(으)로 이동했어요`);
   }
 
@@ -1444,16 +1461,16 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
     if (!here.chatId) return;
     const header = document.querySelector('.group\\/header');
     if (!header) return;
-    let button = liveButton(header, '.crm-hbtn');
+    let button = liveButton(header, '.cbk-hbtn');
     if (!button) {
       const group = header.querySelector('button[aria-haspopup="dialog"]')?.parentElement;
       if (!group) return;
-      button = iconButton('crm-hbtn crm-tip crm-spin', '루트 지도', () => openPanel('story'));
+      button = iconButton('cbk-hbtn cbk-tip cbk-spin', '갈래 매듭', () => openPanel('story'));
       group.insertBefore(button, group.firstChild);
     }
     const hasMap = ui.marks.stories.has(here.storyId);
-    const dot = button.querySelector('.crm-dot');
-    if (hasMap && !dot) button.insertAdjacentHTML('beforeend', '<i class="crm-dot" aria-hidden="true"></i>');
+    const dot = button.querySelector('.cbk-dot');
+    if (hasMap && !dot) button.insertAdjacentHTML('beforeend', '<i class="cbk-dot" aria-hidden="true"></i>');
     else if (!hasMap && dot) dot.remove();
     consumeArrive(button, here);
   }
@@ -1464,8 +1481,8 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
       if (label.textContent.trim() !== '채팅 목록') return;
       const row = label.parentElement;
       const menu = row?.querySelector(':scope > button[aria-haspopup="menu"]');
-      if (!menu || liveButton(row, '.crm-mini')) return;
-      row.insertBefore(iconButton('crm-mini crm-tip crm-tip-end crm-spin', '루트 지도 · 전체', () => openPanel('all')), menu);
+      if (!menu || liveButton(row, '.cbk-mini')) return;
+      row.insertBefore(iconButton('cbk-mini cbk-tip cbk-tip-end cbk-spin', '갈래 매듭 · 전체', () => openPanel('all')), menu);
     });
   }
 
@@ -1480,8 +1497,8 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
       const id = (link.getAttribute('href').match(/\/episodes\/([a-f0-9]{24})/i) || [])[1] || '';
       const want = origin.has(id) ? 'origin' : branch.has(id) ? 'branch' : '';
       const count = String(origin.get(id) || '');
-      let mark = link.querySelector('[data-crm-mark]');
-      if (mark && (mark.dataset.crmMark !== want || (want === 'origin' && mark.dataset.count !== count))) {
+      let mark = link.querySelector('[data-cbk-mark]');
+      if (mark && (mark.dataset.cbkMark !== want || (want === 'origin' && mark.dataset.count !== count))) {
         mark.remove();
         mark = null;
       }
@@ -1490,16 +1507,16 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
         const title = link.querySelector('span.typo-text-sm_leading-none_medium');
         if (!title?.parentElement) return;
         mark = document.createElement('span');
-        mark.dataset.crmMark = want;
+        mark.dataset.cbkMark = want;
         if (want === 'origin') {
-          mark.className = 'crm-origin';
+          mark.className = 'cbk-origin';
           mark.dataset.count = count;
           mark.title = `원본 방 · 분기 ${count}개`;
           mark.innerHTML = `${FLAG_ICON}원본<b>${count}</b>`;
         } else {
-          mark.className = 'crm-bdg';
+          mark.className = 'cbk-bdg';
           mark.title = '분기로 만든 방';
-          mark.innerHTML = logo('', 'crm-');
+          mark.innerHTML = logo('', 'cbk-');
         }
         title.parentElement.insertBefore(mark, title);
       }
@@ -1531,15 +1548,4 @@ body[data-theme="dark"] .crm-origin.is-cur{background:#8cc59e;color:#122018}
   });
   observer.observe(document.body, { childList: true, subtree: true });
   ensureUi();
-
-  try {
-    GM_registerMenuCommand('🌳 루트 지도 열기', () => openPanel(parseLocation().chatId ? 'story' : 'all'));
-  } catch (error) {
-    console.warn(LOG, 'menu command failed', error);
-  }
-
-  pageWindow.CrackRouteMap = Object.freeze({
-    version: APP.version,
-    open: scope => openPanel(scope === 'all' ? 'all' : 'story'),
-  });
 })();
