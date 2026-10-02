@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🧭 Crack AI Companion (크랙 AI 도우미)
 // @namespace    https://crack.wrtn.ai/
-// @version      1.5.2
+// @version      1.5.3
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/AICompanion.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/AICompanion.user.js
 // @description  Crack RP 로그를 ChatGPT로 보내고 찐빠 검사·질문·장기기억·유저노트·로어·커스텀 작업을 작업별 대화와 증분 전달로 관리합니다.
@@ -42,7 +42,7 @@
     'use strict';
 
     /*
-     * Crack AI Companion v1.5.2
+     * Crack AI Companion v1.5.3
      * - Job-first transport with durable task conversations and verified submit/result handling.
      * - PC Chrome/iOS/Android delivery behavior is preserved from the proven pre-release build.
      * - Firefox TXT attachment runs inside a page-side runner on both desktop and Android to avoid userscript/page realm boundaries.
@@ -54,11 +54,13 @@
 
     const APP = Object.freeze({
         id: 'cgc',
-        version: '1.5.2',
+        version: '1.5.3',
         protocol: 'crack-gpt-companion/v4.2.0-durable-web-delivery',
         name: 'Crack AI Companion',
     });
 
+    // v1.5.3: AI 컴패니언을 한 번도 쓰지 않은 방에서 새로고침할 때마다 콘솔에 찍히던 경고([cgc] link pending
+    //         TypeError … 'conversations') 수정. 동작에는 영향 없던 경고.
     // v1.5.2: PC 패널 크기 조절(오른쪽 아래 모서리, 360x520~640x화면 높이, 브라우저별로 기억, 두 번 누르면 400x710, 방향키).
     //         가볍게: 3초 결과 확인은 한 번만 읽고 할 일이 없으면 12초 간격, 3D는 각도별 계산·버퍼 재사용·안 보이면 멈춤,
     //         확인 필요 바늘 흔들림은 합성 레이어에서. 동작 줄이기 때 입력창 버튼 링도 멈춤.
@@ -4965,6 +4967,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
         pendingIds(state=readValue(KEY.state,null)){
             const ids=[];
             for(const session of Object.values(state?.sessions||{})){
+                if(!session)continue; // a room AI Companion has never been used in has no session yet
                 if(getPendingJobId(session))ids.push(getPendingJobId(session));
                 for(const slot of Object.values(session.conversations||{})){
                     if(slot?.memory1State?.awaitingResultJobId)ids.push(slot.memory1State.awaitingResultJobId);
@@ -5051,7 +5054,9 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             return link;
         },
         async replayCrack(room='',known=null){
-            const state=known||readValue(KEY.state,null),ids=this.pendingIds(room?{sessions:{[room]:state?.sessions?.[room]}}:state);
+            const state=known||readValue(KEY.state,null);
+            if(room&&!state?.sessions?.[room])return; // nothing can be pending in a room without a session
+            const ids=this.pendingIds(room?{sessions:{[room]:state.sessions[room]}}:state);
             for(const id of ids)if(readValue(this.key(id),null)||CGC_ASYNC_GM_STORAGE)await this.accept(id);
         },
         async locate(id,room,slotId,{wait=true}={}){
