@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🧭 Crack AI Companion (크랙 AI 도우미)
 // @namespace    https://crack.wrtn.ai/
-// @version      1.3.1
+// @version      1.4.0
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/AICompanion.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/AICompanion.user.js
 // @description  Crack RP 로그를 ChatGPT로 보내고 찐빠 검사·질문·장기기억·유저노트·로어·커스텀 작업을 작업별 대화와 증분 전달로 관리합니다.
@@ -42,7 +42,7 @@
     'use strict';
 
     /*
-     * Crack AI Companion v1.3.1
+     * Crack AI Companion v1.4.0
      * - Job-first transport with durable task conversations and verified submit/result handling.
      * - PC Chrome/iOS/Android delivery behavior is preserved from the proven pre-release build.
      * - Firefox TXT attachment runs inside a page-side runner on both desktop and Android to avoid userscript/page realm boundaries.
@@ -54,11 +54,15 @@
 
     const APP = Object.freeze({
         id: 'cgc',
-        version: '1.3.1',
+        version: '1.4.0',
         protocol: 'crack-gpt-companion/v4.2.0-durable-web-delivery',
         name: 'Crack AI Companion',
     });
 
+    // v1.4.0: never store ChatGPT's client-only chat id (/c/local-chatgpt:...) as the conversation address; repair
+    //         addresses saved that way with job-marker proof; two-phase dispatch with Crack confirmation; a tab that
+    //         navigates for its own job keeps its claim; event-driven waits that also work in background windows;
+    //         finished-answer and header detection for the 2026-10 ChatGPT DOM.
     // v1.3.0: every task uses a TXT attachment, regardless of length; reject non-TXT delivery before editor access.
     // v1.2.7: never innerText a giant composer; show a heavy-composer badge; ignore editor mutations in completion watches.
     // v1.2.6: resume late host readiness; validate before side effects; never clear/rewrite a failed editor insertion.
@@ -85,7 +89,7 @@
     };
 
     const PROMPT_REVISION = 20;
-    const BRIDGE_REVISION = 42; // Completion-beacon monitoring and routing/reset safety require the same bridge on both pages.
+    const BRIDGE_REVISION = 43; // Two-phase dispatch confirmation and durable-id routing require the same bridge on both pages.
     const MAX_INLINE_COMPOSER_CHARS = 18256; // Safety cap for the short file instruction and job marker, never a TXT routing threshold.
     // v1.2.7: 이보다 큰 GPT 입력창은 innerText(전체 레이아웃 강제)로 읽지 않고, 대용량 잔존 내용으로 판단한다.
     const CGC_COMPOSER_HEAVY_CHARS = 60000;
@@ -126,6 +130,9 @@
         linkEvent: 'CGC_LINK_EVENT_V1',
         completion: 'CGC_COMPLETION_V1',
         roomCheckpoints: 'CGC_ROOM_CHECKPOINTS_V1',
+        dispatchConfirm: 'CGC_DISPATCH_CONFIRM_V1',
+        completionPoke: 'CGC_COMPLETION_POKE_V1',
+        conversationRepair: 'CGC_CONVERSATION_REPAIR_V1',
     });
 
     const STORAGE_PREFIX = Object.freeze({
@@ -308,7 +315,9 @@
     const JOB_TTL_MS = 15 * 60 * 1000;
     const CLAIM_TTL_MS = 4 * 60 * 1000;
     const TAB_BUSY_TTL_MS = 4 * 60 * 1000;
-    const DISPATCH_ACK_TIMEOUT_MS = 1800;
+    const DISPATCH_RECEIVE_TIMEOUT_MS = 2500; // a live page answers "received" synchronously from its storage listener
+    const DISPATCH_DECISION_TIMEOUT_MS = 20000; // checks/claim in a throttled background page can take seconds
+    const DISPATCH_CONFIRM_WAIT_MS = 30000;
     const MAX_TRANSMISSIONS_PER_SESSION = 8;
     const MAX_SUBMITTED_ACKS = 40;
     const REFERENCE_CACHE_MS = 30000;
@@ -324,6 +333,8 @@
     }
     const CGC_EARLY_JOB_MARKER=cgcJobMarkerFromUrl(location.href);
     const CGC_EARLY_SURFACE_MARKER=(()=>{try{const url=new URL(location.href);return new URLSearchParams(url.hash.slice(1)).get('cgc-surface')||url.searchParams.get('cgc_surface')||'';}catch{return '';}})();
+    // "Open the durable chat of this job": Crack sends it when it only knows a client-only chat address.
+    const CGC_EARLY_RESOLVE_MARKER=(()=>{try{const url=new URL(location.href);return cleanText(new URLSearchParams(url.hash.slice(1)).get('cgc-resolve')||url.searchParams.get('cgc_resolve')||'');}catch{return '';}})();
 
     // Capture handoff strings immediately on script entry, but leave the host's DOM and GM store alone.
     // A normal GPT visit must be able to finish mounting before any companion worker starts.
@@ -786,8 +797,9 @@
                 if(typeof GM_saveTab!=='function'&&typeof api?.saveTab==='function')return void Promise.resolve(api.saveTab(tab)).then(()=>resolve(true)).catch(error=>{console.warn(`[${APP.id}] GM.saveTab failed`,error);resolve(false);});
                 if (typeof GM_saveTab !== 'function') return resolve(false);
                 GM_saveTab(tab, () => resolve(true));
-                // Some builds do not call the optional callback; resolve optimistically.
-                setTimeout(() => resolve(true), 40);
+                // Some builds do not call the optional callback; resolve optimistically without a timer,
+                // which a hidden page may hold for a minute.
+                queueMicrotask(() => resolve(true));
             } catch (error) {
                 console.warn(`[${APP.id}] GM_saveTab failed`, error);
                 resolve(false);
@@ -2268,7 +2280,7 @@
         return score;
     }
 
-    async function selectRegisteredChatGptTab(targetUrl,roomKey='',slotId='',surfaceMode='',focusOnly=false) {
+    async function selectRegisteredChatGptTabs(targetUrl,roomKey='',slotId='',surfaceMode='',focusOnly=false) {
         const rows = await getRegisteredChatGptTabs();
         const wantedSurface=surfaceMode?normalizeOpenMode(surfaceMode,''):'';
         const available = rows
@@ -2276,7 +2288,13 @@
             .filter(row => !focusOnly || registeredTabRouteCompatible(row,targetUrl))
             .filter(row => !wantedSurface || row.meta?.surfaceMode===wantedSurface)
             .filter(row => registeredTabRouteCompatible(row,targetUrl,roomKey,slotId));
-        return available.sort((a, b) => scoreRegisteredTab(b,targetUrl,roomKey,slotId) - scoreRegisteredTab(a,targetUrl,roomKey,slotId))[0] || null;
+        // Equal routes: the most recently active page first.
+        return available.sort((a, b) => scoreRegisteredTab(b,targetUrl,roomKey,slotId) - scoreRegisteredTab(a,targetUrl,roomKey,slotId)
+            || Number(b.meta?.updatedAt||0) - Number(a.meta?.updatedAt||0));
+    }
+
+    async function selectRegisteredChatGptTab(targetUrl,roomKey='',slotId='',surfaceMode='',focusOnly=false) {
+        return (await selectRegisteredChatGptTabs(targetUrl,roomKey,slotId,surfaceMode,focusOnly))[0] || null;
     }
 
     function makeJobUrl(url, jobId, forceReload=false) {
@@ -2343,13 +2361,14 @@
             } catch { /* same-origin about:blank only */ }
         },
 
-        reserve(slot='audit',sessionKey='',surfaceKey='') {
+        // focus:false (job starts) leaves an already-open ChatGPT window where it is; opening a chat to look at it raises it.
+        reserve(slot='audit',sessionKey='',surfaceKey='',{focus=true}={}) {
             const safeSlot=(isRoutableConversationSlot(slot)||slot===LORE_TRANSIENT_SLOT)?slot:'audit';
             const safeSurface=cleanText(surfaceKey||safeSlot)||safeSlot;
             const key=this.key(sessionKey,safeSlot,safeSurface);
             const existing=this.handles.get(key);
             try {
-                if(existing&&!existing.closed){try{existing.focus();}catch{}return {mode:'popup',handle:existing,reused:true,safeToNavigate:false,slot:safeSlot,sessionKey,key};}
+                if(existing&&!existing.closed){if(focus)try{existing.focus();}catch{}return {mode:'popup',handle:existing,reused:true,safeToNavigate:false,slot:safeSlot,sessionKey,key};}
             } catch { this.handles.delete(key); }
             try {
                 // Empty URL re-acquires a named popup without navigating an already-open cross-origin ChatGPT page.
@@ -2360,7 +2379,7 @@
                 let safeToNavigate=false;
                 try{safeToNavigate=opened.location?.href?.startsWith('about:blank')||opened.location?.href==='';}catch{safeToNavigate=false;}
                 if(safeToNavigate)this.paintWaiting(opened,safeSlot);
-                try{opened.focus();}catch{}
+                if(safeToNavigate||focus)try{opened.focus();}catch{}
                 return {mode:'popup',handle:opened,reused:!safeToNavigate,safeToNavigate,slot:safeSlot,sessionKey,key};
             }catch(error){
                 console.warn(`[${APP.id}] popup reserve failed`,error);
@@ -2471,12 +2490,31 @@
         });
     }
 
+    // Two-phase handoff to an already-open ChatGPT page.
+    // 1) The page answers "received" synchronously from its storage listener, so a throttled background
+    //    window replies at once; silence means it is frozen, discarded or closed.
+    // 2) It then accepts or declines after its own checks. For jobs, Crack's confirmation is final: the page
+    //    starts only on {go:true}, and a late acceptance after Crack moved on is told to stand down.
     async function sendTargetedDispatch(targetTabId, dispatchBase) {
         const nonce=uid('dispatch'),targetInstanceId=cleanText(dispatchBase?.targetInstanceId||'');
         const event={...dispatchBase,nonce,targetTabId,targetInstanceId,protocol:APP.protocol,bridgeRevision:BRIDGE_REVISION,at:Date.now()};
-        const wait=waitForStorageEvent(KEY.dispatchAck,value=>value?.nonce===nonce&&value?.targetTabId===targetTabId&&(!targetInstanceId||value?.targetInstanceId===targetInstanceId),DISPATCH_ACK_TIMEOUT_MS);
+        const ours=value=>value?.nonce===nonce&&value?.targetTabId===targetTabId&&(!targetInstanceId||value?.targetInstanceId===targetInstanceId);
+        const decided=value=>ours(value)&&(value.accepted===true||value.phase==='declined');
+        const received=waitForStorageEvent(KEY.dispatchAck,ours,DISPATCH_RECEIVE_TIMEOUT_MS);
         writeValue(KEY.dispatch,event);
-        return await wait;
+        let reply=await received;
+        if(reply&&!decided(reply))reply=await waitForStorageEvent(KEY.dispatchAck,decided,DISPATCH_DECISION_TIMEOUT_MS);
+        const go=Boolean(reply?.accepted);
+        CGC_TRACE(event.jobId||'','dispatch-reply',{kind:event.kind,targetTabId,phase:reply?.phase||'',accepted:go,reason:reply?.reason||'',ms:Date.now()-event.at});
+        if(event.kind==='job'){
+            writeValue(KEY.dispatchConfirm,{nonce,jobId:event.jobId||'',targetTabId,go,at:Date.now()});
+            // Crack's {go:false} is final. A page that answered and then stalled (background timers held for
+            // minutes) may hold the job's claim; release it so the fallback surface can start at once. The
+            // stalled page stands down on the confirmation when it wakes, so nothing is sent twice.
+            if(!go&&event.jobId&&(!reply||reply.phase==='received'))deleteValue(claimStorageKey(event.jobId));
+            await flushStorageWrites();
+        }
+        return go?reply:null;
     }
 
     async function dispatchJobToChatGpt(job, settings = getSettings(), reservedPopup = null) {
@@ -2484,7 +2522,10 @@
         await flushStorageWrites();
         const scope=jobScopeOf(job);
         const slot=conversationSlotOf(job);
-        const target = canonicalChatGptUrl(job.conversationUrl || job.targetUrl || job.gptBaseUrl) || CHATGPT_HOME;
+        let target = canonicalChatGptUrl(job.conversationUrl || job.targetUrl || job.gptBaseUrl) || CHATGPT_HOME;
+        // An unrepaired client-only address bounces to the home page (and drops the job marker), so open home;
+        // the ChatGPT page resolves the durable conversation from job.conversationUrl before it sends.
+        if(isTempConversationUrl(target))target=canonicalChatGptUrl(job.gptBaseUrl)||CHATGPT_HOME;
         const preferredOpenMode=normalizeOpenMode(job.openMode||getToolOpenMode(job.requestedToolId||job.toolId,settings),'popup');
         const actualOpenMode=CGC_PLATFORM.mobile?'tab':preferredOpenMode;
         const jobUrl=withSurfaceMarker(makeJobUrl(target,job.id,true),actualOpenMode);
@@ -2511,27 +2552,34 @@
 
         const tryReuseSelectedSurface=async()=>{
             if(isLoreJob(job)||settings.backgroundRelay===false)return null;
-            const candidate=await selectRegisteredChatGptTab(target,job.sessionKey||'',slot,actualOpenMode);
-            if(!candidate?.meta?.tabId)return null;
-            CGC_TRACE(job.id,'dispatch-candidate',{
-                target,
-                actualOpenMode,
-                candidateTabId:candidate.meta.tabId,
-                candidateUrl:candidate.meta.url||'',
-                candidateSurfaceMode:candidate.meta.surfaceMode||'',
-                candidateScriptVersion:candidate.meta.scriptVersion||'',
-                candidateProtocol:candidate.meta.protocol||'',
-                candidateBridgeRevision:Number(candidate.meta.bridgeRevision||0),
-                candidateBusyJobId:candidate.meta.busyJobId||'',
-            });
-            const accepted=await sendTargetedDispatch(candidate.meta.tabId,{
-                kind:'job',jobId:job.id,targetUrl:target,scope,conversationSlot:slot,
-                roomKey:job.sessionKey||'',slotId:slot,surfaceMode:actualOpenMode,targetInstanceId:candidate.meta.instanceId||''
-            });
-            if(!accepted?.accepted)return null;
-            CGC_TRACE(job.id,'dispatch',{mode:`reused-${actualOpenMode}`,target,targetTabId:candidate.meta.tabId});
-            ChatGptPopup.closeIfWaiting(reservedPopup);
-            return {mode:'reused',surfaceMode:actualOpenMode,tabId:candidate.meta.tabId};
+            // A declining or silent page (draft, generating, stale build, frozen) passes the job to the next open page.
+            const candidates=(await selectRegisteredChatGptTabs(target,job.sessionKey||'',slot,actualOpenMode)).slice(0,3);
+            const started=Date.now();
+            for(const candidate of candidates){
+                if(!candidate?.meta?.tabId)continue;
+                // Keep the click's popup permission usable for the fallback window.
+                if(candidate!==candidates[0]&&Date.now()-started>4000)break;
+                CGC_TRACE(job.id,'dispatch-candidate',{
+                    target,
+                    actualOpenMode,
+                    candidateTabId:candidate.meta.tabId,
+                    candidateUrl:candidate.meta.url||'',
+                    candidateSurfaceMode:candidate.meta.surfaceMode||'',
+                    candidateScriptVersion:candidate.meta.scriptVersion||'',
+                    candidateProtocol:candidate.meta.protocol||'',
+                    candidateBridgeRevision:Number(candidate.meta.bridgeRevision||0),
+                    candidateBusyJobId:candidate.meta.busyJobId||'',
+                });
+                const accepted=await sendTargetedDispatch(candidate.meta.tabId,{
+                    kind:'job',jobId:job.id,targetUrl:target,scope,conversationSlot:slot,
+                    roomKey:job.sessionKey||'',slotId:slot,surfaceMode:actualOpenMode,targetInstanceId:candidate.meta.instanceId||''
+                });
+                if(!accepted?.accepted)continue;
+                CGC_TRACE(job.id,'dispatch',{mode:`reused-${actualOpenMode}`,target,targetTabId:candidate.meta.tabId});
+                ChatGptPopup.closeIfWaiting(reservedPopup);
+                return {mode:'reused',surfaceMode:actualOpenMode,tabId:candidate.meta.tabId};
+            }
+            return null;
         };
 
         // Reuse is allowed only inside the surface selected in settings.
@@ -2600,6 +2648,70 @@
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
+    // Sub-second settling pause that a hidden page still finishes on time. Background timers can be held
+    // for a minute or more (observed: a 100 ms sleep took ~115 s in a minimized ChatGPT popup), while
+    // MessageChannel turns are not timer-throttled. Only for short waits on the job's critical path.
+    function cgcPause(ms) {
+        if(document.visibilityState!=='hidden')return sleep(ms);
+        const end=Date.now()+ms;
+        return new Promise(resolve=>{
+            const channel=new MessageChannel();
+            channel.port1.onmessage=()=>{if(Date.now()>=end){channel.port1.close();resolve();}else channel.port2.postMessage(0);};
+            channel.port2.postMessage(0);
+        });
+    }
+
+    // Event-driven wait for GPT-page steps that must also run in a background window.
+    // Hidden pages clamp timers to ~1 s, Chrome allows chained timers only once a minute after 5 minutes
+    // hidden, and iOS Safari suspends background tabs; DOM mutations, URL changes and storage events still
+    // arrive promptly, so they drive the checks here. The condition is always checked before a deadline is
+    // honoured, and a deadline reached right after a suspension (no polling tick for a while) gets one grace
+    // period instead of failing on time the page never had.
+    // https://developer.chrome.com/blog/timer-throttling-in-chrome-88 · https://developer.chrome.com/docs/web-platform/page-lifecycle-api
+    function cgcWaitFor(check,{timeout=10000,root=null,attributes=true,interval=500,grace=8000,events=[],minGap=100}={}){
+        return new Promise(resolve=>{
+            let done=false,observer=null,poll=0,deadline=0,trailing=0,lastRun=0,lastTick=Date.now(),graceUsed=false;
+            const listeners=[];
+            const finish=value=>{
+                if(done)return;done=true;
+                clearTimeout(deadline);clearTimeout(trailing);clearInterval(poll);
+                try{observer?.disconnect();}catch{}
+                for(const [target,name,fn] of listeners)target.removeEventListener(name,fn,true);
+                resolve(value);
+            };
+            const test=()=>{
+                if(done)return true;
+                lastRun=Date.now();let value=null;
+                try{value=check();}catch{value=null;}
+                if(value){finish(value);return true;}
+                return false;
+            };
+            const kick=()=>{
+                if(done)return;
+                // A later mutation runs the check itself; a throttled trailing timer must never hold checks back.
+                const wait=minGap-(Date.now()-lastRun);
+                if(wait<=0){test();return;}
+                if(!trailing)trailing=setTimeout(()=>{trailing=0;test();},wait);
+            };
+            const arm=ms=>{clearTimeout(deadline);deadline=setTimeout(expire,ms);};
+            const expire=()=>{
+                if(test())return;
+                if(!graceUsed&&Date.now()-lastTick>Math.max(2500,interval*4)){graceUsed=true;lastTick=Date.now();arm(grace);return;}
+                finish(null);
+            };
+            const listen=(target,name,fn)=>{target.addEventListener(name,fn,true);listeners.push([target,name,fn]);};
+            try{
+                observer=new MutationObserver(kick);
+                observer.observe(root||document.documentElement,{childList:true,subtree:true,characterData:true,attributes});
+            }catch{}
+            for(const name of events)listen(window,name,kick);
+            listen(document,'visibilitychange',()=>{lastTick=0;kick();});
+            poll=setInterval(()=>{lastTick=Date.now();test();},interval);
+            arm(timeout);
+            test();
+        });
+    }
+
     function clamp(value, min, max) {
         return Math.min(max, Math.max(min, value));
     }
@@ -2663,6 +2775,19 @@
 
     const CHATGPT_ORIGIN = 'https://chatgpt.com';
 
+    // A new chat first runs under a client-only id (/c/local-chatgpt:<uuid>, earlier /c/WEB:<uuid>) and the
+    // address is swapped in place once the server assigns the durable id. Reopening a client-only id lands on
+    // the home page, and the same client-only id is reused for later new chats in that window, so it never
+    // identifies a conversation. Records saved that way by older builds are repaired per job (CgcConversationRepair).
+    function cgcConversationIdOf(url){
+        try{const id=new URL(url,`${CHATGPT_ORIGIN}/`).pathname.split('/').filter(Boolean).pop()||'';try{return decodeURIComponent(id);}catch{return id;}}
+        catch{return '';}
+    }
+    function cgcIsTempConversationId(id){
+        const value=String(id||'');
+        return !value||/[:%\s]/.test(value)||/^(?:WEB|local)(?:[-_:]|$)/i.test(value);
+    }
+
     function cgcSafeChatGptUrl(url,{stripHash=false}={}){
         try{
             if(!url)return '';
@@ -2710,11 +2835,11 @@
     function persistentConversationUrl(url) {
         const conv=conversationUrlFromCurrent(url);
         if(!conv)return '';
-        try{
-            const id=new URL(conv).pathname.split('/').filter(Boolean).pop()||'';
-            if(/^WEB:/i.test(id))return '';
-        }catch{return '';}
-        return conv;
+        return cgcIsTempConversationId(cgcConversationIdOf(conv))?'':conv;
+    }
+    function isTempConversationUrl(url) {
+        const conv=conversationUrlFromCurrent(url);
+        return Boolean(conv&&cgcIsTempConversationId(cgcConversationIdOf(conv)));
     }
 
     function shortConversationId(url) {
@@ -4375,10 +4500,11 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
     const CgcReturnDelivery = {
         queue:Promise.resolve(), pending:new Map(), announced:new Map(),
         ackKey(id){return 'CGC_RETURN_ACK_V1_'+id;},
-        settledFromCache(id){
-            const r=readValue(WebDelivery.key(id),null);if(!this.validReceipt(r))return false;
+        // state: one snapshot shared by a caller's loop; each read of the ~250 KB state costs ~6 ms.
+        settledFromCache(id,state=readValue(KEY.state,null)){
+            const r=readValue(WebDelivery.key(id),null);if(!this.validReceipt(r,state))return false;
             const ack=readValue(this.ackKey(id),null),result=r.job.expectResult?readValue(transformResultStorageKey(id),null):null;
-            return this.validAck(ack,r,result);
+            return this.validAck(ack,r,result,state);
         },
         validReceipt(r,state=readValue(KEY.state,null)){
             return Boolean(r?.job?.id&&r.job.sessionKey&&r.job.createdAt
@@ -4394,9 +4520,9 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 &&(!Object.prototype.hasOwnProperty.call(result,'slotResetAt')||Number(result.slotResetAt||0)===Number(j.slotResetAt||0))
                 &&(!result.actualConversationUrl||persistentConversationUrl(result.actualConversationUrl)===persistentConversationUrl(r.conversationUrl)));
         },
-        validAck(ack,r,result=null){
+        validAck(ack,r,result=null,state=undefined){
             const j=r?.job;
-            return this.validReceipt(r)&&ack?.schema===1&&ack.jobId===j.id&&ack.sessionKey===j.sessionKey
+            return (state===undefined?this.validReceipt(r):this.validReceipt(r,state))&&ack?.schema===1&&ack.jobId===j.id&&ack.sessionKey===j.sessionKey
                 &&ack.slotId===conversationSlotOf(j)&&Number(ack.jobCreatedAt)===Number(j.createdAt)
                 &&Number(ack.sessionResetAt||0)===Number(j.sessionResetAt||0)&&Number(ack.slotResetAt||0)===Number(j.slotResetAt||0)
                 &&ack.url===persistentConversationUrl(r.conversationUrl)&&ack.requestHash===(r.expected?.hash||'')
@@ -4430,20 +4556,31 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             if(r.ack?.jobId===id)writeValue(KEY.ack,{...r.ack,nonce:uid('return-ack-wake')});
             await flushStorageWrites();return false;
         },
-        receive(id){
+        // A tab's userscript storage cache can miss a write that landed while the tab was starting up
+        // (observed with Tampermonkey: the value stays stale until reload). Shared ack/result/completion
+        // events carry the full record, so the event value fills in what this tab's cache missed.
+        hints:new Map(),
+        hint(id,patch){if(id&&patch)this.hints.set(id,{...(this.hints.get(id)||{}),...patch});},
+        receive(id,hint=null){
             if(!id)return Promise.resolve(false);
+            this.hint(id,hint);
             if(this.pending.has(id))return this.pending.get(id);
             const work=this.queue.catch(()=>{}).then(()=>this.receiveOne(id));
             this.queue=work.catch(error=>console.warn('[cgc] return receive deferred',id,error));
             const done=work.finally(()=>this.pending.delete(id));this.pending.set(id,done);return done;
         },
         async receiveOne(id){
+            const hint=this.hints.get(id)||{};this.hints.delete(id);
             await Promise.all([KEY.state,KEY.roomCheckpoints].map(refreshAsyncStorageKey));
             let r=await refreshAsyncStorageKey(WebDelivery.key(id));
+            if(hint.ack?.jobId===id&&r?.job?.id===id&&['submitting','uncertain'].includes(r.phase))
+                r={...r,phase:'submitted',ack:hint.ack,conversationUrl:persistentConversationUrl(r.conversationUrl||'')||hint.ack.conversationUrl||''};
             if(!this.validReceipt(r))return false;
             const j=r.job,slotId=conversationSlotOf(j);
-            const [result,storedEvent]=await Promise.all([j.expectResult?refreshAsyncStorageKey(transformResultStorageKey(id)):null,
+            let [result,storedEvent]=await Promise.all([j.expectResult?refreshAsyncStorageKey(transformResultStorageKey(id)):null,
                 refreshAsyncStorageKey(completionStorageKey(id))]);
+            if(!this.validResult(result,r)&&this.validResult(hint.result,r))result=hint.result;
+            if(!storedEvent&&hint.event?.jobId===id)storedEvent=hint.event;
             // applyAck is idempotent and retains the original branch/reset/transport-revision guards.
             if(r.ack?.jobId===id){CrackUI.applyAck(r.ack,{allowLate:true,silent:true});await flushStorageWrites();}
             await refreshAsyncStorageKey(KEY.state);
@@ -4485,7 +4622,9 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 sessionResetAt:Number(j.sessionResetAt||0),slotResetAt:Number(j.slotResetAt||0),url:persistentConversationUrl(r.conversationUrl),
                 requestHash:r.expected?.hash||'',responseHash,accepted,status,completedAt,at:Date.now()};
             await refreshAsyncStorageKey(KEY.state);
-            r=await refreshAsyncStorageKey(WebDelivery.key(id));
+            const latest=await refreshAsyncStorageKey(WebDelivery.key(id));
+            if(latest?.phase==='cancelled'||latest?.job?.id!==id)return false;
+            if(this.validReceipt(latest))r=latest; // otherwise keep the event-confirmed view built above
             if(!this.validReceipt(r)||r.job.sessionKey!==j.sessionKey||conversationSlotOf(r.job)!==slotId)return false;
             const old=await refreshAsyncStorageKey(this.ackKey(id));
             if(!this.validAck(old,r,result)||old.status!==status||old.accepted!==accepted||old.completedAt!==completedAt){
@@ -4582,7 +4721,10 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             if(channel&&channel!=='final')return empty;
             const streaming=turn.matches('[data-is-streaming="true"],[aria-busy="true"],[data-message-status="in_progress"]')
                 ||Boolean(turn.querySelector('[data-is-streaming="true"],[aria-busy="true"],[data-message-status="in_progress"]'));
-            const actions=[...turn.querySelectorAll('button[data-testid="copy-turn-action-button"],button[data-testid="good-response-turn-action-button"],button[data-testid="bad-response-turn-action-button"],.turn-action-controls button[aria-label="응답 평가"]')];
+            // The turn's action row (copy/rate/regenerate) is rendered only for a finished answer; 2026-10 builds dropped the testids.
+            // The USER message carries its own copy/edit row inside its unit, so that row never counts.
+            const actions=[...turn.querySelectorAll('button[data-testid="copy-turn-action-button"],button[data-testid="good-response-turn-action-button"],button[data-testid="bad-response-turn-action-button"],.turn-action-controls button')]
+                .filter(button=>!button.closest('[data-message-author-role="user"],[data-content-search-unit-key$=":user"]'));
             const hasFinalAction=actions.some(button=>!button.disabled&&button.getAttribute('aria-disabled')!=='true'&&isVisible(button));
             return {text,final:!streaming&&!ChatGPTBridge.isGenerationBusy()&&hasFinalAction,streaming};
         },
@@ -4852,6 +4994,8 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             if(this.wakeRunning){this.wakeAgain=true;return;}this.wakeRunning=true;
             try{
                 await refreshAsyncStorageKey(KEY.state);
+                // A Crack lookup can be waiting on a client-only address that this page can prove (30-minute backoff on misses).
+                void CgcConversationRepair.run({receipts:false}).catch(error=>console.warn('[cgc] conversation address repair',error));
                 const query=await refreshAsyncStorageKey(KEY.linkQuery);
                 const pending=new Set(this.pendingIds()),queryId=query?.expiresAt>Date.now()?query.jobId:'';
                 const ids=new Set([queryId,ChatGPTBridge.processingJobId,ChatGPTBridge.bootstrapJobId,...WebDelivery.ids()].filter(id=>id&&pending.has(id)));
@@ -5131,9 +5275,9 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 &&(conversationSlotOf(receipt.job)===LORE_TRANSIENT_SLOT||Boolean(state?.sessions?.[receipt.job.sessionKey]?.conversations?.[conversationSlotOf(receipt.job)]));
         },
         
-        linkedContext(url=persistentConversationUrl(location.href)){
+        // Read-only lookups use a plain read; getState() adds two deep copies of the ~250 KB state for writers.
+        linkedContext(url=persistentConversationUrl(location.href),state=normalizeState(readValue(KEY.state,null))){
             if(!url)return null;
-            const state=getState();
             for(const [sessionKey,session] of Object.entries(state.sessions||{})){
                 for(const [slotId,slot] of Object.entries(session?.conversations||{})){
                     if(persistentConversationUrl(slot?.url||'')===url)return {sessionKey,slotId,slot,session};
@@ -5144,7 +5288,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
         async discover(){
             const url=persistentConversationUrl(location.href);if(!url)return null;
             let marker='';try{marker=new URLSearchParams(location.hash.slice(1)).get('cgc-review')||'';}catch{}
-            const state=getState(),linked=this.linkedContext(url);
+            const state=normalizeState(readValue(KEY.state,null)),linked=this.linkedContext(url,state);
             const rows=Object.values(state.sessions||{}).flatMap(s=>s.transmissions||[])
                 .filter(r=>persistentConversationUrl(r.conversationUrl||'')===url).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
             const ids=[ChatGPTBridge.processingJobId,WebDelivery.active?.job?.id,linked?.slot?.lastRequestId,
@@ -5156,7 +5300,14 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             found.sort((a,b)=>Number(b.job.createdAt||0)-Number(a.job.createdAt||0));
             return found[0]||null;
         },
-        headerActions(){return document.querySelector('#conversation-header-actions');},
+        headerActions(){
+            const legacy=document.querySelector('#conversation-header-actions');if(legacy)return legacy;
+            // 2026-10 app shell: Share + conversation-options group at the right of the titlebar.
+            const header=document.querySelector('header[data-app-shell-titlebar]');if(!header)return null;
+            const options=header.querySelector('[data-testid="conversation-options-button"]')
+                ||[...header.querySelectorAll('[data-app-shell-header-obstacle] button[aria-haspopup="menu"]')].filter(isVisible).pop();
+            return options?.parentElement||null;
+        },
         removeDock(){this.dock?.remove();this.bar?.remove();this.dock=null;this.trigger=null;this.bar=null;this.lastBar=null;this.lastHtml='';},
         handleBarAction(e){
             const action=e.target.closest('[data-task-action]')?.dataset.taskAction;if(!action)return;
@@ -5204,7 +5355,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
         },
         syncNativeTriggerStyle(actions=this.headerActions()){
             if(!this.trigger||!(actions instanceof HTMLElement))return;
-            const sample=actions.querySelector('[data-testid="conversation-options-button"]')||actions.querySelector('button');
+            const sample=actions.querySelector('[data-testid="conversation-options-button"]')||actions.querySelector('button[aria-haspopup="menu"]')||actions.querySelector('button');
             if(!(sample instanceof HTMLElement))return;
             const nativeClass=sample.getAttribute('class')||'';
             const wanted=`${nativeClass} cgc-gpt-task-trigger`.trim();if(this.trigger.className!==wanted)this.trigger.className=wanted;
@@ -5812,29 +5963,58 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 const slot=session.conversations?.[id],progress=id==='memory1'?slot?.memory1State:slot?.usernoteState;
                 if(progress?.awaitingResultJobId)ids.add(progress.awaitingResultJobId);
             }
-            for(const id of ids)void CgcReturnDelivery.receive(id).catch(error=>console.warn('[cgc] result replay',error));
+            for(const id of ids)void CgcReturnDelivery.receive(id,latest?.jobId===id?{result:latest}:null).catch(error=>console.warn('[cgc] result replay',error));
+        },
+
+        // While this Crack room is on screen, nudge the ChatGPT page of every submitted-but-unanswered job every 10 s.
+        // A hidden ChatGPT page may hold its own timers for a minute, but it handles this storage event at once.
+        pokeWaitingCompletions(session){
+            if(Date.now()-Number(this.lastCompletionPokeAt||0)<10000)return;
+            const ids=[];
+            const consider=id=>{
+                if(!id||ids.includes(id))return;
+                const r=readValue(WebDelivery.key(id),null);
+                if(r?.phase==='submitted'&&!r.answerCompletedAt&&Date.now()-Number(r.at||0)<60*60*1000)ids.push(id);
+            };
+            for(const slot of Object.values(session?.conversations||{}))
+                consider(slot?.memory1State?.awaitingResultJobId||slot?.usernoteState?.awaitingResultJobId
+                    ||(slot?.lastRequestId&&slot.lastAnswerJobId!==slot.lastRequestId?slot.lastRequestId:''));
+            // Lore parts and merges keep their own submitted state outside the task slots.
+            for(const batch of session?.loreBatches||[])for(const part of batch?.parts||[])if(part?.status==='submitted'&&!part.answerCompletedAt)consider(part.lastJobId);
+            for(const merge of session?.loreMergeHistory||[])if(merge?.status==='submitted'&&!merge.answerCompletedAt)consider(merge.lastJobId);
+            if(!ids.length)return;
+            this.lastCompletionPokeAt=Date.now();
+            writeValue(KEY.completionPoke,{jobIds:ids,nonce:uid('poke'),at:Date.now()});
         },
 
         async reconcileLiveResults(){
             if(this.reconcilingResults||document.visibilityState==='hidden')return;
             this.reconcilingResults=true;
             try{
-                await Promise.all([KEY.state,KEY.roomCheckpoints,KEY.ack,KEY.result,KEY.completion].map(refreshAsyncStorageKey));
+                const [stateNow]=await Promise.all([KEY.state,KEY.roomCheckpoints,KEY.ack,KEY.result,KEY.completion].map(refreshAsyncStorageKey));
                 const route=CrackAdapter.getRouteInfo();if(!route)return;
-                const session=readValue(KEY.state,null)?.sessions?.[route.sessionKey]||{},ids=new Set(),wakeIds=new Set();
+                const session=stateNow?.sessions?.[route.sessionKey]||{},ids=new Set(),wakeIds=new Set();
+                this.pokeWaitingCompletions(session);
                 if(getPendingJobId(session))ids.add(getPendingJobId(session));
                 for(const slot of Object.values(session.conversations||{})){
                     const awaiting=slot?.memory1State?.awaitingResultJobId||slot?.usernoteState?.awaitingResultJobId;
                     if(awaiting)ids.add(awaiting);
                     if(slot?.lastRequestId)ids.add(slot.lastRequestId);
                 }
-                // Shared wake records may represent a corrected/new packet for an already-known job,
-                // so always re-check those. Ordinary slot history can skip a durable acknowledged return.
-                for(const key of [KEY.ack,KEY.result,KEY.completion]){const e=readValue(key,null);if(e?.jobId){ids.add(e.jobId);wakeIds.add(e.jobId);}}
+                // Shared wake records may represent a corrected/new packet for an already-known job, so a new
+                // packet is always re-checked. The same packet for a durably acknowledged job is not: re-running
+                // it every 3 s cost ~100 ms per job on the Crack page (v1.4.0 measurement).
+                const seenWake=this.reconciledWake||(this.reconciledWake={}),handled=[];
+                for(const [key,field] of [[KEY.ack,'ack'],[KEY.result,'result'],[KEY.completion,'event']]){
+                    const e=readValue(key,null);if(!e?.jobId)continue;
+                    if(e.nonce&&seenWake[key]===e.nonce&&CgcReturnDelivery.settledFromCache(e.jobId,stateNow))continue;
+                    ids.add(e.jobId);wakeIds.add(e.jobId);CgcReturnDelivery.hint(e.jobId,{[field]:e});handled.push([key,e.nonce]);
+                }
                 for(const id of ids){
-                    if(!wakeIds.has(id)&&CgcReturnDelivery.settledFromCache(id))continue;
+                    if(!wakeIds.has(id)&&CgcReturnDelivery.settledFromCache(id,stateNow))continue;
                     try{await CgcReturnDelivery.receive(id);}catch(error){console.warn('[cgc] return pending',id,error);}
                 }
+                for(const [key,nonce] of handled)seenWake[key]=nonce;
                 // History/address presentation cannot abort essential result delivery.
                 void this.replayAnswerHistory(false).catch(error=>console.warn('[cgc] history pending',error));
                 void CgcJobLinks.replayCrack(route.sessionKey).catch(error=>console.warn('[cgc] link pending',error));
@@ -5879,7 +6059,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                         conversationUrl: ack.conversationUrl || '',
                         submittedAt: Number(ack.submittedAt || 0),
                     });
-                    void CgcReturnDelivery.receive(ack.jobId).catch(error=>console.warn('[cgc] submission receive',error));
+                    void CgcReturnDelivery.receive(ack.jobId,{ack}).catch(error=>console.warn('[cgc] submission receive',error));
                 }
             });
             addValueChangeListenerCompat(KEY.error, (_name, _oldValue, error) => {
@@ -5897,10 +6077,10 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             });
             setTimeout(()=>{void this.replayAnswerHistory(true).catch(error=>console.warn('[cgc] history recovery',error));},0);
             addValueChangeListenerCompat(KEY.result, (_name, _oldValue, result) => {
-                if(result?.jobId&&result?.sessionKey)void CgcReturnDelivery.receive(result.jobId).catch(error=>console.warn('[cgc] result receive',error));
+                if(result?.jobId&&result?.sessionKey)void CgcReturnDelivery.receive(result.jobId,{result}).catch(error=>console.warn('[cgc] result receive',error));
             });
             addValueChangeListenerCompat(KEY.completion, (_name, _oldValue, event) => {
-                if(event?.jobId&&event?.sessionKey)void CgcReturnDelivery.receive(event.jobId).catch(error=>console.warn('[cgc] completion receive',error));
+                if(event?.jobId&&event?.sessionKey)void CgcReturnDelivery.receive(event.jobId,{event}).catch(error=>console.warn('[cgc] completion receive',error));
             });
             addValueChangeListenerCompat(KEY.progress, (_name, _oldValue, progress) => {
                 if (!progress?.jobId) return;
@@ -6284,7 +6464,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
         },
         async replayDurableCompletions(deep=false){
             const latest=await refreshAsyncStorageKey(KEY.completion);
-            if(latest?.jobId)await CgcReturnDelivery.receive(latest.jobId);
+            if(latest?.jobId)await CgcReturnDelivery.receive(latest.jobId,{event:latest});
             if(!deep)return;
             await refreshAsyncStorageKey(KEY.state);
             const sessions=readValue(KEY.state,null)?.sessions||{};
@@ -6297,7 +6477,9 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
 
         applyAnswerRecord(row,options={}){
             if(!row?.jobId||!row?.sessionKey||!row.bodyKey)return false;
-            const known=readValue(KEY.state,null)?.sessions?.[row.sessionKey];
+            // options.known: a state snapshot shared by a replay loop. It only filters unchanged rows; any
+            // real change re-reads the latest state below, so a snapshot older than this loop's own writes is safe.
+            const known=(options.known||readValue(KEY.state,null))?.sessions?.[row.sessionKey];
             const prior=known?.results?.find(item=>cgcHistoryRowId(item)===cgcHistoryRowId(row));
             if(prior&&!stateFieldChanged(prior,row))return false;
             if(!prior&&known?.results?.length>=CGC_HISTORY_LIMIT&&Number(row.at||0)<=Math.min(...known.results.map(r=>Number(r.at||0))))return false;
@@ -6326,7 +6508,8 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                     this.lastAnswerScanAt=Date.now();
                 }
                 let changed=false;
-                for(const id of ids){const row=await refreshAsyncStorageKey(cgcAnswerRecordKey(id));if(row&&this.applyAnswerRecord(row,{silent:true}))changed=true;}
+                // One state read for the whole loop (each read of the ~250 KB state cost ~6 ms per answer row).
+                for(const id of ids){const row=await refreshAsyncStorageKey(cgcAnswerRecordKey(id));if(row&&this.applyAnswerRecord(row,{silent:true,known:state}))changed=true;}
                 if(changed&&this.panel)this.refreshPanel();
             }finally{this.replayingAnswerHistory=false;}
         },
@@ -6830,7 +7013,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
 
             const settings=getSettings(),jobId=uid('request'),openMode=getToolOpenMode('loreExtract',settings);
             const surfaceKey=`${makeLoreBatchPopupKey(batch.id,'extract',partIndex)}-${String(jobId).slice(-8)}`;
-            const reservedPopup=openMode==='popup'&&!CGC_PLATFORM.mobile?ChatGptPopup.reserve(LORE_TRANSIENT_SLOT,route.sessionKey,surfaceKey):null;
+            const reservedPopup=openMode==='popup'&&!CGC_PLATFORM.mobile?ChatGptPopup.reserve(LORE_TRANSIENT_SLOT,route.sessionKey,surfaceKey,{focus:false}):null;
             let stored=false;
             try{
                 const part={...durable,text:source};
@@ -6908,7 +7091,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             let state=getState(),session=getSession(state,route.sessionKey);
             const settings=getSettings(),jobId=uid('request'),mergeId=uid('lore-merge'),openMode=getToolOpenMode('loreMerge',settings);
             const surfaceKey=`${makeLoreBatchPopupKey(mergeId,'merge')}-${String(jobId).slice(-8)}`;
-            const reservedPopup=openMode==='popup'&&!CGC_PLATFORM.mobile?ChatGptPopup.reserve(LORE_TRANSIENT_SLOT,route.sessionKey,surfaceKey):null;
+            const reservedPopup=openMode==='popup'&&!CGC_PLATFORM.mobile?ChatGptPopup.reserve(LORE_TRANSIENT_SLOT,route.sessionKey,surfaceKey,{focus:false}):null;
             let stored=false;
             try{
                 const payload=buildLoreMergePayload(inputs,settings,'최종 병합'),txtFileName=`${sanitizeTxtFileName(session.title||'rp')}_lore_merge_input.txt`,prompt=buildTxtLead(txtFileName,'loreMerge',false),attachment={name:txtFileName,text:payload,type:'text/plain'};
@@ -6931,7 +7114,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             let state=getState(),session=getSession(state,route.sessionKey),createdJobId='';
             if(await this.handleExistingPending(route.sessionKey))return;
             state=getState();session=getSession(state,route.sessionKey);
-            this.startingSessionKey=route.sessionKey;const reservedPopup=openMode==='popup'&&!CGC_PLATFORM.mobile?ChatGptPopup.reserve(slotId,route.sessionKey):null;
+            this.startingSessionKey=route.sessionKey;const reservedPopup=openMode==='popup'&&!CGC_PLATFORM.mobile?ChatGptPopup.reserve(slotId,route.sessionKey,'',{focus:false}):null;
             this.setInlineStatus('자료 확인 중',true);
             try{
                 state=getState();session=getSession(state,route.sessionKey);let slot=ensureConversationSlot(session,slotId);
@@ -7137,7 +7320,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             if(toolId==='audit'){const notesEl=this.panel?.querySelector('#cgc-audit-notes');if(notesEl){session.auditNotes=cleanText(notesEl.value||'');saveState(state);}}
             if(await this.handleExistingPending(route.sessionKey))return;
             state=getState();session=getSession(state,route.sessionKey);
-            this.startingSessionKey=route.sessionKey;const reservedPopup=openMode==='popup'&&!CGC_PLATFORM.mobile?ChatGptPopup.reserve(slotId,route.sessionKey):null;this.setInlineStatus('자료 확인 중',true);
+            this.startingSessionKey=route.sessionKey;const reservedPopup=openMode==='popup'&&!CGC_PLATFORM.mobile?ChatGptPopup.reserve(slotId,route.sessionKey,'',{focus:false}):null;this.setInlineStatus('자료 확인 중',true);
             try{
                 const fetched=await CrackAdapter.fetchMessages();const all=fetched.messages||[];if(!all.length)throw new Error('RP 로그를 찾지 못했어요.');state=getState();session=getSession(state,route.sessionKey);let slot=ensureConversationSlot(session,slotId);
                 // A custom task can switch between persistent and fresh-session delivery. Fresh runs do not
@@ -7476,13 +7659,16 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 ||(room?recoverSlotUrlFromHistory(room,slotId,route.sessionKey):'');
             const receiptMatches=r=>r?.job?.id===id&&r.job.sessionKey===route.sessionKey
                 &&conversationSlotOf(r.job)===slotId&&CgcJobLinks.validReceipt(r);
-            let target='',reviewId='',notice='';
+            let target='',reviewId='',notice='',resolveId='';
             if(id){
                 try{
                     // Opening a chat needs only its receipt, not the large TXT/payload chunks.
                     const r=await refreshAsyncStorageKey(WebDelivery.key(id));
                     if(receiptMatches(r))target=persistentConversationUrl(r.conversationUrl||r.ack?.conversationUrl||'');
-                    if(!target){
+                    // Saved by an older build while ChatGPT still showed the chat's client-only id. A ChatGPT page
+                    // finds the durable chat itself (read-only proof, nothing is resent) and opens it.
+                    if(!target&&receiptMatches(r)&&isTempConversationUrl(r.conversationUrl||r.ack?.conversationUrl||''))resolveId=id;
+                    if(!target&&!resolveId){
                         this.updatePanelStatus('GPT 대화 주소를 확인하는 중…');
                         const located=await CgcJobLinks.locate(id,route.sessionKey,slotId,{wait:!savedUrl(session)});
                         target=persistentConversationUrl(located?.url||'');notice=located?.message||'';
@@ -7495,12 +7681,15 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 const r=await refreshAsyncStorageKey(WebDelivery.key(id));
                 if(receiptMatches(r)){
                     const actual=persistentConversationUrl(r.conversationUrl||r.ack?.conversationUrl||'');
-                    if(actual){target=actual;reviewId=id;}
+                    if(actual){target=actual;reviewId=id;resolveId='';}
+                    else if(resolveId)target='';
                     else if(!CgcJobLinks.validLink(readValue(CgcJobLinks.key(id),null),r))target='';
                     else if(target===readValue(CgcJobLinks.key(id),null)?.url)reviewId=id;
                     else target='';
-                }else target='';
+                }else{target='';resolveId='';}
             }
+            // A finished slot can also hold a client-only address; its last request proves the durable chat.
+            if(!target&&!resolveId&&slot.lastRequestId&&isTempConversationUrl(slot.url||''))resolveId=slot.lastRequestId;
             await refreshAsyncStorageKey(KEY.state);
             if(CrackAdapter.getRouteInfo()?.sessionKey!==route.sessionKey)return;
             const latestState=getState(),rawLatest=latestState.sessions?.[route.sessionKey];
@@ -7511,15 +7700,20 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 return this.toast('확인 중 이 방 또는 GPT 슬롯이 초기화됐어요. 오래된 대화는 열지 않았습니다.',true);
             if(id&&!CgcJobLinks.currentIdMatches(latest,slotId,id))
                 return this.toast('확인 중 현재 작업이 바뀌었어요. 다시 눌러 주세요.',true);
-            if(!target){
+            if(!target&&!resolveId){
                 // A saved chat may be inspected without proving it belongs to the pending job.
                 // Do not bind it, append cgc-review/cgc-job, commit cursors or resend anything.
                 target=savedUrl(latest);reviewId='';
                 if(target&&id)this.toast('저장된 GPT 대화를 확인용으로 열어요. 현재 작업의 연결 상태는 바꾸지 않습니다.');
             }
-            if(!target)return this.toast(notice||'아직 확인된 GPT 대화 주소가 없어요. 작업 중인 GPT 탭을 확인해 주세요.',true);
-            this.updatePanelStatus(reviewId?'GPT 대화 주소 확인됨':'저장된 GPT 대화 열기');
-            const url=reviewId?`${target}#cgc-review=${encodeURIComponent(reviewId)}`:target;
+            if(!target&&!resolveId)return this.toast(notice||'아직 확인된 GPT 대화 주소가 없어요. 작업 중인 GPT 탭을 확인해 주세요.',true);
+            let url=reviewId?`${target}#cgc-review=${encodeURIComponent(reviewId)}`:target;
+            if(!target&&resolveId){
+                const home=new URL(CHATGPT_HOME);home.hash='cgc-resolve='+encodeURIComponent(resolveId);
+                if(CGC_PLATFORM.mobile)home.searchParams.set('cgc_resolve',resolveId); // some mobile managers drop fragments
+                url=home.href;
+                this.updatePanelStatus('저장된 GPT 대화 주소를 ChatGPT에서 확인해 열어요');
+            }else this.updatePanelStatus(reviewId?'GPT 대화 주소 확인됨':'저장된 GPT 대화 열기');
             if(CGC_PLATFORM.mobile){
                 const marked=withSurfaceMarker(url,'tab');
                 try{if(await openPrivilegedChatGptTab(marked,'tab'))return;}catch{}
@@ -8340,6 +8534,168 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
         },
     };
 
+    // Repairs records that builds before 1.4.0 saved while ChatGPT still showed a chat's client-only id
+    // (/c/local-chatgpt:...). That id is reused for later new chats, so every record is repaired per job:
+    // the durable conversation must contain the job's own "[CGC-JOB: <id>]" request, proven either in the
+    // open page or through the read-only conversation API. Nothing is resent.
+    const CgcConversationRepair = {
+        running:null,
+        misses(){const t=readValue(KEY.conversationRepair,null);return t&&typeof t==='object'&&!Array.isArray(t)?t:{};},
+        async noteMiss(jobId){
+            await refreshAsyncStorageKey(KEY.conversationRepair);
+            const rows=Object.entries({...this.misses(),[jobId]:{at:Date.now()}}).sort((a,b)=>Number(b[1]?.at||0)-Number(a[1]?.at||0)).slice(0,100);
+            writeValue(KEY.conversationRepair,Object.fromEntries(rows));await flushStorageWrites();
+        },
+        // jobId -> earliest known submit time, for every record still holding a client-only address.
+        async pendingJobs({receipts=true}={}){
+            await refreshAsyncStorageKey(KEY.state);
+            const state=readValue(KEY.state,null),jobs=new Map();
+            const add=(url,jobId,at=0)=>{
+                if(!jobId||!isTempConversationUrl(url||''))return;
+                const prior=jobs.get(jobId)||0;
+                jobs.set(jobId,Number(at)>0&&(!prior||Number(at)<prior)?Number(at):prior);
+            };
+            for(const session of Object.values(state?.sessions||{})){
+                for(const slot of Object.values(session?.conversations||{}))add(slot?.url,slot?.lastRequestId);
+                for(const tx of session?.transmissions||[])add(tx?.conversationUrl,tx?.jobId,tx?.createdAt);
+                for(const batch of session?.loreBatches||[])for(const part of batch?.parts||[])add(part?.conversationUrl,part?.lastJobId,part?.submittedAt);
+                for(const merge of session?.loreMergeHistory||[])add(merge?.conversationUrl,merge?.lastJobId,merge?.submittedAt);
+            }
+            // Receipts can be large (they carry the job); the periodic wake skips this scan, page start and job runs keep it.
+            if(receipts)for(const id of WebDelivery.ids()){
+                const r=await refreshAsyncStorageKey(WebDelivery.key(id));
+                if(r?.job?.id===id)add(r.conversationUrl||r.ack?.conversationUrl||'',id,r.at);
+            }
+            for(const [id,at] of [...jobs]){
+                const r=await refreshAsyncStorageKey(WebDelivery.key(id));
+                if(Number(r?.at)>0&&(!at||Number(r.at)<at))jobs.set(id,Number(r.at));
+            }
+            return jobs;
+        },
+        pageProof(jobId){
+            const here=persistentConversationUrl(location.href);if(!here)return '';
+            const marker=`[CGC-JOB: ${jobId}]`;
+            return WebDelivery.userRoots().some(root=>String(root.innerText||root.textContent||'').includes(marker))?here:'';
+        },
+        async backendGet(path){
+            const get=async(target,token)=>{
+                const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000);
+                try{
+                    const response=await CgcBackendNetwork.request(CHATGPT_ORIGIN+target,{credentials:'same-origin',cache:'no-store',redirect:'error',signal:controller.signal,headers:{Accept:'application/json',...(token?{Authorization:`Bearer ${token}`}:{})}});
+                    return await response.json();
+                }finally{clearTimeout(timer);}
+            };
+            let token=ChatGPTBridge.backendAuthCache?.expiresAt>Date.now()?ChatGPTBridge.backendAuthCache.token:'';
+            try{
+                if(!token){
+                    const auth=await get('/api/auth/session','');token=typeof auth?.accessToken==='string'?auth.accessToken:'';
+                    if(!token)throw Object.assign(new Error('login required'),{status:401});
+                    ChatGPTBridge.backendAuthCache={token,expiresAt:Date.now()+300000};
+                }
+                return await get(path,token);
+            }catch(error){
+                if(error?.status===401||error?.status===403)ChatGPTBridge.backendAuthCache={token:'',expiresAt:0};
+                throw error;
+            }finally{token='';}
+        },
+        // One listing and at most a few conversation reads per run, shared by every job being repaired.
+        async serverProof(jobId,at,cache){
+            if(!at)return '';
+            if(!cache.list){
+                cache.list=[];
+                for(const offset of [0,60]){
+                    const page=await this.backendGet(`/backend-api/conversations?offset=${offset}&limit=60&order=updated`);
+                    for(const item of page?.items||[]){
+                        const id=String(item?.id||''),created=Date.parse(item?.create_time||'');
+                        if(/^[A-Za-z0-9-]{8,}$/.test(id)&&Number.isFinite(created))cache.list.push({id,created});
+                    }
+                    if(!(page?.items?.length>=60))break;
+                }
+            }
+            // A new chat is created by the request itself, moments after its submit receipt.
+            const candidates=cache.list.filter(item=>item.created>=at-120000&&item.created<=at+15*60000)
+                .sort((a,b)=>Math.abs(a.created-at)-Math.abs(b.created-at)).slice(0,4);
+            const marker=`[CGC-JOB: ${jobId}]`;
+            for(const item of candidates){
+                if(!cache.texts.has(item.id)){
+                    if(cache.reads>=8)break;cache.reads++;
+                    const data=await this.backendGet(`/backend-api/conversation/${encodeURIComponent(item.id)}`);
+                    const texts=[];
+                    for(const node of Object.values(data?.mapping||{})){
+                        const m=node?.message;if(m?.author?.role!=='user')continue;
+                        texts.push(Array.isArray(m.content?.parts)?m.content.parts.filter(p=>typeof p==='string').join('\n'):'');
+                    }
+                    cache.texts.set(item.id,texts.join('\n'));
+                }
+                if(cache.texts.get(item.id).includes(marker))return `${CHATGPT_ORIGIN}/c/${item.id}`;
+            }
+            return '';
+        },
+        // Rewrite only the client-only addresses that belong to this job.
+        async apply(jobId,url){
+            const durable=persistentConversationUrl(url);if(!durable)return false;
+            const fix=value=>isTempConversationUrl(value||'')?durable:value;
+            await refreshAsyncStorageKey(KEY.state);
+            const state=getState();let changed=false;
+            for(const session of Object.values(state.sessions||{})){
+                for(const slot of Object.values(session?.conversations||{}))if(slot?.lastRequestId===jobId&&isTempConversationUrl(slot.url||'')){slot.url=durable;changed=true;}
+                for(const tx of session?.transmissions||[])if(tx?.jobId===jobId&&isTempConversationUrl(tx.conversationUrl||'')){tx.conversationUrl=durable;changed=true;}
+                for(const batch of session?.loreBatches||[])for(const part of batch?.parts||[])if(part?.lastJobId===jobId&&isTempConversationUrl(part.conversationUrl||'')){part.conversationUrl=durable;changed=true;}
+                for(const merge of session?.loreMergeHistory||[])if(merge?.lastJobId===jobId&&isTempConversationUrl(merge.conversationUrl||'')){merge.conversationUrl=durable;changed=true;}
+            }
+            if(changed)saveState(state);
+            const r=await refreshAsyncStorageKey(WebDelivery.key(jobId));
+            if(r?.job?.id===jobId&&(isTempConversationUrl(r.conversationUrl||'')||isTempConversationUrl(r.ack?.conversationUrl||''))){
+                r.conversationUrl=fix(r.conversationUrl);if(r.ack)r.ack={...r.ack,conversationUrl:fix(r.ack.conversationUrl)};
+                await WebDelivery.save(r);changed=true;
+            }
+            await refreshAsyncStorageKey(KEY.submitted);
+            const rows=readValue(KEY.submitted,[]);
+            if(Array.isArray(rows)&&rows.some(row=>row?.jobId===jobId&&isTempConversationUrl(row.ack?.conversationUrl||''))){
+                writeValue(KEY.submitted,rows.map(row=>row?.jobId===jobId&&row.ack?{...row,ack:{...row.ack,conversationUrl:fix(row.ack.conversationUrl)}}:row));changed=true;
+            }
+            await flushStorageWrites();
+            WebDelivery.remember(jobId);
+            CGC_TRACE(jobId,'conversation-repaired',{url:durable,changed});
+            return changed;
+        },
+        run({force=false,jobIds=null,receipts=true}={}){
+            if(this.running)return this.running;
+            this.running=(async()=>{
+                await refreshAsyncStorageKey(KEY.conversationRepair);
+                const cache={list:null,texts:new Map(),reads:0},repaired=new Map();
+                for(const [jobId,at] of await this.pendingJobs({receipts})){
+                    if(jobIds&&!jobIds.includes(jobId))continue;
+                    let url=this.pageProof(jobId);
+                    if(!url){
+                        // A failed server lookup is retried at most every 30 minutes unless a job needs it now.
+                        const miss=this.misses()[jobId];
+                        if(!force&&miss&&Date.now()-Number(miss.at||0)<30*60000)continue;
+                        try{url=await this.serverProof(jobId,at,cache);}
+                        catch(error){console.warn('[cgc] conversation address lookup deferred',error?.message||error);break;}
+                    }
+                    if(url){await this.apply(jobId,url);repaired.set(jobId,url);}
+                    else await this.noteMiss(jobId);
+                }
+                if(repaired.size){
+                    void WebDelivery.recover().catch(error=>console.warn('[cgc] resume',error));
+                    void CompanionTaskUI.refresh().catch(()=>{});
+                }
+                return repaired;
+            })().finally(()=>{this.running=null;});
+            return this.running;
+        },
+        // A new job copied its slot's address; once the slot's last request is repaired, the slot holds the durable chat.
+        async resolveForJob(job){
+            const known=persistentConversationUrl(job?.conversationUrl||'');if(known)return known;
+            if(!isTempConversationUrl(job?.conversationUrl||''))return '';
+            await this.run({force:true});
+            await refreshAsyncStorageKey(KEY.state);
+            const slot=readValue(KEY.state,null)?.sessions?.[job.sessionKey]?.conversations?.[conversationSlotOf(job)];
+            return persistentConversationUrl(slot?.url||'');
+        },
+    };
+
     const ChatGPTBridge = {
         harvestingJobs:new Set(),
         historyWrites:new Map(),titlePauseUntil:0,
@@ -8394,9 +8750,31 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             this.installLifecycleRefresh();
             CgcStartup.mark('bridge-ui');
             CompanionTaskUI.install();
+            // Older builds could save a chat's client-only address; repair those links (read-only proof).
+            if(CGC_EARLY_RESOLVE_MARKER&&!this.bootstrapJobId){
+                this.cleanupHandoffMarkers();
+                setTimeout(()=>void this.openResolvedConversation(CGC_EARLY_RESOLVE_MARKER).catch(error=>this.localToast(error?.message||String(error))),0);
+            }else setTimeout(()=>void CgcConversationRepair.run().catch(error=>console.warn('[cgc] conversation address repair',error)),1200);
             if (this.bootstrapJobId) setTimeout(() => {void this.processJobById(this.bootstrapJobId).catch(showStartupError);}, 0);
             else setTimeout(()=>WebDelivery.recover().catch(error=>console.warn('[cgc] resume',error)),500);
             // Periodic recovery is owned by CgcJobLinks.installGpt().
+        },
+
+        async openResolvedConversation(id){
+            this.localToast('저장된 GPT 대화 주소를 확인하고 있어요…');
+            await CgcConversationRepair.run({force:true});
+            await refreshAsyncStorageKey(KEY.state);
+            const r=await refreshAsyncStorageKey(WebDelivery.key(id));
+            let url=persistentConversationUrl(r?.conversationUrl||r?.ack?.conversationUrl||'');
+            if(!url)for(const session of Object.values(readValue(KEY.state,null)?.sessions||{})){
+                const tx=(session?.transmissions||[]).find(row=>row?.jobId===id);
+                url=persistentConversationUrl(tx?.conversationUrl||'');
+                if(!url)for(const slot of Object.values(session?.conversations||{}))if(slot?.lastRequestId===id){url=persistentConversationUrl(slot.url||'');if(url)break;}
+                if(url)break;
+            }
+            if(!url)return this.localToast('이 작업의 실제 GPT 대화를 찾지 못했어요. 대화 목록에서 해당 대화를 열고 🧭 메뉴의 「현재 대화 연결 복구」를 눌러 주세요.');
+            // The alias was proven by the job's own request marker, so the review marker is safe here.
+            location.replace(r?.job?.id===id?`${url}#cgc-review=${encodeURIComponent(id)}`:url);
         },
 
         readStoredSurfaceMode(){
@@ -8426,10 +8804,10 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             try{
                 const current=new URL(location.href),before=current.href;
                 const hash=new URLSearchParams(current.hash.slice(1));
-                if(hash.has('cgc-job')||hash.has('cgc-surface')){
-                    hash.delete('cgc-job');hash.delete('cgc-surface');current.hash=hash.toString();
+                if(hash.has('cgc-job')||hash.has('cgc-surface')||hash.has('cgc-resolve')){
+                    hash.delete('cgc-job');hash.delete('cgc-surface');hash.delete('cgc-resolve');current.hash=hash.toString();
                 }
-                for(const key of ['cgc_job','cgc_boot','cgc_surface'])current.searchParams.delete(key);
+                for(const key of ['cgc_job','cgc_boot','cgc_surface','cgc_resolve'])current.searchParams.delete(key);
                 if(current.href!==before)history.replaceState(history.state,'',current.href);
             }catch{}
         },
@@ -8540,6 +8918,17 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 if(event.targetInstanceId&&event.targetInstanceId!==this.instanceId)return;
                 this.handleDispatch(event).catch(error => console.error(`[${APP.id}] targeted dispatch failed`, error));
             });
+            // Crack nudges pages that hold an unanswered job. Storage events reach a hidden page at once even when
+            // its timers are held for a minute, so the completion check runs inside this event.
+            addValueChangeListenerCompat(KEY.completionPoke, (_name, _oldValue, poke) => {
+                if(!Array.isArray(poke?.jobIds))return;
+                let resume=false;
+                for(const id of poke.jobIds){
+                    const watch=this.completionWatches.get(id);
+                    if(watch)watch.poke?.();else if(WebDelivery.ids().includes(id))resume=true;
+                }
+                if(resume&&!this.processingJobId)void WebDelivery.recover().catch(error=>console.warn('[cgc] resume',error));
+            });
         },
 
         async handleDispatch(event) {
@@ -8575,29 +8964,44 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 return;
             }
             if (event.kind !== 'job' || !event.jobId) return;
-            if (this.processingJobId && this.processingJobId !== event.jobId) return; // Busy tabs intentionally do not ACK; Crack opens another tab.
-            // A manually occupied or currently-generating tab is not commandeered. No ACK => Crack opens a separate job tab.
+            // Phase 1 is written before any await, so even a throttled background page answers at once.
+            // Busy, occupied or incompatible pages decline explicitly; Crack then opens a separate job surface.
+            const reply=(phase,reason='')=>writeValue(KEY.dispatchAck,{nonce:event.nonce,targetTabId:this.tabId,targetInstanceId:this.instanceId,jobId:event.jobId,kind:'job',phase,accepted:phase==='accepted',reason,at:Date.now()});
+            const decline=reason=>{reply('declined',reason);CGC_TRACE(event.jobId,'dispatch-decline',{reason});};
+            if (this.processingJobId && this.processingJobId !== event.jobId) return decline('busy');
+            // A manually occupied or currently-generating tab is not commandeered.
+            // An empty ProseMirror composer reads as "\n" (placeholder paragraph), so judge drafts by visible text.
             const currentComposer = this.findComposer();
-            if (this.isGenerationBusy() || (currentComposer && this.getComposerText(currentComposer))) return;
+            if (this.isGenerationBusy()) return decline('generating');
+            if (currentComposer && this.hasComposerDraft(currentComposer)) return decline('draft');
+            reply('received');
             const controlFailed=await hydrateAsyncJobControl(event.jobId);
-            if(controlFailed.length)return; // No ACK: the sender can open a fresh tab.
+            if(controlFailed.length)return decline('storage');
             const receipt=await refreshAsyncStorageKey(WebDelivery.key(event.jobId));
-            if(await this.guardExistingDelivery(event.jobId,receipt))return;
+            if(await this.guardExistingDelivery(event.jobId,receipt))return decline('delivered');
             const job = readJob(event.jobId);
-            if (!validV3Job(job)) return;
-            if(event.roomKey&&job.sessionKey!==event.roomKey)return;
-            if(event.slotId&&conversationSlotOf(job)!==event.slotId)return;
+            if (!validV3Job(job)) return decline('invalid');
+            if(event.roomKey&&job.sessionKey!==event.roomKey)return decline('room');
+            if(event.slotId&&conversationSlotOf(job)!==event.slotId)return decline('slot');
             await refreshAsyncStorageKey(KEY.state);
-            if(jobInvalidatedByReset(job)){discardJobAfterReset(job.id);return;}
+            if(jobInvalidatedByReset(job)){discardJobAfterReset(job.id);return decline('reset');}
             const liveCompatible=()=>registeredTabRouteCompatible({meta:{...(this.currentTabData?.cgcTab||{}),url:location.href}},
                 job.conversationUrl||job.targetUrl||job.gptBaseUrl,job.sessionKey,conversationSlotOf(job));
-            if(!liveCompatible()||this.isGenerationBusy()||this.hasComposerDraft(this.findComposer()))return;
-            if (!(await this.claimJob(job))) return;
-            if(!liveCompatible()||this.isGenerationBusy()||this.hasComposerDraft(this.findComposer())){this.releaseClaim(job.id);return;}
+            if(!liveCompatible()||this.isGenerationBusy()||this.hasComposerDraft(this.findComposer()))return decline('route');
+            if (!(await this.claimJob(job))) return decline('claimed');
+            if(!liveCompatible()||this.isGenerationBusy()||this.hasComposerDraft(this.findComposer())){this.releaseClaim(job.id);return decline('route');}
             await this.markBusy(job.id,job);
-            writeValue(KEY.dispatchAck,{nonce:event.nonce,targetTabId:this.tabId,targetInstanceId:this.instanceId,jobId:job.id,accepted:true,kind:'job',at:Date.now()});
+            // Phase 2: accept, then start only on Crack's confirmation. Crack may already have opened another
+            // surface after a slow answer; its {go:false} makes this page stand down instead of racing it.
+            const confirmed=waitForStorageEvent(KEY.dispatchConfirm,value=>value?.nonce===event.nonce,DISPATCH_CONFIRM_WAIT_MS);
+            reply('accepted');
             await flushStorageWrites();
-            try { window.focus(); } catch { /* best effort */ }
+            const verdict=await confirmed;
+            if(!verdict?.go){
+                CGC_TRACE(job.id,'dispatch-stand-down',{confirmed:Boolean(verdict)});
+                this.releaseClaim(job.id);if(this.processingJobId===job.id)await this.markBusy('');return;
+            }
+            // v1.4.0: a job never raises a minimized or covered window; the whole pipeline runs in the background.
             await this.processPendingJob(job, true);
         },
 
@@ -8735,10 +9139,11 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             const fresh=current?.jobId===job.id&&Date.now()-Number(current.claimedAt||0)<CLAIM_TTL_MS;
             if(fresh){
                 if(!current.ownerInstanceId)return false;
-                if(current.ownerInstanceId!==this.instanceId)return false;
+                // A page that navigates or reloads for its own job is a new document in the same tab: it keeps the claim.
+                if(current.ownerInstanceId!==this.instanceId&&!(current.ownerId&&current.ownerId===this.tabId))return false;
             }
             writeValue(key,{jobId:job.id,ownerId:this.tabId,ownerInstanceId:this.instanceId,claimedAt:Date.now()});
-            await flushStorageWrites();await sleep(100);
+            await flushStorageWrites();await cgcPause(100);
             const after=await refreshAsyncStorageKey(key);
             return after?.jobId===job.id&&after?.ownerInstanceId===this.instanceId;
         },
@@ -8758,12 +9163,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
         },
 
         async waitForExactTarget(target,timeout=4500) {
-            const started=Date.now();
-            while(Date.now()-started<timeout){
-                if(this.sameTarget(location.href,target))return true;
-                await sleep(120);
-            }
-            return this.sameTarget(location.href,target);
+            return Boolean(await cgcWaitFor(()=>this.sameTarget(location.href,target),{timeout,interval:150,attributes:false,events:['urlchange','popstate','hashchange']}));
         },
 
         async guardExistingDelivery(jobId,receipt=undefined){
@@ -8783,7 +9183,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             return {prompt,attachment};
         },
 
-        async processJobById(jobId) {
+        async processJobById(jobId,afterClaimWait=false) {
             const controlFailed=await hydrateAsyncJobControl(jobId);
             if(controlFailed.length)throw new Error('GPT 작업 정보를 읽지 못했어요. 페이지를 새로고침해 주세요.');
             await refreshAsyncStorageKey(KEY.state);
@@ -8795,7 +9195,15 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             if(!validV3Job(job))return this.localToast('크랙 작업을 찾지 못했거나 만료됐어요. 크랙에서 다시 눌러 주세요.');
             const submitted=this.findSubmittedAck(job.id);
             if(submitted){writeValue(KEY.ack,{...submitted,nonce:uid('ack-replay')});return;}
-            if(!(await this.claimJob(job)))return;
+            if(!(await this.claimJob(job))){
+                // Another ChatGPT window holds this job. Say so instead of idling silently, and take over
+                // only when that claim is released or lapses (the delivery guards then stop a duplicate).
+                if(afterClaimWait)return this.localToast('이 작업은 다른 GPT 창이 처리하고 있어요. 이 창은 대기를 마칩니다.');
+                this.reportProgress(job,'claim-wait','다른 GPT 창이 이 작업을 처리 중 · 그 창이 멈추면 이 창이 이어받음');
+                this.localToast('이 작업은 다른 GPT 창에서 처리 중이에요. 그 창이 멈추면 이 창이 이어받습니다.');
+                await waitForStorageEvent(claimStorageKey(job.id),value=>!value||value.jobId!==job.id||Date.now()-Number(value.claimedAt||0)>=CLAIM_TTL_MS,CLAIM_TTL_MS+5000);
+                return this.processJobById(jobId,true);
+            }
             await this.markBusy(job.id,job);
             await this.processPendingJob(job,true);
         },
@@ -8818,7 +9226,17 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             try {
                 this.reportProgress(job,'job-load','GPT 작업 수신');
                 await flushStorageWrites();
-                const target=canonicalChatGptUrl(job.conversationUrl||job.targetUrl||job.gptBaseUrl)||CHATGPT_HOME;
+                let target=canonicalChatGptUrl(job.conversationUrl||job.targetUrl||job.gptBaseUrl)||CHATGPT_HOME;
+                let resolvedFromTemp=false;
+                if(isTempConversationUrl(target)){
+                    // Saved by an older build while ChatGPT still showed the chat's client-only id.
+                    phase='resolve';this.reportProgress(job,phase,'저장된 GPT 대화 주소 확인 중');
+                    const durable=await CgcConversationRepair.resolveForJob(job);
+                    if(!durable)throw new Error('저장된 GPT 대화 주소가 ChatGPT 임시 주소라 실제 대화를 찾지 못했어요. 해당 GPT 대화를 열어 「현재 대화 연결 복구」를 누르거나, 이 작업 설정에서 「전체 다시」로 새 대화를 시작해 주세요.');
+                    job={...job,conversationUrl:durable,targetUrl:durable};
+                    writeValue(jobStorageKey(job.id),job);await flushStorageWrites();
+                    target=durable;resolvedFromTemp=true;
+                }
                 CGC_TRACE(job.id, 'nav-evaluate', {
                     currentHref:location.href,
                     target,
@@ -8833,7 +9251,8 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                     scope:jobScopeOf(job),
                 });
                 if(!this.sameTarget(location.href,target)){
-                    const arrivedWithJob = this.bootstrapJobId === job.id;
+                    // A just-resolved address was never opened by Crack, so this page navigates to it once.
+                    const arrivedWithJob = this.bootstrapJobId === job.id && !resolvedFromTemp;
                     if(arrivedWithJob){
                         let currentKind=chatGptTargetKind(location.href), targetKind=chatGptTargetKind(target);
 
@@ -9022,7 +9441,18 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             return new Error(`${message} (Android 빈 편집기 표식은 자동으로 무시합니다.)`);
         },
         isGenerationBusy(){const selectors=['button[data-testid="stop-button"]','button[data-testid*="stop"]','button[aria-label="Stop generating"]','button[aria-label="Stop streaming"]','button[aria-label*="Stop"]','button[aria-label*="중지"]'];return selectors.some(selector=>Array.from(document.querySelectorAll(selector)).some(isVisible));},
-        async waitForTurnReady(timeout){const started=Date.now();let stableSince=0;while(Date.now()-started<timeout){const composer=this.findComposer();const disabled=composer?.getAttribute?.('aria-disabled')==='true';const ready=Boolean(composer&&!disabled&&!this.isGenerationBusy());if(ready){if(!stableSince)stableSince=Date.now();if(Date.now()-stableSince>=450)return composer;}else stableSince=0;await sleep(180);}return null;},
+        async waitForTurnReady(timeout){
+            // Ready = the same enabled composer with no running generation, still so 450 ms later.
+            const deadline=Date.now()+timeout;
+            const ready=()=>{const composer=this.findComposer();return composer&&composer.getAttribute?.('aria-disabled')!=='true'&&!this.isGenerationBusy()?composer:null;};
+            for(;;){
+                const composer=await cgcWaitFor(ready,{timeout:Math.max(1000,deadline-Date.now()),interval:250});
+                if(!composer)return null;
+                await cgcPause(450);
+                if(ready()===composer)return composer;
+                if(Date.now()>deadline)return null;
+            }
+        },
 
         findTextFileInput() {
             const scope=this.composerAttachmentScope();if(!scope)return null;
@@ -9185,48 +9615,16 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 if(this.uploadHasError())return {done:true,value:false};
                 const preview=this.attachmentPreviewExists(fileName,beforeCount);
                 // A FileList assignment or enabled Send button is not server/UI acceptance.
-                const ready=preview||((CGC_PLATFORM.iOS||CGC_PLATFORM.android||CGC_PLATFORM.firefox)&&input&&file&&this.inputContainsFile(input,file)&&!this.getComposerText(this.findComposer())&&!!this.findSendButton());
+                const ready=preview||((CGC_PLATFORM.iOS||CGC_PLATFORM.android||CGC_PLATFORM.firefox)&&input&&file&&this.inputContainsFile(input,file)&&!this.hasComposerDraft(this.findComposer())&&!!this.findSendButton());
                 if(ready&&!this.uploadLooksBusy())return {done:true,value:true};
                 return {done:false,value:false};
             };
 
             const immediate=evaluate();
             if(immediate.done)return immediate.value;
-
-            return await new Promise(resolve=>{
-                let finished=false,observer=null,timer=0,fallback=0,scheduled=0;
-                const finish=value=>{
-                    if(finished)return;
-                    finished=true;
-                    try{observer?.disconnect();}catch{}
-                    if(timer)clearTimeout(timer);
-                    if(fallback)clearInterval(fallback);
-                    if(scheduled)clearTimeout(scheduled);
-                    resolve(!!value);
-                };
-                const check=()=>{
-                    if(finished)return;
-                    const state=evaluate();
-                    if(state.done)finish(state.value);
-                };
-
-                const scope=this.composerAttachmentScope()||document.body;
-                try{
-                    observer=new MutationObserver(()=>{if(!scheduled)scheduled=setTimeout(()=>{scheduled=0;check();},100);});
-                    observer.observe(scope,{
-                        childList:true,
-                        subtree:true,
-                        characterData:true,
-                        attributes:true,
-                        attributeFilter:['aria-busy','aria-label','aria-disabled','disabled','data-state','data-testid']
-                    });
-                }catch{/* polling safety net below */}
-
-                // MutationObserver가 잡지 못하는 브라우저/UI 변화만 위한 저빈도 안전망.
-                fallback=setInterval(check,500);
-                timer=setTimeout(()=>finish(false),timeout);
-                queueMicrotask(check);
-            });
+            // Composer mutations drive the checks; the interval is only a low-frequency safety net.
+            const state=await cgcWaitFor(()=>{const s=evaluate();return s.done?s:null;},{timeout,root:this.composerAttachmentScope()||document.body,interval:500});
+            return Boolean(state?.value);
         },
 
         async clearInjectedFileInput(input) {
@@ -9801,8 +10199,10 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             // One native file event per job. Never materialize the RP body inside ProseMirror.
             const path=location.pathname;
             let input=this.findTextFileInput();
-            const started=Date.now();
-            while(!input&&Date.now()-started<8000){await sleep(200);if(location.pathname!==path)throw new Error('GPT 대화가 바뀌어 첨부를 중단했어요.');input=this.findTextFileInput();}
+            if(!input){
+                input=await cgcWaitFor(()=>location.pathname!==path?{moved:true}:this.findTextFileInput(),{timeout:8000,interval:250});
+                if(input?.moved)throw new Error('GPT 대화가 바뀌어 첨부를 중단했어요.');
+            }
             if(!input)throw new Error('TXT를 받을 파일 입력 요소가 없어요. GPT 파일 첨부 메뉴를 확인해 주세요.');
             if(this.hasComposerDraft())throw this.composerDraftBlockedError();
             const before=this.getAttachmentSignalSnapshot();
@@ -9857,17 +10257,17 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             if(text.length>MAX_INLINE_COMPOSER_CHARS)throw Object.assign(new Error('본문 자동 입력이 '+text.length.toLocaleString()+'자로 TXT 기준을 초과했어요. 입력창 과부하를 막기 위해 중단했습니다. 크랙을 새로고침한 뒤 TXT 작업을 다시 만들어 주세요.'),{code:'inline_payload_too_large'});
             if(this.hasComposerDraft(composer))throw this.composerDraftBlockedError(composer,'ChatGPT 입력창에 기존 내용이 남아 있어 자동 삽입을 중단했어요.');
             composer.focus();
-            if(composer instanceof HTMLTextAreaElement||composer instanceof HTMLInputElement){const proto=composer instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;const setter=Object.getOwnPropertyDescriptor(proto,'value')?.set;setter?.call(composer,text);if(!setter)composer.value=text;composer.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:text}));composer.dispatchEvent(new Event('change',{bubbles:true}));await sleep(100);if(!await this.waitForComposerExactText(text,5000))throw new Error('프롬프트 입력이 끝까지 반영되지 않았어요.');return;}
+            if(composer instanceof HTMLTextAreaElement||composer instanceof HTMLInputElement){const proto=composer instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;const setter=Object.getOwnPropertyDescriptor(proto,'value')?.set;setter?.call(composer,text);if(!setter)composer.value=text;composer.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:text}));composer.dispatchEvent(new Event('change',{bubbles:true}));await cgcPause(100);if(!await this.waitForComposerExactText(text,5000))throw new Error('프롬프트 입력이 끝까지 반영되지 않았어요.');return;}
             if(this.hasComposerDraft(composer))throw this.composerDraftBlockedError(composer,'ChatGPT 입력창에 기존 내용이 남아 있어 자동 삽입을 중단했어요.');
             // One insertion only. A failed/partial write or concurrent user edit must never
             // trigger selectAll/delete, a DOM rewrite, or a second insertion.
             if(document.activeElement!==composer&&!composer.contains(document.activeElement))throw new Error('GPT 입력창 포커스를 확인하지 못해 자동 입력을 중단했어요.');
             try{document.execCommand('insertText',false,text);}catch{throw new Error('GPT 입력창이 자동 입력을 받지 못했어요. 기존 내용은 유지했습니다.');}
-            await sleep(140);
+            await cgcPause(140);
             if(!composer.isConnected||WebDelivery.normalize(this.getComposerText(composer))!==WebDelivery.normalize(text))throw new Error('프롬프트 입력 결과가 달라 중단했어요. 입력창 내용은 지우거나 다시 쓰지 않았습니다.');
             if(!(await this.waitForComposerExactText(text,5000)))throw new Error('프롬프트 입력이 끝까지 반영되지 않았어요.');
         },
-        async waitForComposerExactText(expected,timeout){const started=Date.now();while(Date.now()-started<timeout){if(WebDelivery.normalize(this.getComposerText())===WebDelivery.normalize(expected))return true;await sleep(140);}return false;},
+        async waitForComposerExactText(expected,timeout){const want=WebDelivery.normalize(expected);return Boolean(await cgcWaitFor(()=>WebDelivery.normalize(this.getComposerText())===want,{timeout,interval:200}));},
 
         findSendButton() {
             const scope=this.composerAttachmentScope();if(!scope)return null;
@@ -9880,25 +10280,16 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             return null;
         },
 
-        async waitForSendButton(timeout){const started=Date.now();while(Date.now()-started<timeout){const button=this.findSendButton();if(button)return button;await sleep(180);}return null;},
+        async waitForSendButton(timeout){return cgcWaitFor(()=>this.findSendButton(),{timeout,interval:250});},
         async waitForSubmissionSignal(timeout,clickedButton=null){
-            const started=Date.now();while(Date.now()-started<timeout){
-                const r=WebDelivery.active;
-                if(r&&WebDelivery.findUser(r)){this.scheduleConversationRename(r.job,r);return true;}
-                await sleep(120);
-            }return false;
+            const r=await cgcWaitFor(()=>{const r=WebDelivery.active;return r&&WebDelivery.findUser(r)?r:null;},{timeout,interval:200,events:['urlchange','popstate']});
+            if(r){this.scheduleConversationRename(r.job,r);return true;}
+            return false;
         },
 
         async waitForConversationUrl(timeout=12000) {
-            const immediate=persistentConversationUrl(location.href);if(immediate)return immediate;
-            return new Promise(resolve=>{
-                let finished=false;let listener=null;let timer=0;let poll=0;
-                const done=value=>{if(finished)return;finished=true;clearTimeout(timer);clearInterval(poll);if(listener)try{window.removeEventListener('urlchange',listener);}catch{}resolve(value||'');};
-                listener=()=>{const conv=persistentConversationUrl(location.href);if(conv)done(conv);};
-                try{if(window.onurlchange===null)window.addEventListener('urlchange',listener);}catch{}
-                poll=setInterval(()=>{const conv=persistentConversationUrl(location.href);if(conv)done(conv);},180);
-                timer=setTimeout(()=>done(persistentConversationUrl(location.href)),timeout);
-            });
+            // A new chat keeps a client-only id until the server assigns the durable one; only the durable id counts.
+            return (await cgcWaitFor(()=>persistentConversationUrl(location.href),{timeout,interval:200,attributes:false,events:['urlchange','popstate']}))||'';
         },
 
         getAssistantRoots() {
@@ -10034,7 +10425,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
         watchJobCompletion(job,before={}){
             if(!job?.id)return;
             const prior=this.completionWatches.get(job.id);if(prior){prior.kick?.();return;}
-            let observer=null,timer=0,dueAt=0,settled=false,checking=false,lastHash='',stableSince=0;
+            let observer=null,timer=0,dueAt=0,settled=false,checking=false,lastHash='',stableSince=0,lastCheckAt=0;
             let probing=false,nextProbeAt=0,lastProbe={state:'unknown',text:'',at:0};
             const cleanup=()=>{
                 settled=true;clearTimeout(timer);try{observer?.disconnect();}catch{}
@@ -10047,21 +10438,47 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 clearTimeout(timer);dueAt=at;timer=setTimeout(()=>{timer=0;dueAt=0;void check();},Math.max(80,at-Date.now()));
             };
             const onWake=()=>{stableSince=0;lastHash='';schedule(120);};
-            const probe=r=>{
-                if(probing||Date.now()<nextProbeAt)return;
-                probing=true;nextProbeAt=Date.now()+15000;
-                void this.readBackendResult(r,{includeState:true}).then(value=>{
+            // force: the page shows a finished turn, so read the server now instead of waiting out the 15 s gate.
+            let deferredForce=false;
+            const probe=(r,force=false)=>{
+                if(probing||(!force&&Date.now()<nextProbeAt))return;
+                if(force){
+                    // The forced read needs a 3 s gap from the last read; the turn's end may come sooner, and no
+                    // further mutation may follow, so wait out the remainder without a throttled timer.
+                    const age=Date.now()-Number(this.backendReadCache?.at||0);
+                    if(age<3000&&lastProbe.state!=='complete'){
+                        if(!deferredForce){deferredForce=true;void cgcPause(3050-age).then(()=>{deferredForce=false;if(!settled)probe(r,true);});}
+                        return;
+                    }
+                }
+                probing=true;nextProbeAt=Date.now()+15000;let fresh=false;
+                void this.readBackendResult(r,{includeState:true,force}).then(value=>{
                     if(settled)return;
-                    lastProbe={...value,at:Number(this.backendReadCache?.at||Date.now())};
+                    const at=Number(this.backendReadCache?.at||Date.now());fresh=at!==lastProbe.at;
+                    lastProbe={...value,at};
                     nextProbeAt=Math.max(Date.now()+15000,Number(this.backendNextReadAt||0));
                 }).catch(error=>{
                     // A previous pending observation is not a permanent veto after communication failure.
                     if(lastProbe.state!=='blocked'&&Date.now()-lastProbe.at>=15000)lastProbe={state:'unknown',text:'',at:0};
                     nextProbeAt=Math.max(Date.now()+15000,Number(this.backendNextReadAt||0),Number(error?.retryAt||0));
-                }).finally(()=>{probing=false;schedule(120);});
+                }).finally(()=>{
+                    probing=false;
+                    // A hidden page may not run the scheduled check for a minute; act on a fresh final answer now.
+                    if(fresh&&lastProbe.state==='complete'&&document.visibilityState==='hidden')void check();
+                    else schedule(120);
+                });
             };
+            // Cheap per-mutation signal: the newest turn shows its answer action row and nothing is generating.
+            const turnLooksFinished=()=>{
+                if(this.isGenerationBusy())return false;
+                const roots=document.querySelectorAll('[data-content-search-unit-key$=":assistant"],[data-message-author-role="assistant"]');
+                const turn=roots[roots.length-1]?.closest('[data-testid^="conversation-turn-"],article,[data-content-search-turn-key]');
+                return Boolean(turn&&[...turn.querySelectorAll('.turn-action-controls button,button[data-testid="copy-turn-action-button"]')]
+                    .some(button=>!button.closest('[data-message-author-role="user"],[data-content-search-unit-key$=":user"]')));
+            };
+            let again=false,lastLooksFinished=false;
             const check=async()=>{
-                if(settled)return;if(checking){schedule(700);return;}checking=true;
+                if(settled)return;if(checking){again=true;schedule(700);return;}checking=true;lastCheckAt=Date.now();
                 try{
                     await refreshAsyncStorageKey(KEY.state);
                     const r=await refreshAsyncStorageKey(WebDelivery.key(job.id));
@@ -10092,17 +10509,32 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                     if(text&&CompanionTaskUI.matches(r)&&!jobInvalidatedByReset(job)){
                         if(await this.publishCompletion(job,r,text,verified)){cleanup();return;}
                     }
-                    if(!busy)probe(r);
+                    // Hidden: the DOM is not trusted as the answer text, but a finished turn triggers the server read now.
+                    if(!visible&&!this.isGenerationBusy()&&WebDelivery.completionDomEvidence(r).final)probe(r,true);
+                    else if(!busy)probe(r);
                     schedule(visible?(evidence.text?700:2000):15000);
                 }catch(error){console.warn('[cgc] completion retry',error);schedule(5000);}
-                finally{checking=false;}
+                finally{
+                    checking=false;
+                    if(again&&!settled){again=false;if(document.visibilityState==='hidden')void check();}
+                }
             };
             // v1.2.7: 입력창(편집 영역) 안의 변화는 답변 완료와 무관하다. 타자마다 대화 전체를 다시 읽지 않는다.
             const outsideEditor=record=>{const node=record.target;const el=node&&node.nodeType===1?node:node?.parentElement;return !el?.closest?.('[contenteditable="true"],textarea');};
-            try{observer=new MutationObserver(records=>{if(records.some(outsideEditor))schedule(350);});observer.observe(document.querySelector('main')||document.body||document.documentElement,
+            // A hidden page may hold timers for a minute; while the answer streams, its own mutations drive the checks.
+            try{observer=new MutationObserver(records=>{
+                if(!records.some(outsideEditor))return;
+                if(document.visibilityState==='hidden'){
+                    // The answer's end is a single burst of mutations; catch it even inside the 3 s spacing.
+                    const finished=turnLooksFinished(),flipped=finished&&!lastLooksFinished;lastLooksFinished=finished;
+                    if(flipped||Date.now()-lastCheckAt>=3000){void check();return;}
+                }
+                schedule(350);
+            });observer.observe(document.querySelector('main')||document.body||document.documentElement,
                 {childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['data-is-streaming','data-message-status','aria-busy']});}catch{}
             document.addEventListener('visibilitychange',onWake,true);window.addEventListener('pageshow',onWake,true);window.addEventListener('focus',onWake,true);
-            this.completionWatches.set(job.id,{kick:()=>schedule(80),cleanup});schedule(350);
+            // poke: a Crack wake-up event runs the check in the event task itself (a hidden page's timers may wait a minute).
+            this.completionWatches.set(job.id,{kick:()=>schedule(80),poke:()=>{if(checking)again=true;else void check();},cleanup});schedule(350);
         },
 
         // Read-only recovery runs inside a live ChatGPT tab; credentials stay in memory.
@@ -10128,26 +10560,32 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             if(matches.length!==1)return verdict('unknown',matches.length?'ambiguous_request':'request_not_matched');
             const at=matches[0],userText=textOf(chain[at].message);
             if(String(receipt.expected.head||'').includes('[CGC-JOB:')&&!userText.includes(marker))return verdict('unknown','job_marker_mismatch');
-            let result='';
+            // Reasoning models write "thoughts" (end_turn:false), "reasoning_recap" and tool calls before the answer.
+            // Those records are not the answer; the turn's state is read from its last assistant record and the
+            // answer is its last text record.
+            let lastAssistant=null,answer=null;
             for(let i=at+1;i<chain.length;i++){
                 const m=chain[i].message;if(!m)continue;
                 if(m.author?.role==='user')break;
                 if(m.author?.role!=='assistant')continue;
                 if(m.channel&&m.channel!=='final')continue;
                 if(m.recipient&&m.recipient!=='all')continue;
-                if(m.status&&m.status!=='finished_successfully'){
-                    if(/progress|stream|pending|queued/i.test(m.status))return verdict('pending','generation_in_progress');
-                    return verdict('blocked','answer_not_successful');
-                }
-                if(m.end_turn===false)return verdict('pending','turn_not_finished');
-                if(m.status!=='finished_successfully'||m.end_turn!==true)return verdict('unknown','completion_flags_unrecognized');
-                if(m.content?.content_type!=='text')return verdict('unknown','non_text_answer');
-                result=cleanText(textOf(m));
+                lastAssistant=m;
+                if(m.content?.content_type==='text')answer=m;
             }
+            if(!lastAssistant)return verdict('unknown','final_answer_not_readable');
+            if(lastAssistant.status&&lastAssistant.status!=='finished_successfully'){
+                if(/progress|stream|pending|queued/i.test(lastAssistant.status))return verdict('pending','generation_in_progress');
+                return verdict('blocked','answer_not_successful');
+            }
+            if(lastAssistant.end_turn===false)return verdict('pending','turn_not_finished');
+            if(!answer)return verdict('unknown','non_text_answer');
+            if(answer.status!=='finished_successfully'||answer.end_turn!==true)return verdict('unknown','completion_flags_unrecognized');
+            const result=cleanText(textOf(answer));
             return result?verdict('complete','finished_final_answer',result):verdict('unknown','final_answer_not_readable');
         },
         backendResultOf(data,receipt){return this.backendResultStateOf(data,receipt).text;},
-        async readBackendResult(receipt,{includeState=false}={}){
+        async readBackendResult(receipt,{includeState=false,force=false}={}){
             const interpret=data=>includeState?this.backendResultStateOf(data,receipt):this.backendResultOf(data,receipt);
             const url=persistentConversationUrl(receipt?.conversationUrl||'');
             if(!url||url!==persistentConversationUrl(location.href))throw new Error('conversation moved');
@@ -10162,7 +10600,9 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 if(url!==persistentConversationUrl(location.href))throw new Error('conversation moved');
                 return interpret(data);
             }
-            if(Date.now()<this.backendNextReadAt){
+            // A finished turn on screen may bypass the 15 s spacing once it is 3 s old, never during error backoff.
+            const forced=force&&!this.backendReadErrors&&Date.now()-Number(this.backendReadCache?.at||0)>=3000;
+            if(Date.now()<this.backendNextReadAt&&!forced){
                 if(this.backendReadCache?.url===url&&Date.now()-this.backendReadCache.at<15000)
                     return interpret(this.backendReadCache.data);
                 throw Object.assign(new Error('backend read deferred'),{code:'backend_deferred',retryAt:this.backendNextReadAt});
@@ -10244,7 +10684,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
             this.scheduleConversationRename(job); // No await: do not wait for link publication or submitted ACK.
             let conversationUrl=persistentConversationUrl(location.href);
             const cgcImmediateConversationUrl=conversationUrl;
-            if(!job.conversationUrl&&!conversationUrl)conversationUrl=await this.waitForConversationUrl(12000);
+            if(!job.conversationUrl&&!conversationUrl)conversationUrl=await this.waitForConversationUrl(90000);
             if(!job.conversationUrl&&!conversationUrl)throw new Error('전송은 시작됐지만 새 ChatGPT 대화 주소(/c/...)를 확인하지 못했어요.');
             await CgcJobLinks.publish(job.id).catch(error=>console.warn('[cgc] address publication deferred',error));
             const cgcAckConversationUrl=persistentConversationUrl(conversationUrl||'')||persistentConversationUrl(job.conversationUrl||'');
@@ -10278,6 +10718,15 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
         },
     };
 
+
+    // Pre-release debug builds of 1.4.0 left trace records (CGC_DEV_*) in the userscript store; release builds drop them once.
+    function cgcRemoveDebugKeys(){
+        try{
+            if(typeof GM_listValues!=='function'||typeof GM_deleteValue!=='function')return;
+            try{if(typeof CGC_DEV!=='undefined'&&CGC_DEV)return;}catch{/* release build: no debug bridge */}
+            for(const key of GM_listValues())if(String(key).startsWith('CGC_DEV_'))GM_deleteValue(key);
+        }catch(error){console.warn(`[${APP.id}] debug record cleanup skipped`,error);}
+    }
 
     let cgcStartupStatusMessage='';
     function showStartupStatus(message) {
@@ -10352,7 +10801,7 @@ status는 complete / incomplete / no_memory / rebuild_required / unknown 중 하
                 pollAsyncStorageListeners();
                 if(isCrack&&cgcStorageReady){CrackUI.finishStorageInit();CrackUI.placeLauncher();if(CrackUI.panel)CrackUI.refreshPanel();}
             }).catch(error=>console.warn(`[${APP.id}] async storage background warm failed`,error));
-            if(isCrack)setTimeout(()=>{void pruneExpiredTransportKeys().catch(error=>console.warn(`[${APP.id}] cleanup skipped`,error));},8000);
+            if(isCrack)setTimeout(()=>{void pruneExpiredTransportKeys().catch(error=>console.warn(`[${APP.id}] cleanup skipped`,error));cgcRemoveDebugKeys();},8000);
             console.info(`[${APP.id}] ${APP.version} booted`,{isCrack,isChatGPT,asyncGmStorage:CGC_ASYNC_GM_STORAGE});
         }catch(error){CgcStartup.mark('startup-error',{name:String(error?.name||'Error')});CgcStartup.active=false;showStartupError(error);}
     })();
