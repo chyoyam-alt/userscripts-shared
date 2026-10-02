@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🌳 Crack Branch Knot (갈래 매듭)
 // @namespace    crack-branch-knot
-// @version      1.1.3
+// @version      1.1.4
 // @description  분기로 갈라진 채팅방을 원본 방에 매듭지어 나무 모양 지도로 보여줍니다. 채팅방 상단과 채팅 목록에서 열고, 채팅 목록에는 원본 방과 분기 방을 표시합니다.
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/BranchKnot.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/BranchKnot.user.js
