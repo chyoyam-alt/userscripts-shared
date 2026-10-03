@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         ✂️ Crack Pinset (핀셋 수정)
 // @namespace    crack-pinset
-// @version      0.1.4
-// @description  [시험판] 메시지에서 글자를 드래그하면 그 부분만 바로 고칩니다. 크랙 수정창을 열 필요가 없고 새로고침도 하지 않습니다. 고친 자리에는 주황색 흔적이 남고, 원래 글 보기·되돌리기를 할 수 있습니다.
+// @version      0.1.5
+// @description메시지에서 글자를 드래그하면 그 부분만 바로 고칩니다. 크랙 수정창을 열 필요가 없고 새로고침도 하지 않습니다. 고친 자리에는 주황색 흔적이 남고, 원래 글 보기·되돌리기를 할 수 있습니다.
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/Pinset.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/Pinset.user.js
 // @match        https://crack.wrtn.ai/*
@@ -23,7 +23,7 @@
   if (pageWindow.__crackPinsetRunning) return;
   pageWindow.__crackPinsetRunning = true;
 
-  const VERSION = '0.1.4';
+  const VERSION = '0.1.5';
   const LOG = '[핀셋]';
   const API_BASE = 'https://crack-api.wrtn.ai/crack-gen';
   const SETTINGS_KEY = 'cpn:settings:v1';
@@ -901,6 +901,46 @@
     return merged;
   }
 
+  // 크랙 수정창·원문 창·다른 확프의 일괄 바꾸기처럼 여러 군데가 한 번에 바뀐 것은 낱말 단위로 비교해
+  // 바뀐 조각마다 따로 흔적을 남깁니다(처음 바뀐 곳~마지막 바뀐 곳을 통째로 칠하지 않게).
+  // 결과: [{ a, b(옛 글 위치), oldText, newText }] (앞에서부터)
+  function changeList(before, after) {
+    const changes = [];
+    let oldPos = 0;
+    let cur = null;
+    for (const [type, text] of diffParts(before, after)) {
+      if (type === '=') {
+        if (cur) changes.push(cur);
+        cur = null;
+        oldPos += text.length;
+        continue;
+      }
+      if (!cur) cur = { a: oldPos, b: oldPos, oldText: '', newText: '' };
+      if (type === '-') {
+        cur.b += text.length;
+        cur.oldText += text;
+        oldPos += text.length;
+      } else cur.newText += text;
+    }
+    if (cur) changes.push(cur);
+    return changes;
+  }
+
+  // 뒤쪽 조각부터 옮겨야 앞쪽 조각의 옛 위치가 그대로 맞습니다.
+  function applyChanges(spans, changes) {
+    let out = spans || [];
+    for (let i = changes.length - 1; i >= 0; i -= 1) {
+      const c = changes[i];
+      out = shiftSpans(out, c.a, c.b, c.newText.length, c.newText.length);
+    }
+    return out;
+  }
+
+  // 흔적 창에 보일 '원래 → 바뀐 글' (조각이 여럿이면 … 로 이어 붙임)
+  function changeSummary(changes) {
+    return { before: changes.map(c => c.oldText).filter(Boolean).join(' … '), after: changes.map(c => c.newText).filter(Boolean).join(' … ') };
+  }
+
   // 통째로 바뀐 경우(크랙 수정창·원문 편집)는 앞뒤가 같은 부분을 빼고 가운데를 바뀐 자리로 봅니다.
   function wholeChange(before, after) {
     let p = 0;
@@ -1087,7 +1127,7 @@
     const result = await writeContent(target, plan.next);
     const record = recordFor(book(target.chatId)[target.msgId] || snapshot, target.content);
     const prevSpans = (record.spans || []).map(span => span.slice());
-    record.spans = shiftSpans(record.spans, plan.a, plan.b, plan.ins.length + plan.kept.length, plan.ins.length);
+    record.spans = plan.changes ? applyChanges(record.spans, plan.changes) : shiftSpans(record.spans, plan.a, plan.b, plan.ins.length + plan.kept.length, plan.ins.length);
     record.edits.push({ at: Date.now(), kind: meta.kind, before: meta.before, after: meta.after, prev: target.content, prevSpans });
     finishRecord(target.chatId, target.msgId, record, result.content);
     return result;
@@ -1309,10 +1349,10 @@
     if (isOwn(msgId, content)) return;
     const record = recordFor(book(chatId)[msgId], entry.before);
     // 끝 공백·줄바꿈만 다른 것은 바뀐 자리로 치지 않습니다.
-    const change = wholeChange(entry.before.replace(/\s+$/, ''), content.replace(/\s+$/, ''));
+    const changes = changeList(entry.before.replace(/\s+$/, ''), content.replace(/\s+$/, ''));
     const prevSpans = (record.spans || []).map(span => span.slice());
-    record.spans = shiftSpans(record.spans, change.a, change.b, change.newLen, change.newLen);
-    record.edits.push({ at: Date.now(), kind: 'native', before: change.oldText, after: change.newText, prev: entry.before, prevSpans });
+    record.spans = applyChanges(record.spans, changes);
+    record.edits.push({ at: Date.now(), kind: 'native', ...changeSummary(changes), prev: entry.before, prevSpans });
     diagState.nativeCaptured += 1;
     finishRecord(chatId, msgId, record, content);
   }
@@ -1943,8 +1983,9 @@ textarea:focus{background:var(--surface-2);box-shadow:inset 0 0 0 1.5px var(--pi
           return;
         }
         const change = wholeChange(target.content, next);
-        const plan = { a: change.a, b: change.b, ins: change.newText, kept: '', next };
-        result = await commitEdit(target, plan, { kind: 'source', before: change.oldText, after: change.newText });
+        const changes = changeList(target.content, next);
+        const plan = { a: change.a, b: change.b, ins: change.newText, kept: '', next, changes };
+        result = await commitEdit(target, plan, { kind: 'source', ...changeSummary(changes) });
       } else {
         let replacement = area.value;
         // 휴대폰에서 실수로 넣은 끝 줄바꿈은 뺍니다.
