@@ -2,6 +2,8 @@
 // @name         🪶 Crack Transcript (대화록)
 // @namespace    https://crack.wrtn.ai/
 // @version      1.3.0
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/Transcript.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/Transcript.user.js
 // @description  크랙 대화 로그를 TXT · HTML · Markdown · JSON · EPUB 중 하나로 저장해요. 메시지 청소와 장기기억 함께 저장도 돼요. 오른쪽 패널의 「로그 저장」을 누를 때만 동작해요.
 // @match        https://crack.wrtn.ai/*
 // @grant        GM_registerMenuCommand
