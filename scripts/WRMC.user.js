@@ -947,9 +947,9 @@
       id:/^speech-[A-Za-z0-9_-]{8,}$/.test(String(src.id||''))?String(src.id):makeSpeechRelationId(),
       speaker:String(src.speaker||src.from||src.caller||'').trim().slice(0,100),
       target:String(src.target||src.to||src.listener||'').trim().slice(0,100),
-      address:String(src.address||src.calling||src.title||src.honorific||'').trim().slice(0,APP.absoluteUiMax),
+      address:String(src.address||src.calling||src.title||src.honorific||'').trim().slice(0,160),
       register:normalizeSpeechRegister(src.register||src.speechLevel||src.politeness||src.tone),
-      note:String(src.note||src.context||'').trim().slice(0,APP.absoluteUiMax),
+      note:String(src.note||src.context||'').trim().slice(0,500),
       revision:Math.max(1,Number(src.revision||src.version||index+1)||index+1),
       effectiveTurnSeq:Math.max(0,Number(src.effectiveTurnSeq||src.turnSeq||0)||0),
       effectiveMessageId:String(src.effectiveMessageId||src.messageId||''),
@@ -2368,7 +2368,7 @@ const WLOG=(()=>{
       ob ? '- 인물 칸(knows·doesNotKnow·speaker_ref·target_ref·holder_ref): observe.people의 ref를 쓴다. 목록에 없는 개인은 people_upsert에 NEW_PERSON_n으로 먼저 등록하고, 집단·여러 명(모두·가족들·기사단 등)은 인물 칸에 쓰지 않는다.' : '',
       ob ? '- 호칭·말투: register는 formal·casual·mixed·unknown 중 하나다. 기존 분류가 있는 방향은 note를 바꿔도 register를 unknown으로 두지 않고, register를 바꾸면 note도 채운다. 호칭·설명이 모두 비고 unknown인 방향은 넣지 않는다.' : '',
       ob ? '- 관계·은폐: unresolved_action은 keep(쟁점 그대로, unresolved "")·replace(남은 쟁점 전체를 씀)·clear(입력 관계에 쟁점이 있고 milestone에 해결 내용을 쓸 때만) 중 하나다. 은폐 fact_ref는 observe.facts의 ref나 이 답의 NEW_FACT_n이다.' : '',
-      ob ? '- 길이: 호칭·말투·관계 칸에는 글자 수 상한이 없다. 원문 근거가 있는 사실·조건을 줄이거나 빼지 않는다. 호칭·말투는 매 턴 전부 함께 주입되므로 말투를 재현하는 데 필요한 특징만 쓰고 되풀이하지 않는다.' : '',
+      ob ? '- 길이: 호칭 address는 160자, 말투 note는 500자 이내다(넘으면 답 전체가 거절된다).' : '',
       o.text ? '' : '- 출력: JSON 객체 하나만 낸다. 코드 블록(```)·제목·설명 같은 Markdown을 앞뒤에 붙이지 않는다.'
     ] : [AI_JSON_TEXT_RULE,
       '- 키: ' + (kind === 'txt-memory' || kind === 'txt-people' ? 'format·version·scope·source' : 'format·version·source') + '와 영역 배열(' + areas + ')을 모두 쓰고, 근거가 없는 영역은 []로 둔다. 각 행의 필드도 값이 없으면 ""나 []로 두고 빼지 않는다(evidence 포함). 다만 ' + (kind === 'txt-memory' ? 'title·summary·body' : kind === 'txt-rel' ? '관계 current' : 'title·summary·body·content와 관계 current') + '는 비우지 않는다(비면 가져오기 전체가 멈춘다).' + (ob ? ' people의 모든 행에 isPlayer를 true/false로 쓴다.' : '') + ' 스키마에 없는 키는 쓰지 않는다.',
@@ -2379,7 +2379,7 @@ const WLOG=(()=>{
       kind === 'txt-full' || kind === 'txt-people' ? '- 인지: facts[].title은 행마다 다르게 쓴다. 같은 정보는 한 행으로 합친다(같은 제목에 다른 content·knows가 오면 가져오기 전체가 멈춘다).' : '',
       kind === 'txt-full' ? '- 은폐: fact_title은 이 JSON facts[].title을 글자 그대로 쓴다. 수동·보호 fact에 은폐를 걸려면 그 fact를 facts에 title·content 그대로 다시 넣는다.' : kind === 'txt-people' ? '- 은폐: fact_title은 이 JSON facts[].title이나 보호 fact의 title을 글자 그대로 쓴다. 보호 fact를 facts에 다시 넣으면 title·content를 글자 그대로 쓴다.' : '',
       ob ? '- 관계: 같은 방향은 한 행이다. trajectory를 쓰고 milestone·unresolved_action은 쓰지 않는다. evidence는 [{"role":"user","quote":"…"}]처럼 role(user 또는 assistant)과 quote를 가진 배열이며 1개 이상이다.' : '',
-      '- 길이: ' + (kind === 'txt-full' || kind === 'txt-memory' ? '현재상태 전체가 45,000자를 넘으면 가져오기 전체가 멈춘다. 이 수치는 넘지 말라는 상한이지 목표 분량이 아니다. ' : '') + (kind === 'txt-memory' ? '' : (kind === 'txt-rel' ? '관계' : '호칭·말투·관계') + ' 칸에는 글자 수 상한이 없다. ') + '원문 근거가 있는 사실·조건을 줄이거나 빼지 않는다.',
+      kind === 'txt-rel' ? '' : '- 길이: ' + [kind === 'txt-people' ? '' : '현재상태 전체 45,000자', kind === 'txt-memory' ? '' : '호칭 address 160자·말투 note 500자'].filter(Boolean).join('·') + ' 이내다(넘으면 가져오기 전체가 멈춘다).',
       '- 내보내기: 1/N부터 N/N까지 모든 파일을 읽은 뒤 최종 JSON 하나만 낸다. 가능하면 .json 파일 하나로 첨부하고, 안 되면 ```json 코드 블록 하나로 앞뒤 설명 없이 출력한다. 끊기면 사용자가 "이어서"를 보내니 끊긴 바로 다음 글자부터 이어 쓴다.'];
     return rows.filter(Boolean).join('\n');
   }
@@ -3382,7 +3382,7 @@ const WishRelationships = (() => {
 - current: 최신 전체값. 바뀌지 않은 유효 조건도 보존한다. 단편 추가문이나 빈 문자열을 반환하지 않는다.
 - milestone: 이번에 새로 확인된 핵심 계기와 관계적 결과만 쓴다. 새 전환 없으면 빈 문자열. 기존 trajectory와 같은 사건의 재언급을 재출력하지 않는다. 이전 이력을 재작성/삭제하는 필드가 아니다.
 - unresolved_action=keep: 쟁점 변경 근거 없음. unresolved는 빈 문자열이다. 기존 쟁점은 프로그램이 유지하므로 입력의 unresolved를 다시 쓰지 않는다.
-- unresolved_action=replace: 현재 남은 관계 쟁점의 최신 전체값을 unresolved에 쓴다(비우지 않는다). 부분 해결이면 남은 부분만 쓰고 해결 의미는 current 또는 milestone에 남긴다.
+- unresolved_action=replace: 현재 남은 관계 쟁점의 최신 전체값을 unresolved에 쓴다. 부분 해결이면 남은 부분만 쓰고 해결 의미는 current 또는 milestone에 남긴다.
 - unresolved_action=clear: 입력 관계에 unresolved가 있고 그 쟁점이 실제 모두 해결되거나 직접 정정된 경우만. unresolved는 빈 문자열, milestone에는 무엇이 해결됐는지 반드시 남긴다. 새 방향이나 쟁점이 없는 방향에는 clear를 쓰지 않는다. 해결 근거 없으면 keep이다. 관계 자체를 삭제하는 연산은 없다.
 - evidence: 이번 신규 RP 한 메시지의 연속 원문 인용. 여러 문장을 발췌해 합치지 않는다. 대표 인용 외 변경 내용도 신규 원문에서 확인되어야 한다. PC 주체의 인용은 USER 본문이어야 한다.
 - evidence는 rp.shared가 있으면 그 본문, 없으면 rp.observe 본문에서 고른다. 관계 허용 구간이 별도로 지정되면 그 범위만 사용한다. 한 메시지 안의 짧고 식별력 있는 구절을 복사하며, 원문에 없는 바깥 따옴표·화자 표지·TURN 헤더·생략 기호를 덧붙이지 않는다. 기존 관계 요약·시간 단서는 새 evidence가 아니다. 실제 변화의 근거는 반드시 확인하고, 검증을 피하려고 실제 변화까지 누락하지 않는다.
@@ -3392,7 +3392,7 @@ const WishRelationships = (() => {
 [전체 관계 재구축 계약 — relationships]
 이 작업은 증분 갱신이 아니다. 제공된 전체 확정 RP를 끝까지 읽고 각 방향의 핵심 전환과 마지막 현재값을 완결되게 결산한다. 최근에 등장하지 않은 인물도 유효한 관계가 있으면 포함한다. 자동 이력이 따로 남아 있다고 가정하여 과거 전환을 생략하지 않는다.
 - relationships에는 같은 방향당 하나의 객체만 쓴다. speaker/target은 people의 정확한 대표 이름 또는 보존되는 기존 인물 이름이다. 필요한 인물은 근거와 함께 people에 포함한다. manual=true 관계는 참고만 하고 같은 방향을 출력하지 않는다.
-- current(비우지 않음): 마지막 시점에 유효한 관계적 의미·깊이·태도·조건의 전체값.
+- current: 마지막 시점에 유효한 관계적 의미·깊이·태도·조건의 전체값.
 - trajectory: 과거 핵심 전환의 완결된 기록. '계기; 이후 변화; 현재에 남은 의미'처럼 순서를 드러내고 사건 상세는 중복하지 않는다. 단일 신규 milestone이 아니며 짧은 한 줄에 전체 역사를 억지로 맞추지 않는다.
 - unresolved: 현재 남은 관계 쟁점만. 해결됐거나 확인된 쟁점이 없으면 빈 문자열. 해결 이력의 의미는 trajectory/current에 남긴다. 이 전체 모드에는 unresolved_action이 없다.
 - evidence는 [{"role":"user","quote":"그 역할의 한 메시지 안 연속 원문"}] 형태의 배열이다(role은 user 또는 assistant). 핵심 현재값/전환을 확인할 대표 근거를 필요한 만큼 넣되 중복 인용은 피한다. 최소 1개. 개수 상한 없이 필요한 근거를 보존하며 role과 quote가 완전히 같은 인용만 중복 제거한다. PC 주체에는 PC 내면/선택을 확인하는 USER 직접 인용이 반드시 포함되어야 한다. 다른 인물의 기대를 PC 근거로 삼지 않는다.
@@ -4241,7 +4241,7 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
   const SPEECH_GUIDE = `
 [방향별 호칭·말투 · 은폐]
 - speech_upsert는 화자→상대별 현재 호칭·말투의 실제 변화만 담는다. A→B와 B→A는 별개다. speaker_ref/target_ref는 기존 ref 또는 같은 people_upsert의 NEW_PERSON_*다.
-- address는 실제 부르는 말, register는 formal/casual/mixed/unknown, note는 확인된 어미·자칭·말버릇·표현 방식·상황 전환 조건이다. 호칭·말투 목록은 매 턴 전부 함께 주입되므로 note에는 말투를 재현하는 데 필요한 특징을 쓰고 같은 말을 되풀이하지 않는다. note에 성격 인상만 적지 않는다. 변하지 않은 기존 호칭·말투·조건은 유지한다.
+- address는 실제 부르는 말(160자 이내), register는 formal/casual/mixed/unknown, note는 확인된 어미·자칭·말버릇·표현 방식·상황 전환 조건(500자 이내)이다. note에 성격 인상만 적지 않는다. 변하지 않은 기존 호칭·말투·조건은 유지한다.
 - '-님', 나이·계급·친밀함만으로 register를 추정하지 않는다. 기존 행이 없는 새 방향에서 호칭만 확인되면 register=unknown이다. 새 방향에서 말투만 확인되면 address=""로 두고 확인된 register/note를 쓴다. 이름·'없음/미확인'을 가짜 호칭으로 넣지 않는다.
 - 기존 자동 방향의 빈 address/note와 register=unknown은 해당 필드의 변경 근거 없음(기존값 유지)을 뜻한다. 자동 증분 응답에 삭제·초기화 연산은 없다. 실제 호칭 해제·미확정 정정·잘못된 별칭 제거는 기존 편집 화면에서 확인한다. 변경 없는 필드는 가능하면 기존 의미를 유지한 값으로 반환한다.
 - 새 방향에서 address·note가 모두 비고 register가 unknown이면 그 행은 넣지 않는다. speaker와 target이 같은 행도 넣지 않는다.
@@ -4640,9 +4640,9 @@ const deltaNotices=[];
     throw Object.assign(Error(message),{code:'WISH_SCHEMA',problems:list,diagnostic:{path:first.path,expected:first.expected,actual:first.actual,stage:'JSON 구조 확인'}});
   }
   function validateAiSpeechFields(speaker,target,address,note) {
-    for(const [label,value,max] of [['화자',speaker,100],['상대',target,100],['호칭',address,APP.absoluteUiMax],['말투 설명',note,APP.absoluteUiMax]]){
+    for(const [label,value,max] of [['화자',speaker,100],['상대',target,100],['호칭',address,160],['말투 설명',note,500]]){
       if(typeof value!=='string')throw Error('호칭·말투 '+speaker+' → '+target+': AI '+label+'은 문자열이어야 합니다.');
-      if(value.trim().length>max)throw Error('호칭·말투 '+speaker+' → '+target+': AI '+label+'이 '+max.toLocaleString()+'자 상한을 넘었습니다('+value.trim().length.toLocaleString()+'자). 뒤를 자르지 않고 이번 결과 적용을 중단했습니다.');
+      if(value.trim().length>max)throw Error('호칭·말투 '+speaker+' → '+target+': AI '+label+'이 '+max+'자 상한을 넘었습니다('+value.trim().length+'자). 뒤를 자르지 않고 이번 결과 적용을 중단했습니다.');
     }
   }
     function wishHoldManualFactRows(next,heldFacts,heldSpeech,cutoff,holdCtx,notices,bodyKey,cogHeld){
@@ -5436,9 +5436,9 @@ doesNotKnow의 유효한 예:
 - '선생님', '형', '너' 같은 부르는 말을 자동으로 그 인물의 고유 이름/별칭으로 등록하지 않는다. 대명사·공통 호칭만으로 서로 다른 사람을 합치지 않는다.
 
 각 필드의 역할:
-- address: 상대를 실제로 부르는 현재 호칭. 이름 부르기, 애칭, 직함, 이름+접미사 등 원문의 표현을 보존한다.
+- address: 상대를 실제로 부르는 현재 호칭. 이름 부르기, 애칭, 직함, 이름+접미사 등 원문의 표현을 보존한다. 160자 이내로 작성한다.
 - register: formal=존댓말/높임말, casual=반말, mixed=현재도 존댓말과 반말을 함께 쓰거나 상황에 따라 전환, unknown=판정 근거 부족. 나이·계급·친밀함이나 호칭의 '-님'만으로 말투를 추정하지 않는다. 하오체·하게체 등은 실제 높임 기능에 따라 판단하고 구체적인 어미는 note에 남긴다. 분류가 불확실하면 unknown을 쓴다.
-- note: 말투를 재현하는 데 필요한 어미·문체·말버릇·자칭·말의 길이·직설적/완곡한 표현, 공적/사적 전환 조건 등을 근거가 있는 만큼 정리한다. 호칭·말투 목록은 매 턴 전부 함께 주입되므로 같은 말을 되풀이하지 않는다. '다정하다/차갑다'처럼 성격만 적지 말고 실제 말하기 특징을 적는다. 추가 특징이 확인되지 않으면 빈 문자열도 허용한다.
+- note: 말투를 재현하는 데 필요한 어미·문체·말버릇·자칭·말의 길이·직설적/완곡한 표현, 공적/사적 전환 조건 등을 근거가 있는 만큼 500자 이내로 정리한다. '다정하다/차갑다'처럼 성격만 적지 말고 실제 말하기 특징을 적는다. 추가 특징이 확인되지 않으면 빈 문자열도 허용한다.
 - evidence: 해당 화자와 상대, 호칭 또는 말투를 확인할 수 있는 RP 원문의 연속 인용문. 최소 2자이며 실제 대사와 필요하면 인접 서술을 그대로 인용한다. 여러 장면의 문장을 이어 붙이거나 요약을 인용문으로 만들지 않는다. 대표 인용 하나를 고르되 address/register/note의 나머지 내용도 전체 원문에서 확인되어야 한다.
 
 현재값 판정:
@@ -5862,9 +5862,9 @@ JSON 파일을 생성하기 전 내부적으로 확인한다. 이것은 빠진 �
     });
     (proposal.room.speechRelations||[]).forEach((r,i)=>{
       const old=room.speechRelations?.find(x=>x.id===r.id)||unique(room.speechRelations,x=>WishRelationships.key(x.speaker,x.target)===WishRelationships.key(r.speaker,r.target)),title=r.speaker+' → '+r.target,readonly=r.source!=='unified-ai';
-      add('호칭·말투',title,'호칭',['room','speechRelations',i,'address'],r.address,old?.address,{max:APP.absoluteUiMax,empty:true,readonly});
+      add('호칭·말투',title,'호칭',['room','speechRelations',i,'address'],r.address,old?.address,{max:160,empty:true,readonly});
       add('호칭·말투',title,'말투',['room','speechRelations',i,'register'],normalizeSpeechRegister(r.register),old?normalizeSpeechRegister(old.register):'',{readonly,choices:[['honorific','존댓말'],['banmal','반말'],['mixed','혼용'],['other','기타']]});
-      add('호칭·말투',title,'말하기 특징',['room','speechRelations',i,'note'],r.note,old?.note,{max:APP.absoluteUiMax,empty:true,readonly});
+      add('호칭·말투',title,'말하기 특징',['room','speechRelations',i,'note'],r.note,old?.note,{max:500,empty:true,readonly});
     });
     (proposal.packs||[]).forEach((pack,p)=>{
       if(!pack.autoManaged||pack.ownerChatId!==room.chatId)return;
@@ -9692,12 +9692,12 @@ function formatLocalRecordTime(value){
     const base=fallback&&typeof fallback==='object'?fallback:{};
     const speaker=String(src.speaker||src.from||src.source||src.caller||base.speaker||base.from||base.source||'').trim().slice(0,100);
     const target=String(src.target||src.to||src.addressee||src.listener||base.target||base.to||base.addressee||'').trim().slice(0,100);
-    const address=String(src.address||src.currentTerm||src.current||src.term||src.call||src.calling||src.title||src.honorific||base.address||base.currentTerm||base.term||base.call||base.calling||'').trim().slice(0,APP.absoluteUiMax);
+    const address=String(src.address||src.currentTerm||src.current||src.term||src.call||src.calling||src.title||src.honorific||base.address||base.currentTerm||base.term||base.call||base.calling||'').trim().slice(0,160);
     if(!speaker||!target||!address||speechNameKey(speaker)===speechNameKey(target))return null;
     return {
       speaker,target,address,
       register:normalizeSpeechRegister(src.register||src.speechLevel||src.politeness||src.tone||base.register),
-      note:String(src.note||src.context||base.note||'').trim().slice(0,APP.absoluteUiMax),
+      note:String(src.note||src.context||base.note||'').trim().slice(0,500),
       effectiveTurnSeq:Math.max(0,Number(src.effectiveTurnSeq||src.turnSeq||base.effectiveTurnSeq||0)||0),
       revision:Math.max(1,Number(src.revision||src.version||base.revision||1)||1),
     };
@@ -10978,7 +10978,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
         summary:{type:'object',additionalProperties:false,required:['full','compact','micro'],properties:{full:{type:'string',minLength:1,maxLength:6000},compact:{type:'string',minLength:1,maxLength:1800},micro:{type:'string',minLength:1,maxLength:500}}},
         inject:{type:'object',additionalProperties:false,required:['full','compact','micro'],properties:{full:{type:'string',minLength:1,maxLength:6000},compact:{type:'string',minLength:1,maxLength:1800},micro:{type:'string',minLength:1,maxLength:500}}},
         anchor:{type:'boolean'},
-        speechRule:{type:['object','null'],additionalProperties:false,required:['speaker','target','address','register','effectiveTurnSeq'],properties:{speaker:{type:'string',maxLength:100},target:{type:'string',maxLength:100},address:{type:'string'},register:{type:'string',enum:['honorific','banmal','mixed','other']},effectiveTurnSeq:{type:'integer',minimum:0},note:{type:'string'}}},
+        speechRule:{type:['object','null'],additionalProperties:false,required:['speaker','target','address','register','effectiveTurnSeq'],properties:{speaker:{type:'string',maxLength:100},target:{type:'string',maxLength:100},address:{type:'string',maxLength:160},register:{type:'string',enum:['honorific','banmal','mixed','other']},effectiveTurnSeq:{type:'integer',minimum:0},note:{type:'string',maxLength:500}}},
       }}}
     }
   };
