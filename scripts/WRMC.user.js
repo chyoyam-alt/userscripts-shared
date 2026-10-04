@@ -4457,7 +4457,7 @@ references는 이후 RP에서 반복해서 다시 불러올 가치가 있는 정
 - world: 세계관 법칙·제도·종족·기술·마법 등 반복 참조할 규칙. RP에서 드러난 능력은 그 종류·발현 조건·위험(예: 변신, 폭주)과 그 능력을 가진 인물을 함께 적는다.
 - other: 위 분류에 맞지 않는 지속 참고자료. 약속어·암호·반복 의식처럼 물건이 아닌 공유 맥락은 원문에서 확인된 뜻·공유 당사자·사용 조건을 담고, 약속어·암호 자체는 원문 그대로 보존한다. 일회성 행동을 반복 의식으로 만들거나 공유 범위를 근거 없이 넓히지 않는다. 캐릭터 설정에 없는 인물(RP 중 태어나거나 처음 등장한 인물 포함)의 나이·외형·신분·별명·성격 특징과, 기존 인물에게 RP에서 새로 생긴 평판·능력은 인물마다 other 카드 하나로 남긴다(title은 그 인물 이름, keywords에는 이름·별명). USER가 OOC로 정정한 외형도 이 카드에 둔다.
 - outfit: 본문으로 확인되는 현재 착용·교체와 지속 복장 정보. RP 본문에서 확인되는 현재값을 우선하고 순간 묘사로 카드를 늘리지 않는다.
-- key_quote: 이후 관계·약속·판단에 의미가 있는 실제 핵심 발언. content 첫 줄은 화자 → 상대: “연속된 실제 원문”이고 다음 줄은 장면 맥락이다. 의역·합성한 문장을 원문 인용으로 만들지 않는다. 상대 미확정은 미확인으로 쓰되 화자나 원문을 확정할 수 없으면 만들지 않는다. 기존 화자·상대·맥락 변경도 신규 직접 RP 근거가 필요하다. 관계 전환·고백·맹세·약속·사과·결별·정체 공개 장면마다 그 장면의 결정적인 실제 대사를 하나씩 남긴다. 장면이 다르면 비슷한 말이라도 각각 남기고, 같은 장면 안의 비슷한 말만 하나로 한다. PC 대사만 모으지 말고 CHAR·NPC가 한 고백·맹세·사과·서신의 결정적 문장도 모은다. 다음 장면에서 인물이 그 말을 기억하고 되받게 하는 것이 목적이다. 원문 대사를 그대로 두는 곳은 key_quote 하나다. 사건에는 결정적 한 마디만, 관계·현재상태에는 짧은 의역이나 '(key_quote: 첫 맹세)'처럼 가리키는 말만 쓴다. key_quote의 keywords에는 인물 이름처럼 거의 매 턴 나오는 말을 넣지 않고, 그 장면을 떠올리게 하는 고유한 말(물건·장소·사건·약속어)을 넣는다.
+- key_quote: 이후 관계·약속·판단에 의미가 있는 실제 핵심 발언. content 첫 줄은 화자 → 상대: “연속된 실제 원문”이고 다음 줄은 장면 맥락이다. 의역·합성한 문장을 원문 인용으로 만들지 않는다. 상대 미확정은 미확인으로 쓰되 화자나 원문을 확정할 수 없으면 만들지 않는다. 기존 화자·상대·맥락 변경도 신규 직접 RP 근거가 필요하다. 관계 전환·고백·맹세·약속·사과·결별·정체 공개 장면마다 그 장면의 결정적인 실제 대사를 하나씩 남긴다. 장면이 다르면 비슷한 말이라도 각각 남기고 title에 그 장면을 알아볼 말을 넣으며(예: '등대 아래 첫 맹세'), 같은 장면 안의 비슷한 말만 하나로 한다. PC 대사만 모으지 말고 CHAR·NPC가 한 고백·맹세·사과·서신의 결정적 문장도 모은다. 다음 장면에서 인물이 그 말을 기억하고 되받게 하는 것이 목적이다. 원문 대사를 그대로 두는 곳은 key_quote 하나다. 사건에는 결정적 한 마디만, 관계·현재상태에는 짧은 의역이나 '(key_quote: 등대 아래 첫 맹세)'처럼 가리키는 말만 쓴다. key_quote의 keywords에는 인물 이름처럼 거의 매 턴 나오는 말을 넣지 않고, 그 장면을 떠올리게 하는 고유한 말(물건·장소·사건·약속어)을 넣는다.
 
 [증분/보존 규칙]
 - 자료는 한 번 지나간 장면 기록이 아니라 살아 있는 정사 설명이다. 일회성 행동·순간 분위기는 자료로 만들지 않는다. 같은 행동·말·음식·놀이가 여러 장면에서 되풀이되어 인물들 사이의 의식·암호·놀림·반복 농담이 된 것은 other로 남긴다(누가 누구에게, 어떤 때 쓰는지, 원문 표현 그대로). 지금도 되풀이되어 현재상태의 생활의 결에 적어 둔 습관은 여기에 다시 쓰지 않고, 생활의 결에서 빠질 때 other로 옮긴다.
@@ -5975,7 +5975,7 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
 - world: 세계관 법칙·제도·종족·기술·마법 등. RP에서 드러난 능력은 그 종류·발현 조건·위험(예: 변신, 폭주)과 그 능력을 가진 인물을 함께 적는다.
 - other: 위 분류에 맞지 않는 지속 참고자료. 약속어·암호·반복 의식처럼 물건이 아닌 공유 맥락은 원문에서 확인된 뜻·공유 당사자·사용 조건을 담고, 약속어·암호 자체는 원문 그대로 보존한다. 일회성 행동을 반복 의식으로 만들거나 공유 범위를 근거 없이 넓히지 않는다. 캐릭터 설정에 없는 인물(RP 중 태어나거나 처음 등장한 인물 포함)의 나이·외형·신분·별명·성격 특징과, 기존 인물에게 RP에서 새로 생긴 평판·능력은 인물마다 other 카드 하나로 남긴다(title은 그 인물 이름, keywords에는 이름·별명). USER가 OOC로 정정한 외형도 이 카드에 둔다.
 - outfit: 본문으로 확인되는 현재 착용·교체와 지속 복장 정보. 순간 묘사로 카드를 늘리지 않는다.
-- key_quote: 이후 관계·약속·판단에 의미가 있는 실제 핵심 발언. 관계 전환·고백·맹세·약속·사과·결별·정체 공개 장면마다 그 장면의 결정적인 실제 대사를 하나씩 남긴다. 장면이 다르면 비슷한 말이라도 각각 남기고, 같은 장면 안의 비슷한 말만 하나로 한다. PC 대사만 모으지 말고 CHAR·NPC가 한 고백·맹세·사과·서신의 결정적 문장도 모은다. 다음 장면에서 인물이 그 말을 기억하고 되받게 하는 것이 목적이다. keywords에는 인물 이름처럼 거의 매 턴 나오는 말을 넣지 않고, 그 장면을 떠올리게 하는 고유한 말(물건·장소·사건·약속어)을 넣는다.
+- key_quote: 이후 관계·약속·판단에 의미가 있는 실제 핵심 발언. 관계 전환·고백·맹세·약속·사과·결별·정체 공개 장면마다 그 장면의 결정적인 실제 대사를 하나씩 남긴다. 장면이 다르면 비슷한 말이라도 각각 남기고 title에 그 장면을 알아볼 말을 넣으며(예: '등대 아래 첫 맹세'), 같은 장면 안의 비슷한 말만 하나로 한다. PC 대사만 모으지 말고 CHAR·NPC가 한 고백·맹세·사과·서신의 결정적 문장도 모은다. 다음 장면에서 인물이 그 말을 기억하고 되받게 하는 것이 목적이다. keywords에는 인물 이름처럼 거의 매 턴 나오는 말을 넣지 않고, 그 장면을 떠올리게 하는 고유한 말(물건·장소·사건·약속어)을 넣는다.
 
 자료는 한 장면 요약이 아니라 살아 있는 정사 설명이다.
 - 같은 대상을 표현이 다르다고 중복 카드로 만들지 않는다.
@@ -6148,7 +6148,7 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
   const SCHEMA3=clone(SCHEMA);SCHEMA3.properties=Object.fromEntries(Object.entries(SCHEMA3.properties).flatMap(e=>e[0]==='events'?[e,['threads',arr(clone(WishThreads.TXT_ROW_SCHEMA))]]:[e]));
   SCHEMA3.properties.version={type:'number',enum:[3]};SCHEMA3.required.splice(SCHEMA3.required.indexOf('events')+1,0,'threads');
   const RELATION_SCHEMA=obj({format:{type:'string',enum:['wish-relationship-rebuild']},version:{type:'number',enum:[1]},source:clone(sourceSchema),people:arr({...clone(personSchema),required:['name','aliases','isPlayer','evidence']}),relationships:WishRelationships.fullSchema});
-  function externalGuideDefault(){return WISH_EXTERNAL_REBUILD_GUIDE+WISH_DATE_GUIDE_242+WishRelationships.fullGuide+`\n\n[기록 문체]\n- 원문 칸(evidence·quote, key_quote의 대사, 약속어·암호, 호칭 예문)은 원문 그대로 둔다. 다듬거나 요약·번역하지 않는다.\n- 서술 칸(사건 summary, 현재상태 body, 자료 content)은 짧은 평서문으로 쓴다. 군더더기 수식어는 빼되 감정의 이유, 결정적 몸짓·표정·감각 단서, 인물 사이의 반복 습관·농담, 주체·대상·부정·조건·불확실성·의도/완료·감정 강도는 줄이지 않는다. '못함'을 '안 함'으로 바꾸지 않는다. relationships의 칸은 관계·감정선 공통 규칙을, speech의 칸은 7절의 호칭·말투 규칙을 따른다.\n- 원문 대사를 그대로 두는 곳은 key_quote 하나다. 사건에는 결정적 한 마디만, 관계·현재상태에는 짧은 의역이나 '(key_quote: 첫 맹세)'처럼 가리키는 말만 쓴다.\n- 서술 칸과 relationships의 칸에는 RP에서 확인된 내용을 극중 상태로 쓴다. '정사 근거에서 제외', '~로 확대하지 않음', '~로 결산하지 않음' 같은 작업 설명·판정 이유는 쓰지 않는다. 원문에서 그때까지 일어나지 않은 것이 분명한 일도 메모 대신 극중 상태로 쓴다(예: '해결·보복 실행은 확인되지 않음' 대신 '아직 대가를 치르게 하지 않았고 다시 만나지 않았다'). 원문 자체가 불확실하게 말한 것(예: '가능성이 높다'는 보고)은 그 불확실성을 그대로 적는다.\n- 새 기록의 →는 행동·감정·전달 방향, ⇒는 원문이 명시한 인과에만 쓴다. 사건 작성 안내의 화살표 흐름은 구성 순서이며 그대로 기호화하라는 뜻이 아니다. 실제 인용·약속어·암호의 기호는 바꾸지 않는다.\n- 설명의 한글 수량은 값과 단위가 명확히 같을 때만 숫자로 바꿀 수 있다. 인용 속 수량·날짜·시각·범위·소수·서수·고유명·파일명은 바꾸지 않으며 생략된 단위를 추정하지 않는다. 최소·약·이상·이하·미확정 같은 한정은 보존한다.\n\n[외부 재구축 출력 계약]\n아래 스키마만 사용한다.\n- stateSections/events/threads/people/facts/references/speech/concealments/relationships를 모두 출력한다. 근거 없는 영역은 []로 둘 수 있다.\n- people/facts/speech/concealments의 evidence는 RP 본문에 있는 연속 인용문이다.\n- 은폐의 fact_title은 이 JSON facts[].title을 글자 그대로 쓰고, active=true 은폐의 holder는 그 fact의 knows에 원문 근거와 함께 들어 있어야 한다. 수동·보호 fact에 은폐를 걸려면 그 fact를 facts에 title·content 그대로 다시 넣는다.\n- key_quote content 첫 줄은 화자 → 상대: “연속된 실제 원문”, 다음 줄은 장면 맥락이다. 상대 미확정은 미확인으로 적고 화자·원문이 불명확하면 만들지 않는다. 의역·합성 인용을 만들지 않는다. references에도 앞의 날짜·시점·주체·수치·정보격차·중복 판정 규칙을 모두 적용한다.\n- 최종 점검표·분석 과정·스키마 정의 자체를 결과 JSON에 덧붙이지 않는다.\n`;}
+  function externalGuideDefault(){return WISH_EXTERNAL_REBUILD_GUIDE+WISH_DATE_GUIDE_242+WishRelationships.fullGuide+`\n\n[기록 문체]\n- 원문 칸(evidence·quote, key_quote의 대사, 약속어·암호, 호칭 예문)은 원문 그대로 둔다. 다듬거나 요약·번역하지 않는다.\n- 서술 칸(사건 summary, 현재상태 body, 자료 content)은 짧은 평서문으로 쓴다. 군더더기 수식어는 빼되 감정의 이유, 결정적 몸짓·표정·감각 단서, 인물 사이의 반복 습관·농담, 주체·대상·부정·조건·불확실성·의도/완료·감정 강도는 줄이지 않는다. '못함'을 '안 함'으로 바꾸지 않는다. relationships의 칸은 관계·감정선 공통 규칙을, speech의 칸은 7절의 호칭·말투 규칙을 따른다.\n- 원문 대사를 그대로 두는 곳은 key_quote 하나다. 사건에는 결정적 한 마디만, 관계·현재상태에는 짧은 의역이나 '(key_quote: 등대 아래 첫 맹세)'처럼 가리키는 말만 쓴다.\n- 서술 칸과 relationships의 칸에는 RP에서 확인된 내용을 극중 상태로 쓴다. '정사 근거에서 제외', '~로 확대하지 않음', '~로 결산하지 않음' 같은 작업 설명·판정 이유는 쓰지 않는다. 원문에서 그때까지 일어나지 않은 것이 분명한 일도 메모 대신 극중 상태로 쓴다(예: '해결·보복 실행은 확인되지 않음' 대신 '아직 대가를 치르게 하지 않았고 다시 만나지 않았다'). 원문 자체가 불확실하게 말한 것(예: '가능성이 높다'는 보고)은 그 불확실성을 그대로 적는다.\n- 새 기록의 →는 행동·감정·전달 방향, ⇒는 원문이 명시한 인과에만 쓴다. 사건 작성 안내의 화살표 흐름은 구성 순서이며 그대로 기호화하라는 뜻이 아니다. 실제 인용·약속어·암호의 기호는 바꾸지 않는다.\n- 설명의 한글 수량은 값과 단위가 명확히 같을 때만 숫자로 바꿀 수 있다. 인용 속 수량·날짜·시각·범위·소수·서수·고유명·파일명은 바꾸지 않으며 생략된 단위를 추정하지 않는다. 최소·약·이상·이하·미확정 같은 한정은 보존한다.\n\n[외부 재구축 출력 계약]\n아래 스키마만 사용한다.\n- stateSections/events/threads/people/facts/references/speech/concealments/relationships를 모두 출력한다. 근거 없는 영역은 []로 둘 수 있다.\n- people/facts/speech/concealments의 evidence는 RP 본문에 있는 연속 인용문이다.\n- 은폐의 fact_title은 이 JSON facts[].title을 글자 그대로 쓰고, active=true 은폐의 holder는 그 fact의 knows에 원문 근거와 함께 들어 있어야 한다. 수동·보호 fact에 은폐를 걸려면 그 fact를 facts에 title·content 그대로 다시 넣는다.\n- key_quote content 첫 줄은 화자 → 상대: “연속된 실제 원문”, 다음 줄은 장면 맥락이다. 상대 미확정은 미확인으로 적고 화자·원문이 불명확하면 만들지 않는다. 의역·합성 인용을 만들지 않는다. references에도 앞의 날짜·시점·주체·수치·정보격차·중복 판정 규칙을 모두 적용한다.\n- 최종 점검표·분석 과정·스키마 정의 자체를 결과 JSON에 덧붙이지 않는다.\n`;}
   // Appended outside the editable guide so saved custom guides also get it.
   function personContract(kind='all'){
     const rel=kind==='relations';
@@ -12213,7 +12213,7 @@ AI의 메타 설명·캐릭터 점검·싱크로율·보정 선언·IF 출력 �
 미언급은 삭제·이동·분실·환복의 근거가 아니다. 단순 재언급·표현 개선만으로 다시 쓰지 않는다.
 순간 표정·자세·일회 행동·장면 요약은 자료 카드로 만들지 않는다. 현재값의 과거 변천사는 날짜로그의 역할이다.
 item은 정체·소유·위치·기능, outfit은 인물별 현재 착용 사실을 기록한다. 잠시 손에 든 행동을 소유 이전으로 추정하지 않는다.
-핵심 대사는 원문에 나온 표현을 보존하고 화자·상대·장면 맥락을 구분한다. 실제 발언이 불확실하면 만들어내지 않는다. 인용문을 별도 검증 요청이나 evidence 필드로 출력하지 않는다.
+핵심 대사는 원문에 나온 표현을 보존하고 화자·상대·장면 맥락을 구분하며, 장면이 다르면 비슷한 말이라도 따로 두고 title에 그 장면을 알아볼 말을 넣는다(예: '등대 아래 첫 맹세'). 실제 발언이 불확실하면 만들어내지 않는다. 인용문을 별도 검증 요청이나 evidence 필드로 출력하지 않는다.
 [표현]
 full은 단독으로 이해 가능한 상세 자료, compact는 호출용 압축, micro는 대상과 핵심 조건을 알아볼 수 있는 짧은 표현이다.
 셋 모두 실제 확인된 같은 사실을 바탕으로 작성한다. 압축 때문에 주체·부정·조건·수량·의무의 의미를 바꾸지 않는다.
@@ -12241,6 +12241,11 @@ anchor는 장면과 무관하게 항상 필요한 절대 규칙에만 드물게 
     if(data.upsert.length>1000)throw Error('한 구간의 자료 변경이 1,000개를 넘습니다.');
     const next=structuredClone(entries),seen=new Set(),seenTargets=new Set();
     const titleKey=e=>String(e.type)+':'+normalizedRecallTerm(e.name||e.title);
+    // A key_quote card is one spoken line: a same-titled card is the same card only when the line matches too. The line is the
+    // stored exactQuote, else the first quoted span of the full text, else the full text; spacing and quote marks are ignored.
+    const lineKey=e=>{if(e.type!=='key_quote')return '';const own=String(e.exactQuote||'').normalize('NFKC'),text=own||String(typeof e.full==='string'?e.full:loreTextAtLevel(e,'full')).normalize('NFKC'),span=own?null:text.match(/“([^”]+)”|"([^"]+)"|「([^」]+)」|『([^』]+)』/);
+      return autoLoreCanonicalText((span&&span.slice(1).find(x=>x?.trim()))||text).replace(/[\s"'“”‘’「」『』]/g,'');};
+    const sameCard=(e,raw)=>titleKey(e)===titleKey(raw)&&lineKey(e)===lineKey(raw);
     const blockedIds=new Set(protectedEntries.map(e=>e.id)),blockedNames=new Set(protectedEntries.map(titleKey));
     for(const raw of data.upsert){
       if(!raw||typeof raw!=='object'||Array.isArray(raw))throw Error('자료 카드 형식 오류');
@@ -12252,19 +12257,19 @@ anchor는 장면과 무관하게 항상 필요한 절대 규칙에만 드물게 
       if(raw.title.length>160||raw.aliases.some(x=>x.length>160)||raw.keywords.some(x=>x.length>160)||raw.full.length>APP.absoluteUiMax||raw.compact.length>12000||raw.micro.length>4000)throw Error('자료 필드가 저장 한도를 넘습니다. 기존 자료는 유지했습니다.');
       if(seen.has(raw.ref))throw Error('중복 자료 ref');seen.add(raw.ref);
       const nameKey=titleKey(raw);
-      if(blockedIds.has(raw.ref)||blockedNames.has(nameKey)){
+      if(blockedIds.has(raw.ref)||(blockedNames.has(nameKey)&&protectedEntries.some(e=>sameCard(e,raw)))){
         if(!Array.isArray(held))throw Error('수동·보호 자료를 변경하는 응답은 적용하지 않습니다.');
-        const hits=protectedEntries.filter(e=>e.id===raw.ref||titleKey(e)===nameKey);
+        const hits=protectedEntries.filter(e=>e.id===raw.ref||sameCard(e,raw));
         held.push({id:'lh-'+crypto.randomUUID(),kind:'lore-protected',reason:blockedIds.has(raw.ref)?'protected-id':'protected-title',at:Date.now(),sourceMessageId:String(lastMessageId||''),target:{protectedIds:hits.map(e=>e.id),protectedTitle:hits[0]?.name||raw.title},proposal:structuredClone(raw)});continue;
       }
       let old=next.find(e=>e.id===raw.ref);
       if(!old&&!/^NEW_REF_[A-Za-z0-9_-]+$/.test(raw.ref))throw Error('알 수 없는 자료 ref');
-      if(!old)old=next.find(e=>titleKey(e)===nameKey);
-      const target=old?.id||nameKey;if(seenTargets.has(target))throw Error('같은 자료를 한 응답에서 중복 변경했습니다.');seenTargets.add(target);
-      if(old&&next.some(e=>e.id!==old.id&&titleKey(e)===nameKey))throw Error('다른 기존 자료와 이름이 충돌합니다.');
+      if(!old)old=next.find(e=>sameCard(e,raw));
+      const target=old?.id||nameKey+'|'+lineKey(raw);if(seenTargets.has(target))throw Error('같은 자료를 한 응답에서 중복 변경했습니다.');seenTargets.add(target);
+      if(old&&raw.type!=='key_quote'&&next.some(e=>e.id!==old.id&&titleKey(e)===nameKey))throw Error('다른 기존 자료와 이름이 충돌합니다.');
       const entry=normalizeLoreEntry({...old,id:old?.id||makeLoreEntryId(),name:raw.title.trim(),type:raw.type,entities:raw.aliases,triggers:raw.keywords,
         summary:{full:raw.full,compact:raw.compact,micro:raw.micro},inject:{full:raw.full,compact:raw.compact,micro:raw.micro},
-        anchor:raw.type==='key_quote'?false:raw.anchor,autoManaged:true,userProtected:false,speechRule:null,autoLoreKey:old?.autoLoreKey||'api:'+nameKey,
+        anchor:raw.type==='key_quote'?false:raw.anchor,autoManaged:true,userProtected:false,speechRule:null,autoLoreKey:old?.autoLoreKey||(raw.type==='key_quote'?'api:key_quote:'+aiHashTiny(lineKey(raw))+':'+normalizedRecallTerm(raw.title):'api:'+nameKey),
         enabled:old?old.enabled!==false:true,lastSeenMessageId:lastMessageId,embedding:null,updatedAt:Date.now()});
       // A regenerated card must not retain obsolete external-import quote/evidence metadata.
       for(const key of ['evidence','exactQuote','quoteSpeaker','quoteTarget','sceneContext','sceneLocation','sceneDate','sourceHash','sourceMessageIds'])delete entry[key];
@@ -18624,8 +18629,8 @@ const WishPromptGuides=(()=>{
   // A text saved against an older default: shown in the editor only. Each guide is compared with the version in which its own
   // default last changed (a saved text without a version counts as oldest); apiIndex, apiLoreConversion and externalSecondary
   // have kept their defaults since saved texts carry a version.
-  const DEFAULT_CHANGED={apiMemory:'1.8.0',apiThreads:'1.8.0',apiRelationships:'1.8.0',apiDelta:'1.8.0',apiRecall:'1.8.0',apiBundleMemory:'1.8.0',apiBundlePeople:'1.8.0',externalAll:'1.8.0',externalMemory:'1.8.0',externalPeople:'1.8.0',externalRelationships:'1.8.0',
-    apiCommon:'1.7.0',apiObserve:'1.7.0',apiSpeech:'1.7.0',apiDate:'1.7.0',apiLoreBundle:'1.7.0',manualRelay:'1.7.0',loreExternal:'1.7.0',currentState:'1.7.0',logSummary:'1.7.0',loreAuto:'1.7.0'};
+  const DEFAULT_CHANGED={apiMemory:'1.8.0',apiLoreBundle:'1.8.0',apiThreads:'1.8.0',apiRelationships:'1.8.0',apiDelta:'1.8.0',apiRecall:'1.8.0',apiBundleMemory:'1.8.0',apiBundlePeople:'1.8.0',externalAll:'1.8.0',externalMemory:'1.8.0',externalPeople:'1.8.0',externalRelationships:'1.8.0',
+    apiCommon:'1.7.0',apiObserve:'1.7.0',apiSpeech:'1.7.0',apiDate:'1.7.0',manualRelay:'1.7.0',loreExternal:'1.7.0',currentState:'1.7.0',logSummary:'1.7.0',loreAuto:'1.7.0'};
   const versionParts=v=>{const m=String(v||'').match(/^(\d+)\.(\d+)\.(\d+)$/);return m?m.slice(1).map(Number):[0,0,0];};
   function stale(id){
     const r=readGuideRecord(id),since=DEFAULT_CHANGED[id];if(!r||!since)return false;
