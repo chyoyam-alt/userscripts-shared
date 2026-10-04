@@ -4505,8 +4505,8 @@ fact는 '누가 알고/모르는지가 이후 대사·행동·비밀 유지·오
 나쁜 예: 매 턴 감정, 외형 묘사, 사소한 행동, 날씨, 단순 분위기, 모든 사건 문장.
 새 fact ref는 NEW_FACT_1처럼 NEW_FACT_ 으로 시작한다.
 기존과 같은 정보면 표현이 달라도 기존 ref를 재사용하고 중복 fact를 만들지 않는다.
-- 별개의 독립 사실은 새 fact로 만들되 기존 knows를 복사하지 않는다. 기존 fact를 다른 사실로 바꿔 옛 knows를 새 내용에 붙이지 않는다.
-- 옛 사실 자체의 정정·철회는 새 fact 추가만으로 처리하지 않는다. 이 응답에는 fact 폐기 계약이 없으므로 인지 편집에서 옛 사실과 인물별 앎을 함께 확인한다. 모순되는 새 fact를 추가해 오류를 숨기지 않는다.
+- 별개의 독립 사실과 극중에서 내용이 바뀐 정보(비밀번호 변경·계획 수정·거처 이전 등)는 새 fact로 만들되 기존 knows를 복사하지 않는다. 기존 fact를 다른 사실이나 바뀐 내용으로 고쳐 옛 knows를 새 내용에 붙이지 않는다. 바뀐 정보의 새 fact content에는 바뀐 뒤의 내용을 '…로 바뀌었다'처럼 쓰고, 옛 내용은 기존 fact에만 남겨 옛 내용만 아는 인물의 앎이 그대로 유지되게 한다.
+- 기존 fact가 처음부터 잘못 기록된 경우의 정정·철회는 새 fact 추가만으로 처리하지 않는다. 이 응답에는 fact 폐기 계약이 없으므로 인지 편집에서 옛 사실과 인물별 앎을 함께 확인한다. 모순되는 새 fact를 추가해 오류를 숨기지 않는다.
 - 'B가 범인이라는 소문을 들었다'는 'B가 진짜 범인임을 안다'와 다르다. 소문을 접한 사실 자체가 중요하면 별도 사실로 구분하고, 확인되지 않은 진실 fact의 knows/doesNotKnow를 소문만으로 채우지 않는다. 오해의 상세 경위는 사건 기록과 구분한다.
 
 [알고 있음 / 모름 — 두 상태만 저장]
@@ -5924,7 +5924,7 @@ doesNotKnow의 유효한 예:
 - 모르던 인물이 갑자기 아는 듯 행동했지만 습득 경로가 없으면 그 한 장면만으로 knows로 확정하지 않는다.
 - 소문을 들은 것과 그 소문이 사실임을 아는 것은 다르다. 중요한 경우 '그런 소문을 들었다'는 별도 사실로 구분한다.
 - 잘못된 추측·오해의 상세는 events에 보존할 수 있지만, 정답 fact에 제3의 상태를 만들지 않는다.
-- 정체·비밀의 일부만 알려진 경우 이후 RP에서 차이를 만드는 독립적인 사실 단위로 나눠 관리할 수 있다. 이렇게 나눈 별개의 사실에는 다른 fact의 knows를 그대로 복사하지 않고 인물마다 따로 확인한다.
+- 정체·비밀의 일부만 알려진 경우 이후 RP에서 차이를 만드는 독립적인 사실 단위로 나눠 관리할 수 있다. 극중에서 정보의 내용이 바뀐 경우(비밀번호 변경·계획 수정·거처 이전 등)는 옛 내용과 바뀐 내용을 제목이 다른 별개의 fact로 나눈다. 옛 내용의 fact에는 옛 내용을 접한 인물의 앎을 남기고, 바뀐 내용의 fact content에는 바뀐 뒤의 내용을 '…로 바뀌었다'처럼 쓴다. 이렇게 나눈 별개의 사실에는 다른 fact의 knows를 그대로 복사하지 않고 인물마다 따로 확인한다.
 - 이미 knows인 정보는 기억상실·봉인·정보 무효화처럼 실제 망각 근거가 없으면 doesNotKnow로 되돌리지 않는다.
 - 은폐(concealments)는 숨기는 사람(holder)·숨기는 상대(target)·숨기는 정보를 구분하고, 실제로 숨기기 시작하거나 그만둔 근거가 있을 때만 그 근거를 인용해 쓴다. 상대가 모른다는 사실만으로 은폐를 만들지 않는다. active=true 은폐의 holder는 그 정보를 실제로 아는 인물이어야 하며, 이 조건을 맞추려고 knows를 만들지 않는다. 자기 비밀도 근거 없이 아는 것으로 처리하지 않고, active=false 해제에 불필요한 knows를 만들지 않는다.
 
@@ -18629,8 +18629,8 @@ const WishPromptGuides=(()=>{
   // A text saved against an older default: shown in the editor only. Each guide is compared with the version in which its own
   // default last changed (a saved text without a version counts as oldest); apiIndex, apiLoreConversion and externalSecondary
   // have kept their defaults since saved texts carry a version.
-  const DEFAULT_CHANGED={apiMemory:'1.8.0',apiLoreBundle:'1.8.0',apiThreads:'1.8.0',apiRelationships:'1.8.0',apiDelta:'1.8.0',apiRecall:'1.8.0',apiBundleMemory:'1.8.0',apiBundlePeople:'1.8.0',externalAll:'1.8.0',externalMemory:'1.8.0',externalPeople:'1.8.0',externalRelationships:'1.8.0',loreExternal:'1.8.0',
-    apiCommon:'1.7.0',apiObserve:'1.7.0',apiSpeech:'1.7.0',apiDate:'1.7.0',manualRelay:'1.7.0',currentState:'1.7.0',logSummary:'1.7.0',loreAuto:'1.7.0'};
+  const DEFAULT_CHANGED={apiMemory:'1.8.0',apiObserve:'1.8.0',apiLoreBundle:'1.8.0',apiThreads:'1.8.0',apiRelationships:'1.8.0',apiDelta:'1.8.0',apiRecall:'1.8.0',apiBundleMemory:'1.8.0',apiBundlePeople:'1.8.0',externalAll:'1.8.0',externalMemory:'1.8.0',externalPeople:'1.8.0',externalRelationships:'1.8.0',loreExternal:'1.8.0',
+    apiCommon:'1.7.0',apiSpeech:'1.7.0',apiDate:'1.7.0',manualRelay:'1.7.0',currentState:'1.7.0',logSummary:'1.7.0',loreAuto:'1.7.0'};
   const versionParts=v=>{const m=String(v||'').match(/^(\d+)\.(\d+)\.(\d+)$/);return m?m.slice(1).map(Number):[0,0,0];};
   function stale(id){
     const r=readGuideRecord(id),since=DEFAULT_CHANGED[id];if(!r||!since)return false;
