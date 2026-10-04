@@ -10609,15 +10609,18 @@ ${AI_JSON_TEXT_RULE}
   }
 
   // A manual actor edit (name, aliases, PC) carries over to the rows that store that person: relationships bound by actor id,
-  // speech rows by the old name. Rows are compared with the actor's current values, so saving the actor again repairs a sync that
-  // did not finish. A row that would land on a direction another row already holds, or a speech row whose old pair has a lore-pack
-  // rule (renaming it would let that rule show again beside the new row), keeps its old name and is listed.
+  // speech rows by the old name. The saved actor's rows are compared with its current values, so saving it again repairs a sync
+  // that did not finish (or a rename made before this sync existed). A row that would land on a direction another row already
+  // holds, or a speech row whose old pair has a lore-pack rule (renaming it would let that rule show again beside the new row),
+  // keeps its old name and is listed.
   async function syncActorEditRows(room,before,after,savedId=''){
     const old=new Map((before||[]).map(a=>[a.id,a])),snap=a=>JSON.stringify([a.name,a.aliases||[],!!a.isPlayer]),live=(after||[]).filter(a=>!a.archived);
     let kept=[];
     try{
-      const bound=WishRelationships.normalize(room.relationships),sidesOf=(r,a)=>['speaker','target'].filter(side=>r[side+'ActorId']===a.id);
-      const changed=new Map(live.filter(a=>a.id===savedId||(old.has(a.id)&&snap(old.get(a.id))!==snap(a))||bound.some(r=>sidesOf(r,a).some(side=>speechNameKey(r[side])!==speechNameKey(a.name)||!!r[side+'PC']!==!!a.isPlayer))).map(a=>[a.id,a]));
+      const bound=(Array.isArray(room.relationships)?room.relationships:[]).filter(r=>r&&typeof r==='object'),sidesOf=(r,a)=>['speaker','target'].filter(side=>r[side+'ActorId']===a.id);
+      // A bound row is stale when its PC flag differs from the actor; for the actor just saved, a different name or aliases count too.
+      const stale=(r,a,side)=>!!r[side+'PC']!==!!a.isPlayer||(a.id===savedId&&(speechNameKey(r[side])!==speechNameKey(a.name)||JSON.stringify(r[side+'Aliases']||[])!==JSON.stringify(a.aliases||[])));
+      const changed=new Map(live.filter(a=>(old.has(a.id)&&snap(old.get(a.id))!==snap(a))||bound.some(r=>sidesOf(r,a).some(side=>stale(r,a,side)))).map(a=>[a.id,a]));
       if(!changed.size)return '';
       // Old names: the name before this save and a stale name a bound row still holds. A name another actor uses now is left alone.
       const taken=new Set(live.map(a=>speechNameKey(a.name))),renamed=new Map(),lore=new Set(resolvedSpeechRelations({...room,speechRelations:[]}).map(x=>speechPairKey(x.speaker,x.target)));
@@ -10639,7 +10642,7 @@ ${AI_JSON_TEXT_RULE}
         return count+speechCount;
       };
       if(plan(structuredClone({relationships:room.relationships,speechRelations:room.speechRelations}),kept)){kept=[];await WishRelationships.mutate(room,next=>{plan(next,kept);});}
-    }catch(error){console.warn('[Wish] 관계·호칭 이름 동기화 보류',error);return error?.name==='AbortError'?'다른 작업 중이라 관계·호칭 이름은 그대로 뒀습니다. 작업이 끝난 뒤 인물을 다시 저장해 주세요.':'관계·호칭 이름은 바꾸지 못했습니다: '+String(error?.message||error)+' 인물을 다시 저장하면 다시 맞춥니다.';}
+    }catch(error){console.warn('[Wish] 관계·호칭 이름 동기화 보류',error);return error?.name==='AbortError'?'다른 작업 중이라 관계·호칭 이름은 그대로 뒀습니다. 작업이 끝난 뒤 인물을 다시 저장해 주세요.':'관계·호칭 이름은 바꾸지 못했습니다: '+String(error?.message||error).replace(/\.$/,'')+'. 인물을 다시 저장하면 다시 맞춥니다.';}
     return kept.length?'이름을 그대로 둔 항목: '+kept.join(', '):'';
   }
 
