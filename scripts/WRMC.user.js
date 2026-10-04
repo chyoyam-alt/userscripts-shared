@@ -1796,7 +1796,7 @@ const WLOG=(()=>{
 
   // Backups are machine-made: strict, fence-only reading and backup advice. Every other caller reads AI-made JSON through parseAiJsonText.
   function parseImportedJsonText(value, label = '가져오기 파일', { strict = false } = {}) {
-    if (!strict) return parseAiJsonText(value, { how: 'file', label, keys: ['format', 'version', 'source', 'scope', 'schema_version', 'mode', 'entries', 'export_id', 'results', 'stateSections', 'events', 'people', 'facts', 'speech', 'relationships'] });
+    if (!strict) return parseAiJsonText(value, { how: 'file', label, keys: ['format', 'version', 'source', 'scope', 'schema_version', 'mode', 'entries', 'export_id', 'results', 'stateSections', 'events', 'threads', 'people', 'facts', 'speech', 'relationships'] });
     const raw = String(value ?? '').replace(/^\uFEFF/, '').trim();
     if (!raw) throw new Error(`${label}이 비어 있습니다.`);
     const fenced = raw.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
@@ -2360,7 +2360,7 @@ const WLOG=(()=>{
   const WISH_DATE_CHECK_RULE = '- 사건 날짜: display는 원문에 적힌 날짜·시간 표현만 쓴다(양력은 M월 D일, 작품 달력·D+N·N일차는 적힌 그대로, 경과는 "9월 9일 사흘 뒤"처럼 원문 기준과 함께). 원문에 없는 시기 이름(초기·무렵·이후 같은 말로 지은 구간)은 쓰지 않고, 날짜가 없으면 "날짜 미상"으로 쓴다. 원문에 날짜가 나왔는데 사건 날짜가 전부 시기 이름이나 날짜 미상이면 원문을 다시 찾는다.';
   function wishOutputCheck(kind, o = {}) {
     const live = kind === 'live', m = live ? !!o.memory : kind === 'txt-full' || kind === 'txt-memory', ob = live ? !!o.observe : kind !== 'txt-memory';
-    const areas = { 'txt-full': 'stateSections·events·people·facts·references·speech·concealments·relationships', 'txt-rel': 'people·relationships', 'txt-memory': 'stateSections·events', 'txt-people': 'people·facts·speech·concealments·relationships' }[kind];
+    const areas = { 'txt-full': 'stateSections·events·threads·people·facts·references·speech·concealments·relationships', 'txt-rel': 'people·relationships', 'txt-memory': 'stateSections·events·threads', 'txt-people': 'people·facts·speech·concealments·relationships' }[kind];
     const memo = '- 본문: 판정 이유·제외 사유 같은 작업 메모를 쓰지 않는다. 원문에서 그때까지 일어나지 않은 것이 분명한 일은 메모 대신 극중 상태로 쓴다.';
     const rows = live ? ['내용',
       m ? '- 사건: 이번 신규 RP에서 나중에 따로 떠올릴 만한 장면마다 사건 하나를 쓴다. 누가·어디서·무엇을 했고, 결정적인 말·결정·감정 반응, 결과와 남은 조건까지 쓴다. 날짜가 다른 장면을 한 사건으로 뭉치지 않는다.' : '',
@@ -2384,6 +2384,7 @@ const WLOG=(()=>{
       '- 키: ' + (kind === 'txt-memory' || kind === 'txt-people' ? 'format·version·scope·source' : 'format·version·source') + '와 영역 배열(' + areas + ')을 모두 쓰고, 근거가 없는 영역은 []로 둔다. 각 행의 필드도 값이 없으면 ""나 []로 두고 빼지 않는다(evidence 포함). 다만 ' + (kind === 'txt-memory' ? 'title·summary·body' : kind === 'txt-rel' ? '관계 current' : 'title·summary·body·content와 관계 current') + '는 비우지 않는다(비면 가져오기 전체가 멈춘다).' + (ob ? ' people의 모든 행에 isPlayer를 true/false로 쓴다.' : '') + ' 스키마에 없는 키는 쓰지 않는다.',
       m ? '- 사건: date.kind는 exact·month_day·year·era·custom·unknown 중 하나다(unknown이면 display "날짜 미상"). 같은 날짜·제목의 사건을 두 번 쓰지 않는다.' : '',
       m ? WISH_DATE_CHECK_RULE : '',
+      m ? '- 남은 일: kind는 promise·schedule·goal·mystery·danger·foreshadow·other, status는 open·closed 중 하나다. open 행의 closed는 {"type":"","how":"","date":{"kind":"unknown","display":"날짜 미상"},"evidence":""}로 두고, closed 행은 closed의 type(done·broken·cancelled)·how·evidence를 모두 채운다(하나라도 비면 열린 일로 가져온다).' : '',
       ob ? '- 인물 칸: people[].name(또는 ' + (kind === 'txt-rel' ? '참고 자료 relationshipPeople에 있는 기존 인물' : '참고 자료에 있는 보호 인물') + '의 name)과 한 글자씩 대조해 그대로 쓴다. 원문 호칭(님·씨 등)을 붙이지 않고 name 안의 괄호·직함도 지우지 않는다. 없는 개인은 people에 추가하고, 집단·여러 명은 쓰지 않는다.' : '',
       ob && kind !== 'txt-rel' ? '- 호칭·말투: register는 formal·casual·mixed·unknown 중 하나다. address·note가 모두 비고 unknown인 방향과 speaker·target이 같은 행은 넣지 않는다. 같은 speaker→target은 한 행이다.' : '',
       kind === 'txt-full' || kind === 'txt-people' ? '- 인지: facts[].title은 행마다 다르게 쓴다. 같은 정보는 한 행으로 합친다(같은 제목에 다른 content·knows가 오면 가져오기 전체가 멈춘다).' : '',
@@ -3741,17 +3742,24 @@ function open(id){const room=state.currentRoom,old=normalize(room.relationships)
       opened:{type:'object',additionalProperties:false,required:['date','evidence'],properties:{date:DATE,evidence:str}},
       closed:{type:'object',additionalProperties:false,required:['type','how','date','evidence'],properties:{type:{type:'string',enum:['',...CLOSE_TYPES]},how:str,date:DATE,evidence:str}}}};
     // What each job outputs. The rules themselves are the editable guide 'apiThreads'; the job adds only where the result goes.
-    const HEAD={delta:'\n\n# 하위 작업 D: 남은 일 증분 갱신\n',bundle:'\n\n# 하위 작업 C: 남은 일 증분 갱신\n'};
+    const HEAD={delta:'\n\n# 하위 작업 D: 남은 일 증분 갱신\n',bundle:'\n\n# 하위 작업 C: 남은 일 증분 갱신\n',snapshot:'\n\n[남은 일 — threads]\n'};
     const EVIDENCE={delta:'- evidence에는 그 일이 열리거나 진행되거나 끝난 것을 보여 주는 [신규 완료 RP]의 원문 한 조각을 짧게 옮긴다.',bundle:'- evidence에는 그 일이 열리거나 진행되거나 끝났다고 본 이유를 이번 구간에서 확인한 대로 짧게 적는다.'};
+    // TXT (full and memory-only, quick or precise ZIP): the final list of the whole log, open and closed rows alike.
+    const SNAPSHOT=['[threads 최종 결산]',
+      '- 전체 로그를 읽으며 남은 일마다 언제 열렸고 어떻게 진행되어 끝났는지 끝까지 따라간다.',
+      '- status는 마지막 정사 시점까지 결말 장면이 없으면 open, 로그 안에서 결말이 났으면 closed다.',
+      '- 끝난 일은 뒤의 RP에서 다시 떠올릴 만한 것만 closed 행으로 남긴다(지킨 약속, 깨진 약속, 회수된 복선, 풀린 수수께끼). 같은 장면 안에서 바로 끝난 작은 일은 넣지 않는다.',
+      '- opened에는 그 일이 열린 장면의 날짜와 그것을 보여 주는 원문 한 조각을, closed에는 결말 장면의 날짜와 원문 한 조각을 쓴다.',
+      '- 참고로 받은 수동·보호 threads는 사용자가 직접 관리하는 일이라 다시 쓰지 않는다. 로그에 그 일의 결말 장면이 있을 때만 같은 kind·title로 closed 행을 쓴다.'];
     function guide(job){
-      return joinGuides(HEAD[job],getGuideText('apiThreads'),['','[threads 출력]',
+      return joinGuides(HEAD[job],getGuideText('apiThreads'),['',...(job==='snapshot'?SNAPSHOT:['[threads 출력]',
         '- 입력 memory.threads는 지금 열린 남은 일 전체다. ref는 기존 항목을 가리키고, manual=true는 사용자가 직접 관리하는 항목이다. memory.thread_closed_index는 최근 닫힌 남은 일 목록이며, 같은 일을 다시 열지 않도록 참고한다.',
         '- 이번 [신규 완료 RP] 안에서 생기고 끝난 일은 열지 않는다. 그 장면이 중요하면 사건으로 남는다.',
         '- upsert에는 새로 열린 일과 이번에 실제로 진행된 기존 항목을 쓴다. 기존 항목은 kind·title·detail·who·due를 고친 뒤의 전체값으로 쓰고, date는 입력값 그대로 둔다. 새 항목의 date는 그 일이 열린 장면의 날짜다.',
         '- manual=true 항목은 upsert로 고치지 않는다. 결말 장면이 있으면 다른 항목처럼 close에 쓴다.',
         '- close에는 이번에 닫는 기존 항목을 쓴다. title은 그 항목의 제목, date는 결말 장면의 날짜다. USER의 정정으로 처음부터 없던 일이 된 항목도 cancelled로 닫고, how에 정정된 내용을 쓴다.',
         EVIDENCE[job],
-        '- 이 하위 작업의 결과는 memory.threads에 넣는다.',''].join('\n'));
+        '- 이 하위 작업의 결과는 memory.threads에 넣는다.',''])].join('\n'));
     }
     // Request input: every open item (switched-off ones too, or the AI would open them again) under position refs thread_0…,
     // and the most recently closed ones by title. Deterministic: 절약 모드 compares a fresh inventory with the request's.
@@ -3816,6 +3824,65 @@ function open(id){const room=state.currentRoom,old=normalize(room.relationships)
       const changed=opened+updated+words.length+suggested>0;
       const line=changed?'남은 일 '+[opened?'+'+opened+' 열림':'',updated?updated+' 갱신':'',words.length?words.length+' 닫힘('+[...new Set(words)].join('·')+')':'',suggested?'닫기 제안 '+suggested+'건':''].filter(Boolean).join(' · '):'';
       return {changed,threads:changed?normalizeLoose(prune(list)):stored,notices,left,line};
+    }
+
+    // Rebuilds and imports (R31, the memory bundle, TXT) start from the user's own rows; a room that never had the key gets none.
+    function keepForRebuild(rows){return rows===undefined?undefined:normalizeLoose(rows).filter(t=>t.origin==='manual');}
+    // A rebuild that does not handle 남은 일 (a job read before it did, a JSON without the list) leaves the stored list as it is.
+    function keepStored(room,stored){if(stored===undefined)delete room.threads;else room.threads=structuredClone(stored);return room;}
+    // The user's own rows as a TXT reference: named, without refs.
+    function manualReference(rows){return normalizeLoose(rows).filter(t=>t.origin==='manual').map(t=>({kind:t.kind,title:t.title,detail:t.detail,who:[...t.who],due:t.due,status:t.status}));}
+    // TXT rows before the shared repair, 남은 일 only (an event's blank date is still refused): an open row's closed part is never
+    // read, so whatever it holds becomes the standard empty one; a closed row's missing parts become empty (fromSnapshot then
+    // brings it in open, with a notice); a missing opening becomes an unknown date without a quote.
+    const fold=v=>String(v??'').normalize('NFKC').trim().toLowerCase().replace(/[\s_-]+/g,'');
+    const statusSide=v=>{const f=fold(v);return !f?'open':f==='open'||f==='closed'?f:STATUS_ALIAS[f]||'';};
+    const blankDate=v=>v==null||(typeof v==='string'&&!v.trim())||(isObj(v)&&!Object.keys(v).length);
+    function prepareSnapshotRows(data){
+      if(!isObj(data)||!Array.isArray(data.threads))return {data,fixed:0};
+      let fixed=0;
+      const rows=data.threads.map(row=>{
+        if(!isObj(row))return row;
+        const out={...row},side=statusSide(row.status),opened=isObj(row.opened)?{...row.opened}:{};
+        if(side==='open')out.closed={type:'',how:'',date:{...UNKNOWN_DATE},evidence:''};
+        else if(side==='closed'){const end=isObj(row.closed)?{...row.closed}:{};for(const k of ['type','how','evidence'])end[k]??='';if(blankDate(end.date))end.date={...UNKNOWN_DATE};out.closed=end;}
+        if(blankDate(opened.date))opened.date={...UNKNOWN_DATE};opened.evidence??='';out.opened=opened;
+        if(JSON.stringify(out)!==JSON.stringify(row))fixed++;
+        return out;
+      });
+      return {data:{...data,threads:rows},fixed};
+    }
+    // After the repair each TXT row is checked on its own: a row that fails is left out with a notice, and every other row and
+    // area of the file is still imported.
+    function isolateSnapshot(data,validate){
+      const notes=[];if(!isObj(data)||!Array.isArray(data.threads))return notes;
+      data.threads=data.threads.filter((row,i)=>{try{validate(row,TXT_ROW_SCHEMA,'JSON.threads['+i+']');return true;}catch(e){notes.push('남은 일 1개를 읽지 못해 건너뛰었습니다: '+e.message);return false;}});
+      return notes;
+    }
+    // A TXT answer's final list → stored rows. The user's own rows are never rewritten; a properly closed row for one of them
+    // leaves a close suggestion. A closed row without its ending (type, how and evidence) comes in open. A row that matches an
+    // earlier AI row keeps its id, switch and opening turn (carry). `turn` is the clock at import, so the per-turn list counts
+    // "about 300 turns unchanged" from now.
+    function fromSnapshot(rows,{previous,turn=0}={}){
+      const kept=(keepForRebuild(previous)||[]).map(t=>({...t})),mine=new Map(kept.map(t=>[key(t),t])),seen=new Set(),out=[],notices=[],now=turnOf(turn);
+      let open=kept.filter(t=>t.status!=='closed').length;
+      for(const row of Array.isArray(rows)?rows:[]){
+        const title=isObj(row)?text(row.title):'';if(!title)continue;
+        const kind=KINDS.includes(row.kind)?row.kind:'other',k=key({kind,title});
+        if(seen.has(k)){notices.push('같은 kind·제목의 남은 일이 두 번 있어 앞의 것만 가져왔습니다: '+title);continue;}
+        seen.add(k);
+        const end=isObj(row.closed)?row.closed:{},ending={type:text(end.type),how:text(end.how),date:dateOf(end.date),evidence:text(end.evidence)};
+        const complete=CLOSE_TYPES.includes(ending.type)&&!!ending.how&&!!ending.evidence,own=mine.get(k);
+        let closed=text(row.status)==='closed';
+        if(own){if(closed&&complete&&own.status!=='closed'){own.suggestClose={...ending,turn:now};notices.push('직접 관리하는 남은 일이라 닫지 않고 닫기 제안으로 남겼습니다: '+own.title);}continue;}
+        if(closed&&!complete){closed=false;notices.push('닫힌 내용·근거가 비어 있어 열린 남은 일로 가져왔습니다: '+title);}
+        if(!closed&&open>=OPEN_MAX){notices.push('열린 남은 일이 '+OPEN_MAX+'개라 새 남은 일을 열지 않았습니다: '+title);continue;}
+        if(!closed)open++;
+        const opened=isObj(row.opened)?row.opened:{};
+        out.push({id:'th_'+crypto.randomUUID(),kind,title,detail:text(row.detail),who:namesOf(row.who),due:text(row.due),status:closed?'closed':'open',origin:'auto',enabled:true,
+          opened:{date:dateOf(opened.date),evidence:text(opened.evidence),messageId:'',turn:0},closed:closed?{...ending,messageId:'',turn:0}:null,updatedTurn:now});
+      }
+      return {threads:carry(previous,[...out,...kept]),notices};
     }
 
     // The per-turn short list: one line per open item that is switched on, kinds in KINDS order and stored order within a kind.
@@ -3923,7 +3990,8 @@ function open(id){const room=state.currentRoom,old=normalize(room.relationships)
       });
     }
     return {KINDS,KIND_LABEL,FULL_KINDS,CLOSE_TYPES,DATE_KINDS,UNKNOWN_DATE,KIND_ALIAS,CLOSE_ALIAS,STATUS_ALIAS,INJECT_CHARS,SHRINK_CAPS,STALE_TURNS,STATUS_CHARS,TITLE_CHARS,CLOSED_INDEX_MAX,OPEN_MAX,CLOSED_KEEP,RULES,DELTA_SCHEMA,TXT_ROW_SCHEMA,
-      list,kindLabel,closeWord,canon,key,userCount,clock,normalizeLoose,validateStored,prune,assign,carry,guide,requestInput,applyDelta,injection,
+      list,kindLabel,closeWord,canon,key,userCount,clock,normalizeLoose,validateStored,prune,assign,carry,guide,requestInput,applyDelta,
+      keepForRebuild,keepStored,manualReference,prepareSnapshotRows,isolateSnapshot,fromSnapshot,injection,
       view,mutate,open,openClose,save,reopen,toggle,dismiss,remove};
   })();
 
@@ -5880,8 +5948,8 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
   async function load(r){const record=await getRuntimeRecord(id(r));cache.set(r.chatId,record);keepRecent(r);paint();return record;}
   async function save(r,j){j.updatedAt=nowIso();await putRuntimeRecord(j);cache.set(r.chatId,j);keepRecent(r);paint();}
   const canonical=x=>Array.isArray(x)?x.map(canonical):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,canonical(x[k])])):x;
-  function basis(r,c,p){const normalized=clone(r);normalizeRoomSlots(normalized);return JSON.stringify(canonical({slots:normalized.slots,speech:normalized.speechRelations.map(({updatedAt,...x})=>x),relationships:normalized.relationships,relationshipConfig:normalized.relationshipConfig,relationshipBaseline:normalized.relationshipBaseline,active:normalized.activeLorePackIds,settings:r.unified?.settings,cognition:[c.actors,c.facts,c.state,c.editRev,c.lastAnalysis],packs:p.map(x=>[x.scopeId,autoLoreContentFingerprint(x)])}));}
-  function changedBasis(before,after){const a=JSON.parse(before),b=JSON.parse(after),labels={relationships:'관계',relationshipConfig:'관계 설정',slots:'기억',speech:'호칭',active:'사용 자료집',settings:'설정',cognition:'인지',packs:'자료 내용'};return Object.keys(a).filter(k=>JSON.stringify(a[k])!==JSON.stringify(b[k])).map(k=>labels[k]||k).join(', ');}
+  function basis(r,c,p){const normalized=clone(r);normalizeRoomSlots(normalized);return JSON.stringify(canonical({slots:normalized.slots,speech:normalized.speechRelations.map(({updatedAt,...x})=>x),relationships:normalized.relationships,relationshipConfig:normalized.relationshipConfig,relationshipBaseline:normalized.relationshipBaseline,active:normalized.activeLorePackIds,settings:r.unified?.settings,cognition:[c.actors,c.facts,c.state,c.editRev,c.lastAnalysis],packs:p.map(x=>[x.scopeId,autoLoreContentFingerprint(x)]),threads:normalized.threads?.length?normalized.threads:undefined}));}
+  function changedBasis(before,after){const a=JSON.parse(before),b=JSON.parse(after),labels={relationships:'관계',relationshipConfig:'관계 설정',slots:'기억',speech:'호칭',active:'사용 자료집',settings:'설정',cognition:'인지',packs:'자료 내용',threads:'남은 일'};return [...new Set([...Object.keys(a),...Object.keys(b)])].filter(k=>JSON.stringify(a[k])!==JSON.stringify(b[k])).map(k=>labels[k]||k).join(', ');}
   const packs=r=>writableLorePacksForRoom(r);
   function units(source){
     const rows=[];let waiting=[];
@@ -5901,6 +5969,7 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
   function seed(r,c,ps){
     const room=clone(r);for(const slot of room.slots)if(['currentState','logSummary'].includes(slot.id))slot.content='';
     room.autoLogPinnedKeys=[];room.autoLogExcludedKeys=[];room.manualLogSelectedKeys=[];room.speechRelations=(room.speechRelations||[]).filter(x=>x.source!=='unified-ai');room.relationships=WishRelationships.normalize(room.relationships).filter(x=>x.manual);room.relationshipBaseline=null;
+    if(room.threads!==undefined)room.threads=WishThreads.keepForRebuild(room.threads);
     room.unified||={version:1,settings:{...loadAiSettings().unifiedAutomation}};
     const cg=clone(c);cg.actors=cg.actors.filter(x=>!x.automatic);cg.facts=cg.facts.filter(x=>!x.automatic);
     cg.state={knowledge:{},concealments:[],present:[],catalog:{actors:cg.actors.map(x=>x.id),facts:cg.facts.map(x=>x.id)},evidence:{}};
@@ -5914,7 +5983,7 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
     const epoch=localRestoreEpoch;control={cancelled:false};aiUpdateRunning=true;const abortCtl=AiAbort.begin();
     const check=()=>{if(control?.cancelled||epoch!==localRestoreEpoch||state.currentRoom!==r)throw Error('작업이 중단되었거나 방·복원 상태가 바뀌었습니다.');};
     task=(async()=>{try{return await fn(check);}finally{aiUpdateRunning=false;}})();paint();try{return await task;}finally{AiAbort.end(abortCtl);task=null;control=null;paint();}}
-  async function read(r){return await WLOG.run("재구축할 과거 대화 읽는 중",async task=>{if(get(r)?.draft&&!confirm('읽어 둔 구간과 미적용 결과를 새 원문으로 교체할까요?'+wishHeldJobSuffix(get(r))))return;return guard(r,async check=>{const s=await source(r);check();await ensureAutoLorePack(r);check();const c=await bridge().snapshotRaw(apiChatIdOf(r)),ps=packs(r);await U3.initialize(r,{stable:[...s.messages.map(m=>m.raw)].reverse()},c);check();const j={id:id(r),chatId:r.chatId,kind:'wish-rebuild-231',version:1,status:'pending',message:'대화 읽기 완료',sourceHash:s.hash,anchor:s.anchorMessageId,sourceCount:s.messages.length,segments:segments(s.rows),rowSig:s.rows.map(rowSig),draft:seed(r,c,ps),basis:basis(r,c,ps),createdAt:nowIso()};await save(r,j);return j;});});}
+  async function read(r){return await WLOG.run("재구축할 과거 대화 읽는 중",async task=>{if(get(r)?.draft&&!confirm('읽어 둔 구간과 미적용 결과를 새 원문으로 교체할까요?'+wishHeldJobSuffix(get(r))))return;return guard(r,async check=>{const s=await source(r);check();await ensureAutoLorePack(r);check();const c=await bridge().snapshotRaw(apiChatIdOf(r)),ps=packs(r);await U3.initialize(r,{stable:[...s.messages.map(m=>m.raw)].reverse()},c);check();const j={id:id(r),chatId:r.chatId,kind:'wish-rebuild-231',version:1,status:'pending',message:'대화 읽기 완료',sourceHash:s.hash,anchor:s.anchorMessageId,sourceCount:s.messages.length,segments:segments(s.rows),rowSig:s.rows.map(rowSig),draft:seed(r,c,ps),basis:basis(r,c,ps),threadsSeeded:true,createdAt:nowIso()};await save(r,j);return j;});});}
   // Recover only the unambiguous state-body alias. Conflicting values remain errors.
   function bodyAlias(data){
     const rows=data?.memory?.state?.sections;
@@ -5973,7 +6042,7 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
     try{const s=await source(r);check();if(s.anchorMessageId!==j.anchor)throw Error('읽어 둔 대화가 바뀌었습니다. 대화를 다시 읽어 주세요.');if(!sameStructure(j,s))throw Error('읽어 둔 대화에서 중간 메시지가 삭제·교체되었거나 순서가 바뀌었습니다. 대화를 다시 읽어 주세요.');const currentBasis=basis(r,await bridge().snapshotRaw(apiChatIdOf(r)),packs(r));if(currentBasis!==j.basis)throw Error('기억·인물·자료·설정이 바뀌었습니다. 대화를 다시 읽어 주세요. ('+changedBasis(j.basis,currentBasis)+')');
       for(let pos=0;pos<j.segments.length;pos++){const seg=j.segments[pos];if(seg.status==='complete')continue;check();seg.status='running';seg.error='';j.status='running';j.message=`${seg.index}/${j.segments.length}구간 판독 중`;await save(r,j);
         try{const rows=s.rows.slice(seg.start,seg.end),p={memory:true,observe:true,mem:rows,obs:rows},req=U3.request(j.draft.room,j.draft.cog,j.draft.packs,p,{rebuild:true,continuityReference:{memory:U3.continuityReference(s.rows,rows),observe:U3.continuityReference(s.rows,rows)}});
-          req.holdContext={bundle:'rebuild',jobCreatedAt:j.createdAt,segmentIndex:seg.index,segmentCount:j.segments.length};req.storedSpeech=(r.speechRelations||[]).filter(x=>x.source==='unified-ai');
+          req.threadTurn=WishThreads.userCount(s.rows.slice(0,seg.end).flatMap(t=>t.relationshipSourceMessages||[]));req.holdContext={bundle:'rebuild',jobCreatedAt:j.createdAt,segmentIndex:seg.index,segmentCount:j.segments.length};req.storedSpeech=(r.speechRelations||[]).filter(x=>x.source==='unified-ai');
           const guide=req.guide+`\n[API 구간 재구축 최종 계약]\n전체 ${j.segments.length}구간 중 ${seg.index}번째다. 앞 구간의 누적 결과를 보존하며 현재 구간 끝을 임시 최신 시점으로 정리한다. 과거 사건을 침묵만으로 삭제하지 않는다. 외부 파일 첨부 지시 대신 다음 스키마의 JSON만 응답한다. 호칭·말투·칭호와 은폐도 누락하지 않는다.\n[필드·근거 확인]\nmemory.state.sections는 ref/title/body만 쓴다. summary는 memory.events의 사건 본문 필드이며 현재상태에 넣지 않는다. observe의 upsert는 이번 구간에서 실제로 달라진 항목만 출력하고 변경 없는 기존 인물·인지는 재출력하지 않는다. 기존 값을 보존한다는 뜻은 매번 같은 항목을 upsert로 다시 보내라는 뜻이 아니다. evidence는 rp.shared의 한 USER 또는 ASSISTANT 본문에서 연속 구절을 그대로 복사한다. 인용의 바깥 따옴표·발화자 표지를 임의로 덧붙이지 않는다. 기존 누적 기억·앞 문맥·시간 단서에서 인용하거나 여러 문장을 발췌해 합치지 않는다. facts_upsert의 인지 변경은 인물별 실제 습득·망각 경로를 현재 구간에서 확인하고 대표 근거를 선택한다.\n`+JSON.stringify(req.schema)+wishCheckBlock(req.check);
           const result=await analyzeApiSegment(cfg,guide,req,j.draft,p,check,async()=>{j.message=`${seg.index}/${j.segments.length}구간 결과 보정 중 · 추가 API 호출 1회`;await save(r,j);});check();
           const saved={...j,draft:joinStage(j.draft,result.staged),segments:j.segments.map(x=>x.index===seg.index?{...x,status:'complete',repairs:result.repairs}:x)};
@@ -5998,7 +6067,12 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
     await saveMemoryCheckpoint(r,'rebuild-231-before-apply');check();if(r.pending)throw Error('적용 직전 주입이 시작되어 적용하지 않았습니다.');if(basis(r,await bridge().snapshotRaw(apiChatIdOf(r)),packs(r))!==j.basis)throw Error('저장 직전 기억·인물·자료가 변경되어 적용하지 않았습니다.');check();await U3.atomicCommit(r,c,ps,next);if(next.notices?.length)WishMemorySafety.reportNotices(next.notices,'전체 재구축 저장 완료 · 일부 항목 확인 필요');try{await bridge().refresh();state.v2Cognition=await bridge().getView?.(apiChatIdOf(r));}catch{}return true;
   }
   async function apply(r){const j=get(r)||await load(r);if(j?.status!=='complete')throw Error('판독을 먼저 완료해 주세요.');
-    return guard(r,async check=>{const c=await bridge().snapshotRaw(apiChatIdOf(r));check();const draft=retainRelationshipScope(r,c,clone(j.draft));return openRelationshipReview(r,{...j,draft},{apiJob:j,cog:c,packs:packs(r)});});}
+    return guard(r,async check=>{const c=await bridge().snapshotRaw(apiChatIdOf(r));check();const draft=retainRelationshipScope(r,c,clone(j.draft));
+      // 남은 일: rows the segments made keep the id, switch and opening turn of the same earlier AI row. A job read before its
+      // seed kept only the user's rows still holds the old list, so it leaves 남은 일 as stored.
+      if(j.threadsSeeded)WishThreads.assign(draft.room,WishThreads.carry(r.threads,draft.room.threads));
+      else{WishThreads.keepStored(draft.room,r.threads);if(WishThreads.list(r).length)(draft.notices||=[]).push('이 재구축은 업데이트 전에 읽은 대화라 남은 일은 바꾸지 않았습니다. 대화를 다시 읽으면 남은 일도 함께 정리합니다.');}
+      return openRelationshipReview(r,{...j,draft},{apiJob:j,cog:c,packs:packs(r)});});}
   async function clear(r){if(busy())throw Error('먼저 작업을 중단해 주세요.');if(!confirm('임시 구간 목록과 미적용 결과를 비울까요? 현재 기억은 유지됩니다.'+wishHeldJobSuffix(get(r))))return;await deleteRuntimeRecord(id(r));cache.delete(r.chatId);paint();}
   const str={type:'string'},arr=items=>({type:'array',items}),obj=properties=>({type:'object',additionalProperties:false,required:Object.keys(properties),properties}),strings=arr(str);
   const personSchema={type:'object',additionalProperties:false,required:['name','aliases','evidence'],properties:{name:str,aliases:strings,isPlayer:{type:'boolean'},evidence:str}};
@@ -6011,6 +6085,9 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
   LEGACY_SCHEMA.properties.relationships=arr(obj({speaker:str,target:str,current:str,milestone:str,unresolved:str,evidence:str}));
   const SCHEMA=clone(LEGACY_SCHEMA);SCHEMA.properties.version={type:'number',enum:[2]};SCHEMA.required.push('relationships');SCHEMA.properties.relationships=WishRelationships.fullSchema;
   SCHEMA.properties.people.items.required.push('isPlayer');
+  // v3 adds the 남은 일 list after events. v1/v2 files keep their own schemas, so they are read as they were written.
+  const SCHEMA3=clone(SCHEMA);SCHEMA3.properties=Object.fromEntries(Object.entries(SCHEMA3.properties).flatMap(e=>e[0]==='events'?[e,['threads',arr(clone(WishThreads.TXT_ROW_SCHEMA))]]:[e]));
+  SCHEMA3.properties.version={type:'number',enum:[3]};SCHEMA3.required.splice(SCHEMA3.required.indexOf('events')+1,0,'threads');
   const RELATION_SCHEMA=obj({format:{type:'string',enum:['wish-relationship-rebuild']},version:{type:'number',enum:[1]},source:clone(sourceSchema),people:arr({...clone(personSchema),required:['name','aliases','isPlayer','evidence']}),relationships:WishRelationships.fullSchema});
   function externalGuideDefault(){return WISH_EXTERNAL_REBUILD_GUIDE+WISH_DATE_GUIDE_242+WishRelationships.fullGuide+`\n\n[기록 문체]\n- 원문 칸(evidence·quote, key_quote의 대사, 약속어·암호, 호칭 예문)은 원문 그대로 둔다. 다듬거나 요약·번역하지 않는다.\n- 서술 칸(사건 summary, 현재상태 body, 자료 content)은 짧은 평서문으로 쓴다. 군더더기 수식어는 빼되 감정의 이유, 결정적 몸짓·표정·감각 단서, 인물 사이의 반복 습관·농담, 주체·대상·부정·조건·불확실성·의도/완료·감정 강도는 줄이지 않는다. '못함'을 '안 함'으로 바꾸지 않는다. relationships의 칸은 관계·감정선 공통 규칙을, speech의 칸은 7절의 호칭·말투 규칙을 따른다.\n- 원문 대사를 그대로 두는 곳은 key_quote 하나다. 사건에는 결정적 한 마디만, 관계·현재상태에는 짧은 의역이나 '(key_quote: 첫 맹세)'처럼 가리키는 말만 쓴다.\n- 서술 칸과 relationships의 칸에는 RP에서 확인된 내용을 극중 상태로 쓴다. '정사 근거에서 제외', '~로 확대하지 않음', '~로 결산하지 않음' 같은 작업 설명·판정 이유는 쓰지 않는다. 원문에서 그때까지 일어나지 않은 것이 분명한 일도 메모 대신 극중 상태로 쓴다(예: '해결·보복 실행은 확인되지 않음' 대신 '아직 대가를 치르게 하지 않았고 다시 만나지 않았다'). 원문 자체가 불확실하게 말한 것(예: '가능성이 높다'는 보고)은 그 불확실성을 그대로 적는다.\n- 새 기록의 →는 행동·감정·전달 방향, ⇒는 원문이 명시한 인과에만 쓴다. 사건 작성 안내의 화살표 흐름은 구성 순서이며 그대로 기호화하라는 뜻이 아니다. 실제 인용·약속어·암호의 기호는 바꾸지 않는다.\n- 설명의 한글 수량은 값과 단위가 명확히 같을 때만 숫자로 바꿀 수 있다. 인용 속 수량·날짜·시각·범위·소수·서수·고유명·파일명은 바꾸지 않으며 생략된 단위를 추정하지 않는다. 최소·약·이상·이하·미확정 같은 한정은 보존한다.\n\n[외부 재구축 출력 계약]\n아래 스키마만 사용한다.\n- stateSections/events/threads/people/facts/references/speech/concealments/relationships를 모두 출력한다. 근거 없는 영역은 []로 둘 수 있다.\n- people/facts/speech/concealments의 evidence는 RP 본문에 있는 연속 인용문이다.\n- 은폐의 fact_title은 이 JSON facts[].title을 글자 그대로 쓰고, active=true 은폐의 holder는 그 fact의 knows에 원문 근거와 함께 들어 있어야 한다. 수동·보호 fact에 은폐를 걸려면 그 fact를 facts에 title·content 그대로 다시 넣는다.\n- key_quote content 첫 줄은 화자 → 상대: “연속된 실제 원문”, 다음 줄은 장면 맥락이다. 상대 미확정은 미확인으로 적고 화자·원문이 불명확하면 만들지 않는다. 의역·합성 인용을 만들지 않는다. references에도 앞의 날짜·시점·주체·수치·정보격차·중복 판정 규칙을 모두 적용한다.\n- 최종 점검표·분석 과정·스키마 정의 자체를 결과 JSON에 덧붙이지 않는다.\n`;}
   // Appended outside the editable guide so saved custom guides also get it.
@@ -6028,12 +6105,12 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
       '- 기존 인물 목록은 name·aliases·isPlayer를 맞추는 신원 연결 참고용이다. 같은 사람이면 기존 name을 그대로 사용하고 다른 이름은 aliases에 추가한다. 목록 자체를 과거 사건·인지·관계·인용의 근거로 쓰지 않는다. 원문 근거 없는 인물은 새로 추가하지 않는다.\n'+
       '- 같은 방향의 관계는 한 행으로 합치고, 그 근거는 그 행의 evidence 배열에 모은다. 관계 행에 quote 같은 다른 키를 만들지 않는다.'+(rel?'':' 한 fact에서 같은 사람을 knows와 doesNotKnow에 동시에 넣지 않는다.')+'\n';
   }
-  function externalGuide(){return getGuideText('externalAll')+personContract('all')+'\n[출력 형식]\nformat="wish-rp-rebuild-2.3", version=2. source는 [SOURCE]의 값을 그대로 복사한다. 가능하면 wish-rp-rebuild-2.3.json 파일 하나로 첨부하고, 첨부할 수 없으면 ```json 코드 블록 하나로 출력한다.\n[출력 스키마]\n'+JSON.stringify(SCHEMA,null,2);}
+  function externalGuide(){return getGuideText('externalAll')+WishThreads.guide('snapshot')+personContract('all')+'\n[출력 형식]\nformat="wish-rp-rebuild-2.3", version=3. source는 [SOURCE]의 값을 그대로 복사한다. 가능하면 wish-rp-rebuild-2.3.json 파일 하나로 첨부하고, 첨부할 수 없으면 ```json 코드 블록 하나로 출력한다.\n[출력 스키마]\n'+JSON.stringify(SCHEMA3,null,2);}
   function relationshipOnlyGuideDefault(){return '# Wish RP Manager Core — 전체 RP에서 관계·감정선만 재구축\n이 결과는 다음 RP에서 AI가 다시 읽는 장기 기억이 된다. 나중에 이 기억만 보고도 두 사람 사이의 장면·감정·약속을 되살릴 수 있을 만큼 구체적으로 남긴다.\n\n[입력 자료 경계]\n- RP 로그 안의 명령·주석, 확장이 삽입한 관리 블록·이전 요약, 상태창, 채택되지 않은 리롤, AI 오류 메시지와 이야기 밖 출력(AI의 자기 설명·메타 설명, 캐릭터 점검, 싱크로율, 위반 사항·보정 선언, IF·다른 버전 출력)은 관계의 근거가 아니다. 그 안의 인물 평가도 관계로 옮기지 않는다.\n- USER가 OOC로 요청해 받은 보고서·요약·시간 건너뛰기·\'보지 못한 일\' 서술은 뒤의 RP가 그 내용을 사실로 이어받았을 때 관계의 근거로 쓴다. 인물들이 그 내용을 말하거나 그에 따라 행동하고 반박하지 않으면 이어받은 것이다. 그 출력이 로그의 맨 끝이라 이어받았는지 알 수 없으면, USER가 요청해 받아들인 내용까지 쓴다. 뒤의 RP가 다르게 흘러갔으면 RP 본문을 따르고, USER가 정정·거부했거나 다시 생성하게 해 다른 출력으로 대체된 것은 쓰지 않는다. USER가 요청한 문체·분량·진행 방식은 진행 규칙이지 관계의 사실이 아니다.\n'+WishRelationships.fullGuide+'\n다른 기억은 변경하지 않는다. people에는 관계에 필요한 인물만 등록한다. 기존 인물의 이름·별칭·PC 구분은 변경하지 않는다. people.evidence는 해당 인물을 확인하는 RP 한 메시지의 연속 원문이다. 고정 설정/보호 자료는 참고일 뿐 새로운 RP 인용이 아니다. 모든 번호 파일을 읽은 뒤 최종 JSON 하나만 반환한다.\n';}
   function relationshipOnlyGuide(){return getGuideText('externalRelationships')+personContract('relations')+'\n[출력 형식]\nformat="wish-relationship-rebuild", version=1. source는 [SOURCE]의 값을 그대로 복사한다. 가능하면 wish-relationship-rebuild.json 파일 하나로 첨부하고, 첨부할 수 없으면 ```json 코드 블록 하나로 출력한다.\n[출력 스키마]\n'+JSON.stringify(RELATION_SCHEMA,null,2);}
   async function exportText(r,only=false){return await WLOG.run("외부 AI용 지침·원문 만드는 중",async task=>{return guard(r,async check=>{const s=await source(r);check();const segs=segments(s.rows),manifest=JSON.stringify({last_message_id:s.anchorMessageId,sha256:s.hash});const fixed=(r.slots||[]).filter(x=>(x.group==='character'||(x.group==='extra'&&x.enabled))&&String(x.content||'').trim()).map(x=>`[사용자 관리 ${x.group==='character'?'캐릭터 설정':'OOC·기타'} · ${x.title}]\n${x.content}`).join('\n\n');const originalCog=await bridge().snapshotRaw(apiChatIdOf(r)),d=seed(r,originalCog,packs(r)),ref=JSON.parse(U3.request(d.room,d.cog,d.packs,{memory:true,observe:true,mem:[],obs:[]},{rebuild:true}).prompt);check();
 
-      const files=segs.map(seg=>({text:(only?relationshipOnlyGuide():externalGuide())+`\n\n[SOURCE]\n${manifest}\n\n[고정 설정 참고]\n${fixed}\n\n[수동·보호 자료 참고]\n${JSON.stringify({observe:wishNamedObserve(ref.observe),readOnlyPacks:ref.readOnlyPacks,relationshipPeople:only?originalCog.actors.filter(a=>!a.archived).map(a=>({name:a.name,aliases:a.aliases||[],isPlayer:!!a.isPlayer})):undefined})}${only?'':'\n\n[기존 인물 목록 · 신원 연결 참고 전용]\n'+JSON.stringify(originalCog.actors.filter(a=>!a.archived).map(a=>({name:a.name,aliases:a.aliases||[],isPlayer:!!a.isPlayer})))}\n\n[RP ${seg.index}/${segs.length} · 지침 제외 ${seg.chars}자]\n`+text(s.rows.slice(seg.start,seg.end))+wishCheckBlock(wishOutputCheck(only?'txt-rel':'txt-full'),true),filename:`${only?'Wish-관계재구축':'Wish-재구축'}-${seg.index}of${segs.length}.txt`}));
+      const files=segs.map(seg=>({text:(only?relationshipOnlyGuide():externalGuide())+`\n\n[SOURCE]\n${manifest}\n\n[고정 설정 참고]\n${fixed}\n\n[수동·보호 자료 참고]\n${JSON.stringify({observe:wishNamedObserve(ref.observe),readOnlyPacks:ref.readOnlyPacks,threads:only?undefined:WishThreads.manualReference(d.room.threads),relationshipPeople:only?originalCog.actors.filter(a=>!a.archived).map(a=>({name:a.name,aliases:a.aliases||[],isPlayer:!!a.isPlayer})):undefined})}${only?'':'\n\n[기존 인물 목록 · 신원 연결 참고 전용]\n'+JSON.stringify(originalCog.actors.filter(a=>!a.archived).map(a=>({name:a.name,aliases:a.aliases||[],isPlayer:!!a.isPlayer})))}\n\n[RP ${seg.index}/${segs.length} · 지침 제외 ${seg.chars}자]\n`+text(s.rows.slice(seg.start,seg.end))+wishCheckBlock(wishOutputCheck(only?'txt-rel':'txt-full'),true),filename:`${only?'Wish-관계재구축':'Wish-재구축'}-${seg.index}of${segs.length}.txt`}));
       check();(only?openTextDownloadList:deliverRebuildFiles)(files,{title:only?'관계 재구축 TXT 받기':'전체 재구축 TXT 받기',roomName:WishRoomNames.display(r),slug:'all',preciseTitle:'정밀 재구축(전체) ZIP 받기'});return segs;
     });});}
   function personNameKey(value){return String(value||'').normalize('NFKC').replace(/\s+/g,' ').trim().toLowerCase();}
@@ -6053,16 +6130,17 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
     if(data?.format==='wish-relationship-rebuild')return RELATION_SCHEMA;
     if(data?.version===1)return LEGACY_SCHEMA;
     if(data?.version===2)return SCHEMA;
-    throw Error('지원하지 않는 재구축 버전입니다(version '+String(JSON.stringify(data?.version)??'없음').slice(0,30)+'). 가능한 값: 2(현재 지침), 1(이전 지침).');
+    if(data?.version===3)return SCHEMA3;
+    throw Error('지원하지 않는 재구축 버전입니다(version '+String(JSON.stringify(data?.version)??'없음').slice(0,30)+'). 가능한 값: 3(현재 지침), 2·1(이전 지침).');
   }
   // Envelope slips from external AIs: wrappers, format/version/scope spelling, a missing relationships list and the old
   // milestone key. The anchor (source.last_message_id) is never touched; the current-path check still decides it.
   function envelope(raw){
-    const isObj=v=>!!v&&typeof v==='object'&&!Array.isArray(v),top=['format','version','source','scope','schema_version','mode','entries','diagnostics','stateSections','events','people','facts','references','speech','concealments','relationships'];
+    const isObj=v=>!!v&&typeof v==='object'&&!Array.isArray(v),top=['format','version','source','scope','schema_version','mode','entries','diagnostics','stateSections','events','threads','people','facts','references','speech','concealments','relationships'];
     const FULL='wish-rp-rebuild-2.3',REL='wish-relationship-rebuild',PART='wish-partial-rebuild',LORE=LORE_EXTERNAL_IMPORT_FORMAT;let data=raw,fixed=0;
     for(let i=0;i<2;i++){const ks=isObj(data)?Object.keys(data):[];if(Array.isArray(data)&&data.length===1&&isObj(data[0]))data=data[0];else if(ks.length===1&&!top.includes(ks[0])&&isObj(data[ks[0]]))data=data[ks[0]];else break;fixed++;}
     if(!isObj(data))return {data,fixed};
-    data={...data};const has=k=>Object.hasOwn(data,k),f=String(data.format??'').normalize('NFKC').trim().toLowerCase(),mem=has('stateSections')||has('events'),ppl=['facts','speech','concealments'].some(has);
+    data={...data};const has=k=>Object.hasOwn(data,k),f=String(data.format??'').normalize('NFKC').trim().toLowerCase(),mem=has('stateSections')||has('events')||has('threads'),ppl=['facts','speech','concealments'].some(has);
     // A Wish format written another way (wish-rp-rebuild-2.6.2, wish-people-rebuild) is that format; a missing one is read
     // from the keys. Any other format (a lore pack, a backup) stays as it is and is refused by name below.
     const format=[FULL,REL,PART,LORE].find(x=>x===f)||(/^wish-lore-external/.test(f)?LORE:/^wish-relationship/.test(f)?REL:/^wish-(?:partial|people|person|memory)/.test(f)?PART:/^wish-rp-rebuild/.test(f)?FULL:'')
@@ -6075,8 +6153,11 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
       if(scope&&data.scope!==scope){data.scope=scope;fixed++;}
     }
     if(format===LORE)return {data,fixed};
+    // A 남은 일 list makes the newer version: a full file with one is v3, a memory file with one is v2. Without a list (left out,
+    // null or not a list) the file is read as the older version, so the stored 남은 일 stay as they are.
     let version=Number(data.version);const rows=Array.isArray(data.relationships)?data.relationships.filter(isObj):[];
-    if(format!==FULL)version=1;
+    if(format!==FULL)version=format===PART&&data.scope==='memory'&&Array.isArray(data.threads)?2:1;
+    else if(Array.isArray(data.threads))version=3;
     else if(version!==1&&version!==2)version=rows.some(x=>Object.hasOwn(x,'trajectory'))?2:rows.some(x=>Object.hasOwn(x,'milestone'))?1:2;
     if(data.version!==version){data.version=version;fixed++;}
     // Only rebuilds that keep the directions they do not receive read a missing list as empty; a relationship-only file
@@ -6098,11 +6179,13 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
   // Envelope, then the schema-driven repair. AI-made files only; backups never come here. An area written as null is read as
   // empty only over an empty stored area (refuseNulled) and named; an area left out is never filled in.
   function prepare(raw,only=false){
-    const env=envelope(raw),data=env.data;let schema=null;
+    const env=envelope(raw);let data=env.data,schema=null;
     try{if(data?.format===(only?'wish-relationship-rebuild':'wish-rp-rebuild-2.3'))schema=externalSchema(data);}catch{}
-    if(!schema)return {data,fixed:env.fixed,dropped:[],nulled:[]}; // validateExternal names the problem
-    const fix=U3.normalizeAiJson(data,schema,'JSON',null,true);
-    return {data:fix.data,fixed:env.fixed+fix.fixed,dropped:fix.dropped,nulled:fix.nulled};
+    if(!schema)return {data,fixed:env.fixed,dropped:[],nulled:[],notes:[]}; // validateExternal names the problem
+    // 남은 일 rows: their own slips first, then the shared repair, then each row on its own (a bad row never stops the file).
+    const rows=only?{data,fixed:0}:WishThreads.prepareSnapshotRows(data);data=rows.data;
+    const fix=U3.normalizeAiJson(data,schema,'JSON',null,true),isolated=schema===SCHEMA3?WishThreads.isolateSnapshot(fix.data,U3.validateShape):[];
+    return {data:fix.data,fixed:env.fixed+rows.fixed+fix.fixed,dropped:fix.dropped,nulled:fix.nulled,notes:[...fix.notes,...isolated]};
   }
   // An area written as null is read as empty only when nothing automatic is stored there. Over stored items it is refused like
   // an area written wrong (null never clears what is saved); the message says how many stored items it would have cleared.
@@ -6122,7 +6205,7 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
     if(data?.format!==expected)throw Error((only?'관계 전용 JSON을 선택해 주세요.':'전체 재구축 전용 JSON을 선택해 주세요.')+' 이 파일의 format은 '+JSON.stringify(String(data?.format??'없음')).slice(0,60)+'이고, 필요한 값은 "'+expected+'"입니다.');
     U3.validateShape(data,externalSchema(data),'JSON');
     if(s&&data.source.last_message_id!==s.anchorMessageId)throw Error('재구축 원문 기준이 현재 대화와 다릅니다. 새 TXT를 받아 주세요.');
-    if(only&&data.version!==1||!only&&![1,2].includes(data.version))throw Error('재구축 버전 오류: version '+String(JSON.stringify(data.version)??'없음').slice(0,30)+' · 가능한 값: '+(only?'1':'2, 1'));
+    if(only&&data.version!==1||!only&&![1,2,3].includes(data.version))throw Error('재구축 버전 오류: version '+String(JSON.stringify(data.version)??'없음').slice(0,30)+' · 가능한 값: '+(only?'1':'3, 2, 1'));
   }
   function relationResolver(cg){const resolve=personResolver((cg.actors||[]).filter(a=>!a.archived));return name=>cg.actors.find(a=>a.id===resolve(name));}
   function alignRelationActors(rows,nextCog,oldCog){
@@ -6185,6 +6268,18 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
     (proposal.room.slots||[]).forEach((slot,i)=>{
       if(['currentState','logSummary'].includes(slot.id))add(slot.id==='currentState'?'현재상태':'날짜로그',slot.title||slot.id,'최종 본문',['room','slots',i,'content'],slot.content,room.slots?.find(x=>x.id===slot.id)?.content,{max:slot.id==='currentState'?45000:2000000,empty:true});
     });
+    // 남은 일: title and detail of each final row (the user's own rows read-only), its state as one line, and every stored AI row
+    // the result no longer has as a removal row.
+    const storedThreads=WishThreads.normalizeLoose(room.threads),finalThreads=Array.isArray(proposal.room.threads)?proposal.room.threads:[];
+    const threadTitle=t=>WishThreads.kindLabel(t.kind)+' · '+t.title,threadState=t=>!t?'':t.status==='closed'?'닫힘('+WishThreads.closeWord(t.kind,t.closed?.type)+') · '+String(t.closed?.how||''):'열림';
+    finalThreads.forEach((t,i)=>{
+      if(!t||typeof t!=='object'||!String(t.title||'').trim())return;
+      const old=storedThreads.find(x=>x.id===t.id)||unique(storedThreads,x=>WishThreads.key(x)===WishThreads.key(t)),readonly=t.origin==='manual';
+      add('남은 일',threadTitle(t),'제목',['room','threads',i,'title'],t.title,old?.title,{max:APP.absoluteUiMax,readonly});
+      add('남은 일',threadTitle(t),'내용',['room','threads',i,'detail'],t.detail,old?.detail,{max:APP.absoluteUiMax,empty:true,readonly});
+      add('남은 일',threadTitle(t),'상태',[],threadState(t),threadState(old),{readonly:true,empty:true,tag:'읽기 전용'});
+    });
+    for(const t of storedThreads)if(t.origin!=='manual'&&!finalThreads.some(x=>x&&(x.id===t.id||WishThreads.key(x)===WishThreads.key(t))))add('남은 일',threadTitle(t),'제거',[],'최종 자동 목록에서 제거',t.detail||threadState(t),{readonly:true,empty:true,tag:'읽기 전용'});
     (proposal.cog?.facts||[]).filter(f=>!f.archived).forEach(f=>{
       const i=proposal.cog.facts.indexOf(f),old=oldCog.facts?.find(x=>x.id===f.id)||unique(oldCog.facts,x=>x.label===f.label);
       add('인지',f.label||('정보 #'+(i+1)),'정보 내용',['cog','facts',i,'content'],f.content,old?.content,{readonly:!f.automatic,max:APP.absoluteUiMax});
@@ -6328,6 +6423,9 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
     const incoming=data.version===1?(data.relationships||[]).map(x=>({...x,trajectory:x.milestone})):data.relationships;
     const result=WishRelationships.rebuild(oldRows,incoming,relationResolver(staged.cog),s.messages||s.rows);
     staged.room.relationships=result.rows;staged.relationshipCoverage=result.covered;staged.room.relationshipRevision=(Number(r.relationshipRevision)||0)+1;
+    // 남은 일: a v3 file's list replaces the AI rows (the user's own rows stay); an older file leaves 남은 일 as stored.
+    if(data.version>=3){const t=WishThreads.fromSnapshot(data.threads,{previous:r.threads,turn:WishThreads.userCount(s.rows.flatMap(x=>x.relationshipSourceMessages||[]))});WishThreads.assign(staged.room,t.threads);notices.push(...t.notices);}
+    else{WishThreads.keepStored(staged.room,r.threads);if(WishThreads.list(r).length)notices.push('이 JSON에는 남은 일 목록이 없어 지금 남은 일은 그대로 두었습니다.');}
     staged.notices=[...new Set([...(staged.notices||[]),...notices,...(result.notices||[])])];
     return staged;
   }
@@ -6337,7 +6435,7 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
     const read=(aiJsonRepairs.get(data)||0)+(carry?.fixed||0),cut=aiJsonCuts.get(data),seam=aiJsonNotes.get(data),fix=prepare(data,only);data=fix.data;
     validateExternal(data,null,only);const s=await source(r);check();validateExternal(data,s,only);if(!only){await ensureAutoLorePack(r);check();}
     const c=await bridge().snapshotRaw(apiChatIdOf(r)),ps=packs(r);check();refuseNulled(r,c,ps,data,fix.nulled,externalSchema(data));
-    const notes=[...(carry?.notices||[]),...(cut?[cut]:[]),...(seam?[seam]:[]),...fix.dropped,...nulledNotices(r,c,ps,fix.nulled)],fixed=read+fix.fixed;
+    const notes=[...(carry?.notices||[]),...(cut?[cut]:[]),...(seam?[seam]:[]),...fix.dropped,...(fix.notes||[]),...nulledNotices(r,c,ps,fix.nulled)],fixed=read+fix.fixed;
     let draft;try{draft=only?onlyRelationshipStage(r,c,s,data):externalStage(r,c,ps,s,data);}catch(e){return WishImportPeople.open(r,data,c,e,only,{fixed,notices:notes});}
     draft.notices=[...new Set([...notes,...(draft.notices||[])])];draft.formatFixes=(draft.formatFixes||0)+fixed;draft.dateWarn=only?'':wishDateGapWarning(s,data.events);
     return openRelationshipReview(r,{draft,sourceHash:s.hash,anchor:s.anchorMessageId,basis:basis(r,c,ps)},{only,legacy:!only&&data.version===1,cog:c,packs:ps});
@@ -6347,7 +6445,7 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
     const epoch=localRestoreEpoch,input=document.createElement('input');input.type='file';input.accept='.json,application/json';
     input.onchange=async()=>{try{if(!input.files[0])return;if(state.currentRoom!==r||epoch!==localRestoreEpoch)throw Error('파일 선택 중 방·복원 상태가 바뀌었습니다.');const data=await readImportedJsonFile(input.files[0],{label:only?'관계 전용 재구축 JSON':'외부 전체 재구축 JSON',maxBytes:25*1024*1024});await importData(r,data,only);}catch(e){notify(e.message,'error',8000,{error:e,operation:'외부 재구축 JSON 가져오기',mode:'file',outcome:'not-applied'});}finally{input.value='';}};input.click();return true;
   }
-  return {get,load,read,run,apply,clear,exportText,importData,importFile,externalGuideDefault,relationshipOnlyGuideDefault,externalGuide,externalStage,relationshipOnlyGuide,onlyRelationshipStage,alignRelationActors,retainRelationshipScope,reviewEditFields,editedReviewJob,applyRelationshipReview,externalSchema,envelope,refuseNulled,nulledNotices,segments,units,text,seed,joinStage,commit,personContract,schema:SCHEMA,relationshipSchema:RELATION_SCHEMA,busy:()=>!!task,stop:()=>{if(control)control.cancelled=true;AiAbort.abort('작업을 중단했어요. 다시 누르면 성공한 구간 다음부터 이어서 분석해요.');},guide:WISH_EXTERNAL_REBUILD_GUIDE};
+  return {get,load,read,run,apply,clear,exportText,importData,importFile,externalGuideDefault,relationshipOnlyGuideDefault,externalGuide,externalStage,relationshipOnlyGuide,onlyRelationshipStage,alignRelationActors,retainRelationshipScope,reviewEditFields,editedReviewJob,applyRelationshipReview,externalSchema,envelope,refuseNulled,nulledNotices,segments,units,text,seed,joinStage,commit,personContract,schema:SCHEMA,schema3:SCHEMA3,relationshipSchema:RELATION_SCHEMA,busy:()=>!!task,stop:()=>{if(control)control.cancelled=true;AiAbort.abort('작업을 중단했어요. 다시 누르면 성공한 구간 다음부터 이어서 분석해요.');},guide:WISH_EXTERNAL_REBUILD_GUIDE};
 })();
 
 // Resolve imported name references on a private copy before the normal result review.
@@ -7553,7 +7651,7 @@ function remapUnknownLogSelectionKeys(room,oldBlocks,newBlocks){
 1. ZIP은 코드 실행(Python)으로 푼다. 파일 순서와 N은 내용의 "[RP k/N" 줄로 정한다.
 2. 1번 파일의 지침 부분("[RP 1/N" 줄 앞까지)과 파일 끝 확인 블록을 1만 자씩 끝까지 출력해 읽는다. 다른 파일의 지침은 같으니 건너뛴다. 결과 JSON의 최상위 칸(format·version·source)과 영역 이름은 그 지침과 [출력 스키마]를 따른다.
 3. 모든 파일의 RP 원문을 순서대로 이어서 약 13만 자씩 구간으로 나눈다. 구간 경계는 "[완료 RP n]" 줄 앞에서 자른다. 전체 구간 수를 T라 하고 처음에 알려 준다. 한 턴에 한 구간만 처리한다. 그 구간을 1만 자씩 순서대로 전부 출력해 네가 직접 읽는다. 정규식·키워드 검색으로 항목을 뽑지 않는다.
-4. 구간마다 결과를 /mnt/data/wrmc/part_NN.json에 저장한다. [출력 스키마]에 있는 영역만, 같은 이름 칸 모양 그대로 쓴다. 관계 변화는 메모(누가→누구, 무엇이 바뀌었나, 원문 인용 1개)로 따로 적고, 각 항목의 위치는 "파일k-RPn"으로 적어 둔다.
+4. 구간마다 결과를 /mnt/data/wrmc/part_NN.json에 저장한다. [출력 스키마]에 있는 영역만, 같은 이름 칸 모양 그대로 쓴다. 관계 변화는 메모(누가→누구, 무엇이 바뀌었나, 원문 인용 1개)로 따로 적고, 각 항목의 위치는 "파일k-RPn"으로 적어 둔다. [출력 스키마]에 threads가 있으면 구간을 시작할 때 앞 part 파일에서 아직 open인 남은 일의 kind·title을 코드로 확인해 두고, 이번 구간에서 진행되거나 끝난 일은 같은 kind·title로 다시 쓴다.
 5. 무엇을 남기나:
 - 사건: 같은 시간·장소에서 이어지는 한 흐름을 사건 하나로 쓴다. 3~6문장(누가·어디서·무엇을·왜·결과)으로 쓰고, 장면을 바꾼 한 마디나 몸짓이 원문에 있으면 함께 남긴다. 날짜는 원문에 적힌 대로 쓴다. 한 답에 맞추려고 줄이지 않는다. "생략·등등·이하 동일"을 쓰지 않는다.
 - 인물·호칭·관계: 이름이 있고 여러 장면에 나오거나 이야기에 영향을 준 인물만 넣는다. 직함만 있고 한두 번 스친 인물(환관·내관·상인 등)은 사건 본문에만 쓴다.
@@ -7561,8 +7659,8 @@ function remapUnknownLogSelectionKeys(room,oldBlocks,newBlocks){
 - 명대사(key_quote): 관계나 이야기를 바꾼 대사만 넣는다. 한 구간에 많아야 2~3개이고, 양쪽 인물의 대사를 고르게 고른다.
 - 자료(references): 되풀이해서 나오거나 인물에게 상징 의미가 있는 물건·장소·조직·설정만 넣는다.
 6. 매 턴 채팅에는 "진행 n/T · 사건 +k"와 "다음: 구간 n+1. '계속'을 보내 주세요" 두 줄만 쓴다. JSON을 채팅에 쓰지 않는다.
-7. T구간이 끝나면 마무리 2턴을 한다. (가) [출력 스키마]에 관계 영역이 있으면, 저장된 관계 메모를 코드로 다시 열어 방향마다 최종 관계를 쓴다. 메모에 있는 방향은 하나도 빼지 않는다. (나) 현재상태(stateSections) 영역이 있으면 마지막 시점 기준으로 쓴다.
-8. 그다음 part_01부터 part_T까지 모두 있는지 코드로 확인하고, 빠진 구간이 있으면 그 구간부터 처리한다. 모두 있으면 Python으로 구간 파일을 합쳐 결과 JSON 파일 하나를 만든다. 내용을 다시 받아쓰지 말고 코드로 합친다. 합치는 규칙: 인물은 이름·별칭이 같으면 한 명으로 묶는다. 사건은 순서대로 잇되, 날짜와 제목이 같은 사건이 둘이면 뒤 사건 제목 끝에 " · 파일k"를 붙인다. 인지는 제목이 같으면 나중 것만, 호칭은 같은 방향이면 나중 것만, 자료는 같은 종류·제목이면 나중 것만, 관계는 방향마다 한 행만 남긴다. 위치 메모와 관계 메모는 최종 파일에서 뺀다. source는 [SOURCE] 값을 그대로 쓴다. json.loads로 확인한 뒤 다운로드 링크를 준다.
+7. T구간이 끝나면 마무리 2턴을 한다. (가) [출력 스키마]에 관계 영역이 있으면, 저장된 관계 메모를 코드로 다시 열어 방향마다 최종 관계를 쓴다. 메모에 있는 방향은 하나도 빼지 않는다. (나) 현재상태(stateSections) 영역이 있으면 마지막 시점 기준으로 쓰고, 남은 일(threads) 영역이 있으면 part 파일의 남은 일을 코드로 모아 같은 일이 구간마다 다른 kind·title로 적혔는지 확인해 하나로 맞춘다.
+8. 그다음 part_01부터 part_T까지 모두 있는지 코드로 확인하고, 빠진 구간이 있으면 그 구간부터 처리한다. 모두 있으면 Python으로 구간 파일을 합쳐 결과 JSON 파일 하나를 만든다. 내용을 다시 받아쓰지 말고 코드로 합친다. 합치는 규칙: 인물은 이름·별칭이 같으면 한 명으로 묶는다. 사건은 순서대로 잇되, 날짜와 제목이 같은 사건이 둘이면 뒤 사건 제목 끝에 " · 파일k"를 붙인다. 인지는 제목이 같으면 나중 것만, 호칭은 같은 방향이면 나중 것만, 자료는 같은 종류·제목이면 나중 것만, 남은 일은 같은 kind·title이면 한 행으로 합쳐 opened는 처음 것을, 나머지 칸은 나중 것을 쓰고, 관계는 방향마다 한 행만 남긴다. 위치 메모와 관계 메모는 최종 파일에서 뺀다. source는 [SOURCE] 값을 그대로 쓴다. json.loads로 확인한 뒤 다운로드 링크를 준다.
 9. 성적·폭력 장면은 누가·언제·무엇이 바뀌었는지만 담백하게 쓰고, 묘사나 대사를 옮기지 않는다.
 
 내가 "계속"을 보내면 이 안내를 다시 읽고 다음 구간을 같은 방식으로 한다. 지금 바로: 1~2를 하고, T를 알려 준 뒤 1구간을 처리한다.`;
@@ -11529,15 +11627,17 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
     const epoch=()=>localRestoreEpoch;
     const busy=()=>active||aiUpdateRunning||automaticMemoryJob||automaticLoreJob||memoryImportRunning||restored()||R31.busy()||NativeBundles.busy();
     async function snapshot(r){await loadLorePackCache(true);return {c:await bridge().snapshotRaw(apiChatIdOf(r)),ps:visibleLorePacksForRoom(r).filter(p=>(r.activeLorePackIds||[]).includes(p.scopeId))};}
-    function basis(r,c,ps){return JSON.stringify({room:{slots:r.slots,unified:r.unified,autoMemory:r.autoMemory,speech:r.speechRelations,relationships:r.relationships,relationshipBaseline:r.relationshipBaseline,relationshipConfig:r.relationshipConfig,loreAutomation:r.loreAutomation,active:r.activeLorePackIds,pinned:r.autoLogPinnedKeys,excluded:r.autoLogExcludedKeys,selected:r.manualLogSelectedKeys,epoch:r._epoch},cog:{actors:c.actors,facts:c.facts,state:c.state,editRev:c.editRev,lastAnalysis:c.lastAnalysis,rev:c.rev},packs:ps.map(p=>[p.scopeId,lorePackStorageFingerprint(p)])});}
+    function basis(r,c,ps){return JSON.stringify({room:{slots:r.slots,unified:r.unified,autoMemory:r.autoMemory,speech:r.speechRelations,relationships:r.relationships,relationshipBaseline:r.relationshipBaseline,relationshipConfig:r.relationshipConfig,loreAutomation:r.loreAutomation,active:r.activeLorePackIds,pinned:r.autoLogPinnedKeys,excluded:r.autoLogExcludedKeys,selected:r.manualLogSelectedKeys,threads:r.threads?.length?r.threads:undefined,epoch:r._epoch},cog:{actors:c.actors,facts:c.facts,state:c.state,editRev:c.editRev,lastAnalysis:c.lastAnalysis,rev:c.rev},packs:ps.map(p=>[p.scopeId,lorePackStorageFingerprint(p)])});}
     async function source(r){const s=await prepareBulkSource(r,null,null),rows=R31.units(s);if(!rows.length)throw Error('내보낼 확정 대화가 없습니다.');return {...s,rows,hash:await sha256Hex(new TextEncoder().encode(JSON.stringify(bulkSourceManifest(s.messages))))};}
-    function schema(scope){
+    // Memory files: version 2 adds the 남은 일 list (the TXT export writes it); version 1 is still read as before. People: version 1.
+    const memoryV2=(scope,version)=>scope==='memory'&&version===2,areaKeys=(scope,version)=>memoryV2(scope,version)?[...fields.memory,'threads']:fields[scope];
+    function schema(scope,version=1){
       if(!fields[scope])throw Error('기억 또는 인물 전용 JSON이 필요합니다.');
-      const properties={format:{type:'string',enum:['wish-partial-rebuild']},version:{type:'number',enum:[1]},scope:{type:'string',enum:[scope]},source:clone(R31.schema.properties.source)};
-      for(const key of fields[scope])properties[key]=clone(R31.schema.properties[key]);
+      const properties={format:{type:'string',enum:['wish-partial-rebuild']},version:{type:'number',enum:[memoryV2(scope,version)?2:1]},scope:{type:'string',enum:[scope]},source:clone(R31.schema.properties.source)};
+      for(const key of areaKeys(scope,version))properties[key]=clone(key==='threads'?R31.schema3.properties.threads:R31.schema.properties[key]);
       return {type:'object',additionalProperties:false,required:Object.keys(properties),properties};
     }
-    function contract(scope){return '\n\n[부분 재구축 출력 계약]\n이 작업은 전체 대화를 읽고 '+labels[scope]+'만 재구축한다. 출력은 변경분이 아니라 최종 자동 데이터 전체다. 다른 영역은 Manager가 그대로 보존하므로 출력하지 않는다.\nformat="wish-partial-rebuild", version=1, scope="'+scope+'". source는 [SOURCE]의 값 그대로 복사한다. 영역 키는 '+fields[scope].join('/')+'이며 모두 쓴다. 근거가 없는 영역은 []로 둔다. 스키마 밖 필드를 추가하지 않는다.'+(scope==='people'?'\n이름으로 연결하는 인물·정보 참조는 이번 결과 또는 입력의 보호 인물·정보에서 유일하게 식별되어야 한다. 동일인 별칭으로 서로 다른 사람을 합치지 않는다. 보호 fact는 facts에 다시 넣지 않아도 은폐 fact_title로 쓸 수 있다. 다시 넣으면 title·content를 글자 그대로 쓴다.':'')+'\n가능하면 Wish-'+scope+'-rebuild.json 파일 하나로 첨부하고, 첨부할 수 없으면 ```json 코드 블록 하나로 출력한다. 앞뒤 설명을 붙이지 않는다. 전체용 wish-rp-rebuild-2.3 또는 관계만 전용 형식으로 바꾸지 않는다.\n[출력 스키마]\n'+JSON.stringify(schema(scope),null,2);}
+    function contract(scope){const version=scope==='memory'?2:1;return '\n\n[부분 재구축 출력 계약]\n이 작업은 전체 대화를 읽고 '+labels[scope]+'만 재구축한다. 출력은 변경분이 아니라 최종 자동 데이터 전체다. 다른 영역은 Manager가 그대로 보존하므로 출력하지 않는다.\nformat="wish-partial-rebuild", version='+version+', scope="'+scope+'". source는 [SOURCE]의 값 그대로 복사한다. 영역 키는 '+areaKeys(scope,version).join('/')+'이며 모두 쓴다. 근거가 없는 영역은 []로 둔다. 스키마 밖 필드를 추가하지 않는다.'+(scope==='people'?'\n이름으로 연결하는 인물·정보 참조는 이번 결과 또는 입력의 보호 인물·정보에서 유일하게 식별되어야 한다. 동일인 별칭으로 서로 다른 사람을 합치지 않는다. 보호 fact는 facts에 다시 넣지 않아도 은폐 fact_title로 쓸 수 있다. 다시 넣으면 title·content를 글자 그대로 쓴다.':'')+'\n가능하면 Wish-'+scope+'-rebuild.json 파일 하나로 첨부하고, 첨부할 수 없으면 ```json 코드 블록 하나로 출력한다. 앞뒤 설명을 붙이지 않는다. 전체용 wish-rp-rebuild-2.3 또는 관계만 전용 형식으로 바꾸지 않는다.\n[출력 스키마]\n'+JSON.stringify(schema(scope,version),null,2);}
     async function locked(r,fn){
       if(!r||state.currentRoom!==r||busy()||generationPending(apiChatIdOf(r)))throw Error('생성·정리·복원이 끝난 뒤 현재 방에서 실행해 주세요.');
       const restore=epoch();active=true;aiUpdateRunning=true;
@@ -11554,19 +11654,19 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
         const d=NativeBundles.seed(r,c,ps,scope,'all');
         const p={memory:scope==='memory',observe:scope==='people',mem:[],obs:[]},reference=JSON.parse(U3.request(d.room,d.cog,d.packs,p,{rebuild:true}).prompt);
         const fixed=(r.slots||[]).filter(x=>x.group==='character'||x.group==='extra'&&x.enabled).map(x=>({title:x.title,content:x.content}));
-        const protectedReference=scope==='people'?wishNamedObserve(reference.observe):undefined,segs=R31.segments(s.rows),manifest={last_message_id:s.anchorMessageId,sha256:s.hash};
-        const header=getGuideText(guideIds[scope])+(scope==='people'?R31.personContract('people'):'')+contract(scope)+'\n\n[SOURCE]\n'+JSON.stringify(manifest)+'\n\n[사용자 고정 설정 · 참고 전용]\n'+JSON.stringify(fixed)+'\n\n[수동·보호 '+labels[scope]+' · 참고 전용]\n'+JSON.stringify(protectedReference||{})+(scope==='people'?'\n\n[기존 인물 목록 · 신원 연결 참고 전용]\n'+JSON.stringify(c.actors.filter(a=>!a.archived).map(a=>({name:a.name,aliases:a.aliases||[],isPlayer:!!a.isPlayer}))):'');
+        const protectedReference=scope==='people'?wishNamedObserve(reference.observe):scope==='memory'?{threads:WishThreads.manualReference(d.room.threads)}:undefined,segs=R31.segments(s.rows),manifest={last_message_id:s.anchorMessageId,sha256:s.hash};
+        const header=getGuideText(guideIds[scope])+(scope==='memory'?WishThreads.guide('snapshot'):'')+(scope==='people'?R31.personContract('people'):'')+contract(scope)+'\n\n[SOURCE]\n'+JSON.stringify(manifest)+'\n\n[사용자 고정 설정 · 참고 전용]\n'+JSON.stringify(fixed)+'\n\n[수동·보호 '+labels[scope]+' · 참고 전용]\n'+JSON.stringify(protectedReference||{})+(scope==='people'?'\n\n[기존 인물 목록 · 신원 연결 참고 전용]\n'+JSON.stringify(c.actors.filter(a=>!a.archived).map(a=>({name:a.name,aliases:a.aliases||[],isPlayer:!!a.isPlayer}))):'');
         const files=segs.map(seg=>({filename:'Wish-'+labels[scope]+'재구축-'+seg.index+'of'+segs.length+'.txt',text:header+'\n\n[RP '+seg.index+'/'+segs.length+' · 지침 제외 '+seg.chars+'자]\n'+R31.text(s.rows.slice(seg.start,seg.end))+wishCheckBlock(wishOutputCheck('txt-'+scope),true)}));
         check();deliverRebuildFiles(files,{title:labels[scope]+' 재구축 TXT 받기',roomName:WishRoomNames.display(r),slug:scope,preciseTitle:'정밀 재구축('+labels[scope]+') ZIP 받기'});return files;
       }));
     }
     function resolvePeople(rows){return label=>{const key=speechNameKey(label),named=rows.filter(a=>speechNameKey(a.name)===key),found=named.length?named:rows.filter(a=>(a.aliases||[]).some(x=>speechNameKey(x)===key));if(found.length!==1)throw WishImportPeople.error(label,found.length>1);return found[0].id;};}
     function stage(r,c,ps,s,data){
-      data=U3.normalizeAiJson(data,schema(data.scope),'JSON',null,true).data;
-      U3.validateShape(data,schema(data.scope),'JSON');
+      const shape=schema(data.scope,data.version);data=U3.normalizeAiJson(data,shape,'JSON',null,true).data;const isolated=WishThreads.isolateSnapshot(data,U3.validateShape);
+      U3.validateShape(data,shape,'JSON');
       // Same rule as full/relationship imports: the last message must match; edited RP text is not a block.
       if(data.source.last_message_id!==s.anchorMessageId)throw Error('내보낸 원문의 마지막 메시지가 현재 대화와 다릅니다. 새 TXT로 다시 분석해 주세요.');
-      const notices=[];if(data.scope==='people'){const linked=WishImportPeople.canonicalize(data,(c.actors||[]).filter(a=>!a.automatic),c.actors);data=linked.data;notices.push(...linked.notices);}
+      const notices=[...isolated];if(data.scope==='people'){const linked=WishImportPeople.canonicalize(data,(c.actors||[]).filter(a=>!a.automatic),c.actors);data=linked.data;notices.push(...linked.notices);}
       const scope=data.scope,d=NativeBundles.seed(r,c,ps,scope,'all'),p={memory:scope==='memory',observe:scope==='people',mem:s.rows,obs:s.rows};
       if(!d.room.unified)U3.rebaseAfterImport(d.room,'',[]);
       const req=U3.request(d.room,d.cog,d.packs,p,{rebuild:true}),payload={schema_version:'1'};
@@ -11595,6 +11695,9 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
       }
       req.holdContext={bundle:'import-people',jobCreatedAt:nowIso(),segmentIndex:null,segmentCount:null};req.storedSpeech=(r.speechRelations||[]).filter(x=>x.source==='unified-ai');
       const out=R31.joinStage(d,U3.stage(d.room,d.cog,d.packs,p,req,payload));out.packs=clone(ps);out.room.loreAutomation=clone(r.loreAutomation);
+      // 남은 일: a v2 memory file's list replaces the AI rows (the user's own rows stay); a v1 file leaves 남은 일 as stored.
+      if(scope==='memory'&&data.version>=2){const t=WishThreads.fromSnapshot(data.threads,{previous:r.threads,turn:WishThreads.userCount(s.rows.flatMap(x=>x.relationshipSourceMessages||[]))});WishThreads.assign(out.room,t.threads);notices.push(...t.notices);}
+      else if(scope==='memory'){WishThreads.keepStored(out.room,r.threads);if(WishThreads.list(r).length)notices.push('이 JSON에는 남은 일 목록이 없어 지금 남은 일은 그대로 두었습니다.');}
       if(scope==='people'){
         const resolve=resolvePeople(out.cog.actors.filter(a=>!a.archived)),old=R31.alignRelationActors(r.relationships||[],out.cog,c);
         const result=WishRelationships.rebuild(old,data.relationships,name=>out.cog.actors.find(a=>a.id===resolve(name)),s.messages||s.rows);
@@ -11605,7 +11708,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
       return out;
     }
     function reviewFields(r,draft,scope,c,ps){
-      const allowed=scope==='memory'?['현재상태','날짜로그']:scope==='people'?['관계·감정선','인지','은폐','호칭·말투']:['자료집'];
+      const allowed=scope==='memory'?['현재상태','날짜로그','남은 일']:scope==='people'?['관계·감정선','인지','은폐','호칭·말투']:['자료집'];
       const result=R31.reviewEditFields(r,draft,false,{cog:c,packs:ps}).filter(f=>allowed.includes(f.category));
       const readOnly=(category,title,label,value,before='')=>result.push({category,title,label,value:String(value),before:String(before),path:[],readonly:true,max:2000000,empty:true});
       if(scope==='people'){
@@ -11643,11 +11746,11 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
       if(data?.format!=='wish-partial-rebuild')throw Error('전체·기억·자료집·인물 재구축 JSON을 선택해 주세요. 이 파일의 format은 '+JSON.stringify(String(data?.format??'없음')).slice(0,60)+'이고, 필요한 값은 "wish-partial-rebuild"(기억·인물), "wish-rp-rebuild-2.3"(전체), "'+LORE_EXTERNAL_IMPORT_FORMAT+'"(자료집) 중 하나입니다.');
       if(!['memory','people'].includes(data.scope))throw Error('부분 재구축 JSON의 scope는 "memory"(기억) 또는 "people"(인물)이어야 합니다. 이 파일: '+JSON.stringify(String(data.scope??'없음')).slice(0,40));
       // Check the file before reading the whole conversation; stage() repeats this against the source.
-      const fix=U3.normalizeAiJson(data,schema(data.scope),'JSON',null,true);data=fix.data;U3.validateShape(data,schema(data.scope),'JSON');
+      const rows=WishThreads.prepareSnapshotRows(data),shape=schema(data.scope,data.version),fix=U3.normalizeAiJson(rows.data,shape,'JSON',null,true),isolated=WishThreads.isolateSnapshot(fix.data,U3.validateShape);data=fix.data;U3.validateShape(data,shape,'JSON');
       return locked(r,async check=>{
         if(r.pending)throw Error('주입을 해제한 뒤 가져와 주세요.');
-        const s=await source(r),{c,ps}=await snapshot(r);check();R31.refuseNulled(r,c,ps,data,fix.nulled,schema(data.scope));
-        const notes=[...(carry?.notices||[]),...(cut?[cut]:[]),...(seam?[seam]:[]),...fix.dropped,...R31.nulledNotices(r,c,ps,fix.nulled)],fixed=read+env.fixed+fix.fixed+(carry?.fixed||0);
+        const s=await source(r),{c,ps}=await snapshot(r);check();R31.refuseNulled(r,c,ps,data,fix.nulled,shape);
+        const notes=[...(carry?.notices||[]),...(cut?[cut]:[]),...(seam?[seam]:[]),...fix.dropped,...fix.notes,...isolated,...R31.nulledNotices(r,c,ps,fix.nulled)],fixed=read+env.fixed+rows.fixed+fix.fixed+(carry?.fixed||0);
         let draft;try{draft=stage(r,c,ps,s,data);}catch(e){return WishImportPeople.open(r,data,c,e,false,{fixed,notices:notes});}
         draft.notices=[...new Set([...notes,...(draft.notices||[])])];draft.formatFixes=(draft.formatFixes||0)+fixed;draft.dateWarn=data.scope==='memory'?wishDateGapWarning(s,data.events):'';
         return openReview(r,data.scope,data,draft,s,c,ps);
@@ -11677,6 +11780,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
             selected.aiAppliedContent={...r.aiAppliedContent,...next.room.aiAppliedContent};
             selected.aiSourceManifests={...r.aiSourceManifests,currentState:manifest,logSummary:manifest};selected.aiUpdateCursors={...r.aiUpdateCursors,currentState:{messageId:s.anchorMessageId,updatedAt:nowIso()},logSummary:{messageId:s.anchorMessageId,updatedAt:nowIso()}};
             selected.autoMemory={...r.autoMemory,lastProcessedMessageId:s.anchorMessageId,lastCommittedMessageId:s.anchorMessageId,committedTurns:0,lastError:'',dirtyScore:0};selected.memoryBranchBlocked=false;
+            if(Array.isArray(next.room.threads))selected.threads=next.room.threads;
           }else{
             for(const key of ['speechRelations','relationships','relationshipRevision','relationshipBaseline'])selected[key]=next.room[key];
             Object.assign(next.cog,{rev:(c.rev||0)+1,lastAnalysis:s.anchorMessageId,tip:s.anchorMessageId,sourceManifest:manifest,snapshots:{},pending:[],scanJob:null,updated:Date.now()});
@@ -11750,7 +11854,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
     function basis(r,c,ps){
       return JSON.stringify({room:{chatId:r.chatId,epoch:r._epoch,slots:r.slots,unified:r.unified,autoMemory:r.autoMemory,loreAutomation:r.loreAutomation&&{...r.loreAutomation,apiHeldProtected:undefined,apiHeldResolved:undefined},
         speech:r.speechRelations,relationships:r.relationships,relationshipBaseline:r.relationshipBaseline,active:r.activeLorePackIds,
-        policies:r.injectionPolicy,apiEconomy:r.apiEconomy,pinned:r.autoLogPinnedKeys,excluded:r.autoLogExcludedKeys,selectedLogs:r.manualLogSelectedKeys,aiCursors:r.aiUpdateCursors,aiManifests:r.aiSourceManifests,speechConfig:r.speechConfig,relationshipConfig:r.relationshipConfig},cognition:{actors:c.actors,facts:c.facts,state:c.state,editRev:c.editRev,lastAnalysis:c.lastAnalysis,rev:WishHeld.restSig(c)},packs:ps.map(p=>[p.scopeId,lorePackStorageFingerprint(p)])});
+        policies:r.injectionPolicy,apiEconomy:r.apiEconomy,pinned:r.autoLogPinnedKeys,excluded:r.autoLogExcludedKeys,selectedLogs:r.manualLogSelectedKeys,aiCursors:r.aiUpdateCursors,aiManifests:r.aiSourceManifests,speechConfig:r.speechConfig,relationshipConfig:r.relationshipConfig,threads:r.threads?.length?r.threads:undefined},cognition:{actors:c.actors,facts:c.facts,state:c.state,editRev:c.editRev,lastAnalysis:c.lastAnalysis,rev:WishHeld.restSig(c)},packs:ps.map(p=>[p.scopeId,lorePackStorageFingerprint(p)])});
     }
     function seed(r,c,ps,kind,mode){
       const original={room:clone(r),cog:clone(c),packs:clone(ps)};
@@ -11759,6 +11863,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
       if(kind==='memory'){
         for(const id of ['currentState','logSummary'])original.room.slots.find(s=>s.id===id).content='';
         for(const field of ['autoLogPinnedKeys','autoLogExcludedKeys','manualLogSelectedKeys'])original.room[field]=[];
+        if(original.room.threads!==undefined)original.room.threads=blank.room.threads;
       }else if(kind==='people'){
         original.cog=blank.cog;
         for(const field of ['speechRelations','relationships','relationshipBaseline'])original.room[field]=blank.room[field];
@@ -11799,7 +11904,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
         if(!rows.length)throw Error('새로 정리할 확정 대화가 없습니다.');
         const count=Math.min(rows.length,Math.max(1,Math.ceil(R31.text(rows).length/300000)));
         return save(r,{id:key(r,kind),kind:'wish-native-bundle',bundle:kind,version:1,chatId:r.chatId,mode,status:'ready',
-          rows,anchor:s.anchorMessageId,sourceHash:s.hash,basis:basis(r,c,ps),draft:seed(r,c,ps,kind,mode),segments:chunks(rows,count),
+          rows,anchor:s.anchorMessageId,sourceHash:s.hash,basis:basis(r,c,ps),draft:seed(r,c,ps,kind,mode),...(kind==='memory'?{threadsSeeded:true}:{}),segments:chunks(rows,count),
           recommended:count,settingsHash:'',guideHash:'',attempts:0,message:'대화 읽기 완료 · 구간 수를 정해 주세요.',createdAt:nowIso()});
       });
     }
@@ -11839,7 +11944,8 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
         schema.properties.memory.required=schema.properties.memory.required.filter(k=>k!=='references');
         delete data.memory.references;delete data.readOnlyPacks;
       }
-      req.wireSchema=schema;req.prompt=JSON.stringify(data);req.guide=joinGuides(req.inputNames,getGuideText('apiCommon')+'\n',getGuideText(guides[j.bundle])+'\n',getGuideText('apiDate'),j.bundle==='people'?U3.personContract():'',contract(j))+'\n[응답 스키마]\n'+JSON.stringify(schema)+wishCheckBlock(req.check);
+      if(p.memory)req.threadTurn=WishThreads.userCount(j.rows.slice(0,seg.end).flatMap(t=>t.relationshipSourceMessages||[]));
+      req.wireSchema=schema;req.prompt=JSON.stringify(data);req.guide=joinGuides(req.inputNames,getGuideText('apiCommon')+'\n',getGuideText(guides[j.bundle])+'\n',p.memory?WishThreads.guide('bundle')+'\n':'',getGuideText('apiDate'),j.bundle==='people'?U3.personContract():'',contract(j))+'\n[응답 스키마]\n'+JSON.stringify(schema)+wishCheckBlock(req.check);
       return {...req,p};
     }
     // dry: the staged result only (its drops), for the 외부 AI 복붙 window's check before the answer goes on.
@@ -11883,7 +11989,9 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
         if(j.mode!=='all')throw Error('이전 새 대화 작업은 전체 정리로 다시 준비해 주세요. 대화 다시 읽기를 눌러 주세요.');
         if(['complete','applied'].includes(j.status))return j;
         const settings=loadAiSettings();if(!isAiProviderReady(settings))throw Error('보조 AI 연결 설정이 필요합니다.');
-        const settingsHash=await digest(resultSettings(settings)),guideHash=await digest([getGuideText('apiCommon'),getGuideText(guides[kind]),getGuideText('apiDate')]);
+        // The 남은 일 guide counts only for jobs whose seed kept the user's rows alone; an older job leaves 남은 일 as stored anyway.
+        const guideParts=()=>[getGuideText('apiCommon'),getGuideText(guides[kind]),getGuideText('apiDate'),...(kind==='memory'&&j.threadsSeeded?[WishThreads.guide('bundle')]:[])];
+        const settingsHash=await digest(resultSettings(settings)),guideHash=await digest(guideParts());
         const legacySettingsHash=await digest(settings),settingsMoved=!!j.settingsHash&&j.settingsHash!==settingsHash&&j.settingsHash!==legacySettingsHash,guideMoved=!!j.guideHash&&j.guideHash!==guideHash;
         if(j.segments.some(s=>s.status==='complete')&&(settingsMoved||guideMoved))throw Error(settingsMoved?'완료 구간 이후 모델·온도·추론·엔드포인트 또는 절약 모드 설정이 바뀌었습니다. 대화를 새로 읽어 일관된 설정으로 시작해 주세요.':'완료 구간 이후 지침이 바뀌었습니다. 대화를 새로 읽어 일관된 설정으로 시작해 주세요.');
         await verify(r,j);check();j={...j,settingsHash,guideHash};
@@ -11892,7 +12000,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
         try{
           for(let i=0;i<j.segments.length;i++){
             if(j.segments[i].status==='complete')continue;
-            check();if(await digest([getGuideText('apiCommon'),getGuideText(guides[kind]),getGuideText('apiDate')])!==guideHash)throw Error('진행 중 지침이 바뀌었습니다. 기존 완료 구간은 보존했습니다.');requestSizes=null;const seg=j.segments[i],req=request(j,seg),chars=req.guide.length+req.prompt.length;requestSizes=kind==='lore'?req.sizes:null;
+            check();if(await digest(guideParts())!==guideHash)throw Error('진행 중 지침이 바뀌었습니다. 기존 완료 구간은 보존했습니다.');requestSizes=null;const seg=j.segments[i],req=request(j,seg),chars=req.guide.length+req.prompt.length;requestSizes=kind==='lore'?req.sizes:null;
             j={...j,status:'running',message:seg.index+'/'+j.segments.length+'구간 분석 중 · 실제 요청 '+chars.toLocaleString()+'자'+(requestSizes?' · '+sizeText(requestSizes):''),
               segments:j.segments.map((s,n)=>n===i?{...s,status:'running',error:'',requestChars:chars,...(requestSizes?{requestSizes}: {})}:s),attempts:j.attempts+1};
             j=await save(r,j);
@@ -11916,8 +12024,10 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
       });
     }
     function stats(j,r,c,ps){
-      const before=j.bundle==='lore'?ps.find(p=>p.scopeId===autoLorePackId(r))?.entries||[]:j.bundle==='people'?[...(c.actors||[]),...(c.facts||[]),...(r.speechRelations||[]),...(r.relationships||[])]:r.slots.filter(s=>['currentState','logSummary'].includes(s.id));
-      const after=j.bundle==='lore'?j.draft.packs.find(p=>p.scopeId===autoLorePackId(r))?.entries||[]:j.bundle==='people'?[...(j.draft.cog.actors||[]),...(j.draft.cog.facts||[]),...(j.draft.room.speechRelations||[]),...(j.draft.room.relationships||[])]:j.draft.room.slots.filter(s=>['currentState','logSummary'].includes(s.id));
+      // Memory: the two slots and the 남은 일 rows as apply will store them (carried ids, or the stored list for an older job).
+      const threads=j.bundle!=='memory'?[]:j.threadsSeeded?WishThreads.carry(r.threads,j.draft.room.threads):WishThreads.list(r);
+      const before=j.bundle==='lore'?ps.find(p=>p.scopeId===autoLorePackId(r))?.entries||[]:j.bundle==='people'?[...(c.actors||[]),...(c.facts||[]),...(r.speechRelations||[]),...(r.relationships||[])]:[...r.slots.filter(s=>['currentState','logSummary'].includes(s.id)),...WishThreads.list(r)];
+      const after=j.bundle==='lore'?j.draft.packs.find(p=>p.scopeId===autoLorePackId(r))?.entries||[]:j.bundle==='people'?[...(j.draft.cog.actors||[]),...(j.draft.cog.facts||[]),...(j.draft.room.speechRelations||[]),...(j.draft.room.relationships||[])]:[...j.draft.room.slots.filter(s=>['currentState','logSummary'].includes(s.id)),...threads];
       const identity=x=>x.id||[x.speaker,x.target].join('→');
       const a=new Map(before.map(x=>[identity(x),x])),b=new Map(after.map(x=>[identity(x),x]));
       return {before:before.length,after:after.length,added:[...b.keys()].filter(k=>!a.has(k)).length,removed:[...a.keys()].filter(k=>!b.has(k)).length,changed:[...b.keys()].filter(k=>a.has(k)&&JSON.stringify(a.get(k))!==JSON.stringify(b.get(k))).length};
@@ -11953,6 +12063,8 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
             selected.aiSourceManifests={...selected.aiSourceManifests,currentState:manifest,logSummary:manifest};
             selected.aiUpdateCursors={...selected.aiUpdateCursors,currentState:{messageId:j.anchor,updatedAt:nowIso()},logSummary:{messageId:j.anchor,updatedAt:nowIso()}};
             selected.aiAppliedContent=next.room.aiAppliedContent;selected.memoryBranchBlocked=false;
+            if(j.threadsSeeded)WishThreads.assign(selected,WishThreads.carry(r.threads,next.room.threads));
+            else if(WishThreads.list(r).length)(next.notices||=[]).push('이 재구축은 업데이트 전에 읽은 대화라 남은 일은 바꾸지 않았습니다. 대화를 다시 읽으면 남은 일도 함께 정리합니다.');
           }else{
             for(const field of ['speechRelations','relationships','relationshipRevision','relationshipBaseline'])selected[field]=next.room[field];
             Object.assign(next.cog,{rev:(c.rev||0)+1,lastAnalysis:j.anchor,tip:j.anchor,sourceManifest:manifest,snapshots:{},pending:[],scanJob:null,updated:Date.now()});
@@ -16351,7 +16463,7 @@ function mRelationships() {
     ['공통','두 방식 모두 AI가 준 결과 JSON을 [JSON 가져오기]로 넣습니다. 자료집은 두 방식 모두 TXT로 받습니다. 정리가 끝날 때까지 그 방에서 RP를 진행하지 마세요. 원문이 바뀌면 가져오기가 거절됩니다.']]);
   function vExternalRebuild(dis=false){
     const open=S.openSet.has('external-export'),mode=externalRebuildMode();
-    const options=[['all','전체','기억 · 자료집 · 인물 모두','doc'],['memory','기억','현재상태 · 날짜로그','memory'],['lore','자료집','세계관 · 물건 · 복장 · 장소 등','book'],['people','인물','인지 · 호칭말투 · 관계감정선 · 은폐','people']];
+    const options=[['all','전체','기억 · 자료집 · 인물 모두','doc'],['memory','기억','현재상태 · 날짜로그 · 남은 일','memory'],['lore','자료집','세계관 · 물건 · 복장 · 장소 등','book'],['people','인물','인지 · 호칭말투 · 관계감정선 · 은폐','people']];
     return '<section class="m3-panel m3-external-panel" data-key="external"><b>외부 AI로 재구축</b><div class="m3-muted">전체 대화를 읽고, 선택한 영역을 다시 정리합니다.</div><div class="m3-row m3-card-actions m3-external-actions"><details class="m3-external-picker" data-open="external-export"'+(open?' open':'')+'><summary class="m3-btn mini" aria-expanded="'+open+'" aria-disabled="'+dis+'">'+ic('down')+'<span>'+(mode==='precise'?'지침 + ZIP 받기':'지침 + TXT 받기')+'</span>'+ic('chev','m3-external-chevron')+'</summary><div class="m3-external-options" popover="manual" aria-label="재구축 영역 선택"><div class="m3-external-menuhead"><b>어떤 영역을 재구축할까요?</b><small>'+(mode==='precise'?'선택하면 ZIP과 시작 문구가 준비됩니다. 자료집은 TXT로 받습니다.':'선택하면 TXT 다운로드창이 열립니다.')+'</small></div><div class="m3-external-mode"><span class="m3-title-help">재구축 방식'+help(EXTERNAL_MODE_HELP)+'</span>'+tabs([['fast','빠르게'],['precise','정밀하게']],mode,'externalMode')+'</div>'+options.map(([scope,label,desc,icon])=>'<button type="button" class="m3-external-option" data-act="externalExport" data-arg="'+scope+'"'+(dis?' disabled':'')+'><span class="m3-external-option-icon">'+ic(icon)+'</span><span><b>'+label+'</b><small>'+desc+'</small></span>'+ic('chev')+'</button>').join('')+'<p class="m3-external-menufoot">모두 전체 확정 대화를 읽으며, 정리 대상만 달라집니다.</p></div></details>'+btn('JSON 가져오기','externalImport',{cls:'mini',icon:'up',dis})+btn('지침','promptGuides',{arg:'externalAll',cls:'mini',icon:'doc',dis})+'</div>';
   }
   const POPOVER_OK=typeof HTMLElement!=='undefined'&&typeof HTMLElement.prototype.showPopover==='function';
@@ -17203,7 +17315,7 @@ diff:`<div class="m3-shell">
   function nativeBundlePreviewHtml(j,d){
     let byBundle=nativeBundlePreviewCache.get(j.draft);
     if(!byBundle){byBundle=new Map();nativeBundlePreviewCache.set(j.draft,byBundle);}
-    if(!byBundle.has(d.bundle))byBundle.set(d.bundle,esc(JSON.stringify(d.bundle==='memory'?j.draft.room.slots.filter(s=>['currentState','logSummary'].includes(s.id)):d.bundle==='people'?{people:j.draft.cog.actors,facts:j.draft.cog.facts,knowledge:j.draft.cog.state.knowledge,concealments:j.draft.cog.state.concealments,speech:j.draft.room.speechRelations,relationships:j.draft.room.relationships}:j.draft.packs.find(p=>p.scopeId===autoLorePackId(d.wishRoom))?.entries,null,2)));
+    if(!byBundle.has(d.bundle))byBundle.set(d.bundle,esc(JSON.stringify(d.bundle==='memory'?{slots:j.draft.room.slots.filter(s=>['currentState','logSummary'].includes(s.id)),threads:j.draft.room.threads||[]}:d.bundle==='people'?{people:j.draft.cog.actors,facts:j.draft.cog.facts,knowledge:j.draft.cog.state.knowledge,concealments:j.draft.cog.state.concealments,speech:j.draft.room.speechRelations,relationships:j.draft.room.relationships}:j.draft.packs.find(p=>p.scopeId===autoLorePackId(d.wishRoom))?.entries,null,2)));
     return byBundle.get(d.bundle);
   }
   // Live note under the raw current-state editor. Repaints reuse the last count, so the text is parsed once per change.
@@ -17266,12 +17378,12 @@ diff:`<div class="m3-shell">
           const before=f.choices?(f.choices.find(([k])=>k===f.before)?.[1]||'(없음)'):f.before||'(없음)';
           const shown=f.choices?(f.choices.find(([key])=>key===value)?.[1]||value):value;
           const input=f.readonly||!editing?`<pre class="m3-review-result">${esc(shown||'(없음)')}</pre>`:f.choices?selc(D(d,'edit.'+f.key),value,f.choices,'',` aria-label="${esc(g.title+' · '+f.label)}"${d.busy?' disabled':''}`):ta(D(d,'edit.'+f.key),value,'비어 있음',f.label==='쌓인 감정·핵심 전환'?100:f.label==='남은 쟁점'?64:80,` class="m3-review-text" aria-label="${esc(g.title+' · '+f.label)}" maxlength="${f.max}"${d.busy?' disabled':''}`);
-          return `<div class="m3-review-field${edited?' is-edited':''}" data-key="edit-${f.key}"><div class="m3-review-field-title"><label>${esc(f.label)}</label><span>${f.readonly?tag(d.externalScope?'읽기 전용':'수동 보호'):edited?'<span class="m3-review-edited-dot">수정됨</span>':''}${!f.readonly&&edited&&editing?btn('되돌리기','relReviewReset',{arg:d.id+'|'+f.key,cls:'quiet mini',icon:'refresh',dis:d.busy}):''}</span></div><div class="m3-review-values"><section class="m3-review-before"><small>기존 내용</small><pre>${esc(before)}</pre></section><section class="m3-review-after"><small>변경 후${editing&&!f.readonly?' · 편집 중':''}</small>${input}</section></div></div>`;
+          return `<div class="m3-review-field${edited?' is-edited':''}" data-key="edit-${f.key}"><div class="m3-review-field-title"><label>${esc(f.label)}</label><span>${f.readonly?tag(f.tag||(d.externalScope?'읽기 전용':'수동 보호')):edited?'<span class="m3-review-edited-dot">수정됨</span>':''}${!f.readonly&&edited&&editing?btn('되돌리기','relReviewReset',{arg:d.id+'|'+f.key,cls:'quiet mini',icon:'refresh',dis:d.busy}):''}</span></div><div class="m3-review-values"><section class="m3-review-before"><small>기존 내용</small><pre>${esc(before)}</pre></section><section class="m3-review-after"><small>변경 후${editing&&!f.readonly?' · 편집 중':''}</small>${input}</section></div></div>`;
         }).join('');
         return `<article class="m3-copy-item m3-review-card" data-key="review-${g.key}"><div class="m3-copy-item-head"><button type="button" class="m3-copy-title" data-act="relReviewExpand" data-arg="${d.id}|${g.key}" aria-expanded="${open}"${d.busy?' disabled':''}><small>${esc(g.category)}</small><b>${esc(g.title)}</b></button><div class="m3-review-head-actions">${g.fields.some(f=>!f.readonly)?btn(editing?'편집 마침':'편집','relReviewEdit',{arg:d.id+'|'+g.key,cls:'mini',icon:editing?'check':'edit',dis:d.busy}):''}${btn(open?'접기':'펼치기','relReviewExpand',{arg:d.id+'|'+g.key,cls:'quiet mini',dis:d.busy})}</div></div>${open?`<div class="m3-copy-item-body"><div class="m3-review-colheads"><span>기존 내용</span><span>변경 후${editing?' <small>편집 중</small>':''}</span></div>${contents}</div>`:''}</article>`;
       }).join('');
       return sheet(d,{title:d.externalScope?'외부 AI · '+ExternalBundles.labels[d.externalScope]+' 결과 확인':d.only?'관계·감정선 가져오기':'재구축 결과 가져오기',wide:true,desc:d.externalScope==='lore'?'자료집 카드의 기존·변경 후를 확인하세요. 확인 후 이 방의 자동 자료에 적용합니다.':'기존·변경 후를 비교하세요. 수정이 필요하면 편집을 누르세요.',
-        body:`${d.j?.draft?.dateWarn?`<div class="m3-status m3-warning m3-bottomgap" data-key="rv-date">${ic('alert')}<span><b>사건 날짜 확인</b><br>${esc(d.j.draft.dateWarn)}</span></div>`:''}${autoTidy}${heldJob(d,d.j)}<div class="m3-review-toolbar"><label>${selc(D(d,'category'),d.draft.category,categories.map(x=>[x,x==='전체'?'전체 항목':x]),'',` aria-label="검토할 항목"${d.busy?' disabled':''}`)}</label><span class="m3-muted">${groups.length}개 항목${changed?` <span class="m3-review-count">${changed}개 수정</span>`:''}</span></div>${cards||empty('이 분류에 적용할 내용이 없습니다.')}${groups.length>limit?btn('더 보기','relReviewMore',{arg:d.id,cls:'mini',dis:d.busy}):''}<label class="m3-secondary-consent"><input type="checkbox" data-bind="${D(d,'reviewed')}"${d.draft.reviewed?' checked':''}${d.busy?' disabled':''}><span>수정한 내용을 포함해 최종 내용을 확인했습니다.</span></label><p class="m3-muted">${d.externalScope?ExternalBundles.labels[d.externalScope]+'만 적용':d.only?'관계·감정선과 필요한 인물 연결만 적용':'현재상태·날짜로그·인지·자료·호칭·관계 적용'} · 수동 보호 유지 · 적용 전 백업</p>${d.error?`<p class="m3-error" role="alert">${esc(d.error)}</p>`:''}`,
+        body:`${d.j?.draft?.dateWarn?`<div class="m3-status m3-warning m3-bottomgap" data-key="rv-date">${ic('alert')}<span><b>사건 날짜 확인</b><br>${esc(d.j.draft.dateWarn)}</span></div>`:''}${autoTidy}${heldJob(d,d.j)}<div class="m3-review-toolbar"><label>${selc(D(d,'category'),d.draft.category,categories.map(x=>[x,x==='전체'?'전체 항목':x]),'',` aria-label="검토할 항목"${d.busy?' disabled':''}`)}</label><span class="m3-muted">${groups.length}개 항목${changed?` <span class="m3-review-count">${changed}개 수정</span>`:''}</span></div>${cards||empty('이 분류에 적용할 내용이 없습니다.')}${groups.length>limit?btn('더 보기','relReviewMore',{arg:d.id,cls:'mini',dis:d.busy}):''}<label class="m3-secondary-consent"><input type="checkbox" data-bind="${D(d,'reviewed')}"${d.draft.reviewed?' checked':''}${d.busy?' disabled':''}><span>수정한 내용을 포함해 최종 내용을 확인했습니다.</span></label><p class="m3-muted">${d.externalScope?ExternalBundles.labels[d.externalScope]+'만 적용':d.only?'관계·감정선과 필요한 인물 연결만 적용':'현재상태·날짜로그·남은 일·인지·자료·호칭·관계 적용'} · 수동 보호 유지 · 적용 전 백업</p>${d.error?`<p class="m3-error" role="alert">${esc(d.error)}</p>`:''}`,
         foot:`${btn('지금 전체 백업','fileBackup',{cls:'quiet mini',dis:d.busy})}${SP}${closeBtn(d,'취소')}${btn(d.busy?'저장 중…':d.externalScope?ExternalBundles.labels[d.externalScope]+' 결과 적용':d.only?'수정 내용으로 관계 적용':'수정 내용으로 전체 적용',d.externalScope?'externalReviewApply':'relReviewApply',{arg:d.id,cls:'primary',icon:'check',dis:d.busy||!d.draft.reviewed})}`});
     },
 
@@ -17442,7 +17554,7 @@ nativeBundle(d) {
       const j=legacy?null:stored,done=j?.segments.filter(s=>s.status==='complete').length||0;
       const complete=j?.status==='complete',applied=j?.status==='applied',ready=!!j&&!complete&&!applied;
       const remaining=j?.segments.filter(s=>s.status!=='complete').length||0,total=j?.segments.length||0,percent=total?Math.round(done/total*100):0;
-      const targets={memory:['현재상태','날짜로그'],people:['인물·인지','호칭·말투','관계·감정선','은폐'],lore:['세계관','물건·복장','장소·조직','핵심 대사']}[d.bundle];
+      const targets={memory:['현재상태','날짜로그','남은 일'],people:['인물·인지','호칭·말투','관계·감정선','은폐'],lore:['세계관','물건·복장','장소·조직','핵심 대사']}[d.bundle];
       const model=getAiSelectedModel(aiTaskSettings(loadAiSettings(),'extract'));
       const names={pending:'대기',running:'분석 중',failed:'실패',complete:'완료'};
       const stage=!j?0:complete||applied?2:done||x.busy?2:1;
@@ -17452,7 +17564,7 @@ nativeBundle(d) {
       const partition=ready&&remaining?'<section class="m3-native-partition"><div><label for="nb-count-'+esc(d.id)+'">'+(done?'남은 대화 나누기':'몇 구간으로 나눌까요?')+'</label><p>'+(done?'완료한 '+done+'구간은 그대로 보존합니다.':'원문 길이를 맞춰 AI 답변 끝에서 나눕니다.')+'</p></div><div class="m3-native-controls">'+inp(D(d,'count'),x.count,'구간 수','number',' id="nb-count-'+esc(d.id)+'" min="1" max="'+(j.rows.length-(j.segments.filter(s=>s.status==='complete').at(-1)?.end||0))+'" step="1"'+(x.busy?' disabled':''))+btn('배분하기','nativeBundleSplit',{arg:d.id,dis:x.busy})+'</div></section>':'';
       const list=j?'<section class="m3-native-progress"><div class="m3-native-section-head"><b>'+(applied?'적용 완료':complete?'정리 결과 준비됨':x.busy?'대화를 정리하고 있어요':'구간별 진행')+'</b><span>'+done+' / '+total+' 완료</span></div><div class="m3-native-track" role="progressbar" aria-label="구간 정리 진행" aria-valuemin="0" aria-valuemax="'+total+'" aria-valuenow="'+done+'"><i style="width:'+percent+'%"></i></div><div class="m3-native-segments">'+j.segments.map(s=>'<div class="m3-native-segment" data-key="nb-seg-'+s.index+'"><i class="'+s.status+'">'+(s.status==='complete'?'✓':s.index)+'</i><div><b>'+s.index+'구간</b><small>'+fmt(s.start+1)+'–'+fmt(s.end)+'번째 대화 · '+fmt(s.chars)+'자</small></div><span class="m3-native-state '+s.status+'">'+esc(names[s.status]||s.status)+'</span></div>').join('')+'</div></section>':'';
       const preview=complete?nativeBundlePreviewHtml(j,d):'';
-      const result=(complete?'<section class="m3-native-result"><div class="m3-native-section-head"><b>적용 전 결과 확인</b>'+btn('결과 파일','nativeBundleExport',{arg:d.id,icon:'down',cls:'quiet',dis:x.busy})+'</div>'+(j.stats?'<p>추가 '+j.stats.added+' · 변경 '+j.stats.changed+' · 제거 '+j.stats.removed+(d.bundle==='memory'?' (기억 슬롯 기준)':'')+'</p>':'')+'<details><summary>정리 결과 펼치기</summary><pre>'+preview+'</pre></details><p>결과 적용을 눌러야 현재 데이터에 저장됩니다.</p></section>':'')+((complete||applied)?heldJob(d,j):'');
+      const result=(complete?'<section class="m3-native-result"><div class="m3-native-section-head"><b>적용 전 결과 확인</b>'+btn('결과 파일','nativeBundleExport',{arg:d.id,icon:'down',cls:'quiet',dis:x.busy})+'</div>'+(j.stats?'<p>추가 '+j.stats.added+' · 변경 '+j.stats.changed+' · 제거 '+j.stats.removed+(d.bundle==='memory'?' (기억 슬롯·남은 일 기준)':'')+'</p>':'')+'<details><summary>정리 결과 펼치기</summary><pre>'+preview+'</pre></details><p>결과 적용을 눌러야 현재 데이터에 저장됩니다.</p></section>':'')+((complete||applied)?heldJob(d,j):'');
       const emptyState=!j?'<div class="m3-native-empty"><div>'+ic('book')+'</div><b>먼저 전체 대화를 불러오세요</b><p>분량을 확인하고 구간 수를 정할 수 있어요.<br>대화 읽기는 AI 생성 API를 사용하지 않습니다.</p></div>':'';
       const note='<details class="m3-native-help"><summary>구간 나누기와 이어하기 안내</summary><p>처음에는 원문 약 30만 자당 한 구간을 제안합니다. 원하는 구간 수로 바꿀 수 있으며, AI 답변 중간을 자르지 않습니다.</p><p>실제 요청에는 지침과 앞 구간의 정리 결과가 추가됩니다. 모델 한도 오류가 나면 남은 구간 수를 늘려 주세요. 성공한 구간은 다시 호출하지 않습니다.</p></details>';
       const error=x.error||(['failed','paused'].includes(j?.status)?j.message:'');
@@ -18621,7 +18733,7 @@ Object.assign(WUI_ADAPTER.act,{
   for(const draft of WUICache.settings.values())delete draft['unified.enabled'];WUI.paint();
  },
  loreApiBundle:()=>NativeBundles.open('lore'),loreApiRun:id=>executeLoreApiBundle(id),loreApiStop:id=>{const d=WUI.ui.dlg(id);if(d)d.draft.cancel=true;},
- nativeBundleRead:id=>NativeBundles.action(id,'read'),nativeBundleSplit:id=>NativeBundles.action(id,'split'),nativeBundleRun:id=>NativeBundles.action(id,'run'),nativeBundleApply:id=>NativeBundles.action(id,'apply'),nativeBundleStop:()=>NativeBundles.stop(),nativeBundleExport:id=>{const d=WUI.ui.dlg(id),j=d&&NativeBundles.get(d.wishRoom,d.bundle);if(j?.draft)downloadText(JSON.stringify(j.bundle==='memory'?j.draft.room.slots.filter(s=>['currentState','logSummary'].includes(s.id)):j.bundle==='people'?{cognition:j.draft.cog,speech:j.draft.room.speechRelations,relationships:j.draft.room.relationships}:j.draft.packs.find(p=>p.scopeId===autoLorePackId(d.wishRoom)),null,2),'Wish-'+j.bundle+'-정리결과.json','application/json');},
+ nativeBundleRead:id=>NativeBundles.action(id,'read'),nativeBundleSplit:id=>NativeBundles.action(id,'split'),nativeBundleRun:id=>NativeBundles.action(id,'run'),nativeBundleApply:id=>NativeBundles.action(id,'apply'),nativeBundleStop:()=>NativeBundles.stop(),nativeBundleExport:id=>{const d=WUI.ui.dlg(id),j=d&&NativeBundles.get(d.wishRoom,d.bundle);if(j?.draft)downloadText(JSON.stringify(j.bundle==='memory'?{slots:j.draft.room.slots.filter(s=>['currentState','logSummary'].includes(s.id)),threads:j.draft.room.threads||[]}:j.bundle==='people'?{cognition:j.draft.cog,speech:j.draft.room.speechRelations,relationships:j.draft.room.relationships}:j.draft.packs.find(p=>p.scopeId===autoLorePackId(d.wishRoom)),null,2),'Wish-'+j.bundle+'-정리결과.json','application/json');},
  unifiedMemory:()=>U3.run(state.currentRoom,'memory'),cogRe:()=>U3.run(state.currentRoom,'observe'),
  memoryBase:()=>U3.baseline(state.currentRoom),unifiedRetry:()=>U3.run(state.currentRoom,'retry'),
 });
