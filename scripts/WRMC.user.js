@@ -4393,7 +4393,7 @@ summary는 사건 하나만 읽어도 누가 무엇을 왜 했고 어떤 결과�
 - 분량: 현재상태는 매 턴 RP에 들어가므로 전체가 보통 6,000자 안팎에 머물게 쓴다. 새로 쓰는 내용에는 지금 유효한 것만 적고 끝난 경위는 적지 않는다. 현재상태가 1만 자를 넘은 채로 섹션을 고쳐 쓸 때는 날짜별 사건에 이미 남은 끝난 경위부터 그 섹션에서 뺀다. 저장 상한은 45,000자다. 분량을 줄이려고 지금 유효한 사실을 빼지는 않는다. 줄일 때는 같은 말 반복부터 줄인다.
 
 [우선 보존]
-1. 기준 시점: 원문에 적힌 마지막 장면의 작품 속 날짜·계절·시간대와 장소, 장기간 유지되는 진행 단계. 시간이 지나면 달라지는 값(나이·임신 개월 수·회복 경과)은 이 기준 시점의 최신 값으로 적는다. 최근 장면들의 분위기·서술의 결을 원문이 보여 주는 만큼 한 줄로 적는다(예: 가족 소동극 같은 일상).
+1. 기준 시점: 원문에 적힌 마지막 본편 장면(회상·꿈이 아닌 지금 진행 중인 장면)의 작품 속 날짜·계절·시간대와 장소, 장기간 유지되는 진행 단계. 시간이 지나면 달라지는 값(나이·임신 개월 수·회복 경과)은 이 기준 시점의 최신 값으로 적는다. 최근 장면들의 분위기·서술의 결을 원문이 보여 주는 만큼 한 줄로 적는다(예: 가족 소동극 같은 일상).
 2. 지속 부상·질병·임신·출산 뒤 회복·체력 저하 같은 신체 상태와 그 경과(언제부터인지, 원문에 적힌 기간, 지금 어느 정도인지). 바뀐 경위는 사건에 둔다.
 3. 현재 신분·소속·직업·계약·합의
 4. 관계에서 지금 지켜지는 실무값(합의·조건·경계). 상대가 어떤 의미인지와 감정은 관계·감정선 영역에 둔다.
@@ -4405,7 +4405,7 @@ summary는 사건 하나만 읽어도 누가 무엇을 왜 했고 어떤 결과�
 10. 진행 중인 상황과 책임. 언젠가 끝나는 약속·예정·목표는 남은 일이 맡는다.
 11. 지금 장면에 계속 영향을 주는 위험의 현재 상황. 그 위험이 앞으로 어떻게 될지와 답이 나오지 않은 수수께끼는 남은 일이 맡는다.
 12. 반복적인 연속성 오류를 막는 핵심 최신값
-13. 생활의 결: 지금도 되풀이되는 애정 표현·장난·놀림·단골 푸념, 감각 모티프(늘 나는 향, 부르는 노래, 되풀이되는 말), 기념일과 정해진 일과. 두 번 이상 나왔거나 원문이 '늘·매번'처럼 반복을 밝힌 것만, 누가 누구에게 언제 하는지 짧게 적는다. 부르는 말과 말버릇 자체는 호칭·말투가 맡는다. PC 쪽 습관은 상대가 알아보고 반응하는 단서로 쓴다. 최근 확인 시점 뒤로 한동안 다시 나오지 않았거나 새 장면이 그 습관이 끝났음을 보여 주면 여기서 빼고 자료 other 카드에 맡긴다.
+13. 생활의 결: 지금도 되풀이되는 애정 표현·장난·놀림·단골 푸념, 감각 모티프(늘 나는 향, 부르는 노래, 되풀이되는 말), 기념일과 정해진 일과. 두 번 이상 나왔거나 원문이 '늘·매번'처럼 반복을 밝힌 것만, 누가 누구에게 언제 하는지 짧게 적는다. 부르는 말과 말버릇 자체는 호칭·말투가 맡는다. PC 쪽 습관은 상대가 알아보고 반응하는 단서로 쓴다. 다시 나오지 않았다는 것만으로 습관이 끝났다고 보지 않는다. 새 장면이 끝났음을 보여 주면 여기서 빼고, 오래 쓰이지 않아 자리를 비워야 할 때는 지금도 유효한 습관으로 자료 other 카드에 옮긴다.
 14. 끝나는 때 없이 계속 지키는 약속·합의·맹세: 누가 누구에게 무엇을, 지금 지켜지는지·깨졌는지, 조건. 문구가 중요하면 key_quote를 가리키는 말만 쓰고 원문을 여기 다시 쓰지 않는다.
 15. 인물별 지금의 동기·두려움: 인물을 움직이는 바람과 두려움 중 원문에서 밝히거나 행동으로 보여 준 것만. 이루거나 실패하면 끝나는 목표는 남은 일이, 특정 상대에게 바라는 것·두려워하는 것은 관계·감정선이 맡는다. PC는 USER가 직접 밝힌 것만.
 - 13~15는 매 턴 RP에 들어가므로 합계 약 1,000자 안에서 다음 장면에 다시 쓰일 만한 것부터 남긴다. 줄마다 끝에 마지막으로 확인된 시점을 짧게 붙이고(예: '(최근 확인: 5년 후 생일 연회 다음 날)'), 새 RP에서 그 줄의 내용이 다시 나오거나 바뀌면 그 시점으로 고친다.
@@ -4802,6 +4802,8 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
     if(!range?.length)return '';
     const at=list.findIndex(t=>t.key===range[0].key);if(at<=0)return '';
     const rows=[];for(let i=at-1;i>=Math.max(0,at-2);i--){const next=[list[i],...rows];if(wishTurnText(next).length>12000)break;rows.unshift(list[i]);}
+    // One turn alone over 12,000: keep its last part, from a line start when one is near, so the pronouns still have a referent.
+    if(!rows.length){const tail=wishTurnText([list[at-1]]).slice(-12000),line=tail.indexOf('\n');return line>=0&&line<1000?tail.slice(line+1):tail;}
     return wishTurnText(rows);
   }
   function request(room,cog,packs,p,options={}) {
@@ -5823,7 +5825,7 @@ USER가 OOC로 요청해 받은 보고서·요약·시간 건너뛰기·'보지 
 섹션 종류와 개수는 고정하지 않는다. 실제 현재상태를 읽고 필요한 만큼만 만든다. 관계/부상/소유 같은 기본 분류를 모두 채우려 하지 않는다.
 
 우선 보존할 수 있는 내용:
-- 기준 시점: 원문에 적힌 마지막 장면의 작품 속 날짜·계절·시간대와 장소, 장기간 유지되는 진행 단계. 시간이 지나면 달라지는 값(나이·임신 개월 수·회복 경과)은 이 기준 시점의 최신 값으로 적는다. 최근 장면들의 분위기·서술의 결을 원문이 보여 주는 만큼 한 줄로 적는다(예: 가족 소동극 같은 일상).
+- 기준 시점: 원문에 적힌 마지막 본편 장면(회상·꿈이 아닌 지금 진행 중인 장면)의 작품 속 날짜·계절·시간대와 장소, 장기간 유지되는 진행 단계. 시간이 지나면 달라지는 값(나이·임신 개월 수·회복 경과)은 이 기준 시점의 최신 값으로 적는다. 최근 장면들의 분위기·서술의 결을 원문이 보여 주는 만큼 한 줄로 적는다(예: 가족 소동극 같은 일상).
 - 지속 부상·질병·임신·출산 뒤 회복·체력 저하 같은 신체 상태와 그 경과(언제부터인지, 원문에 적힌 기간, 지금 어느 정도인지). 바뀐 경위는 events에 둔다.
 - 신분·소속·직업·계약·합의
 - 관계에서 지금 지켜지는 실무값(합의·조건·경계). 상대가 어떤 의미인지와 감정은 관계·감정선(relationships)에 둔다.
@@ -5834,7 +5836,7 @@ USER가 OOC로 요청해 받은 보고서·요약·시간 건너뛰기·'보지 
 - 현재 유효한 특수 능력·제약·변화
 - 진행 중인 상황과 책임. 언젠가 끝나는 약속·예정·목표는 threads가 맡는다.
 - 지금 장면에 영향을 주는 위험의 현재 상황. 그 위험이 앞으로 어떻게 될지와 답이 나오지 않은 수수께끼는 threads가 맡는다.
-- 생활의 결: 마지막 시점 무렵에도 되풀이되는 애정 표현·장난·놀림·단골 푸념, 감각 모티프(늘 나는 향, 부르는 노래, 되풀이되는 말), 기념일과 정해진 일과. 두 번 이상 나왔거나 원문이 '늘·매번'처럼 반복을 밝힌 것만, 누가 누구에게 언제 하는지 짧게 적는다. 부르는 말과 말버릇 자체는 호칭·말투(speech)가 맡는다. PC 쪽 습관은 상대가 알아보고 반응하는 단서로 쓴다. 앞에서 되풀이되다 마지막 시점 무렵에는 더 이상 나오지 않는 모티프는 여기에 두지 않고 references의 other 카드에 맡긴다.
+- 생활의 결: 마지막 시점 무렵에도 되풀이되는 애정 표현·장난·놀림·단골 푸념, 감각 모티프(늘 나는 향, 부르는 노래, 되풀이되는 말), 기념일과 정해진 일과. 두 번 이상 나왔거나 원문이 '늘·매번'처럼 반복을 밝힌 것만, 누가 누구에게 언제 하는지 짧게 적는다. 부르는 말과 말버릇 자체는 호칭·말투(speech)가 맡는다. PC 쪽 습관은 상대가 알아보고 반응하는 단서로 쓴다. 마지막 시점 무렵에 다시 나오지 않았다는 것만으로 습관이 끝났다고 보지 않는다. 원문이 끝났음을 보여 주면 여기에 두지 않고, 오래 쓰이지 않아 자리를 비워야 할 때는 지금도 유효한 습관으로 references의 other 카드에 둔다.
 - 계속 지키는 약속·합의·맹세: 끝나는 때 없이 이어지는 것만, 누가 누구에게 무엇을, 지금 지켜지는지·깨졌는지, 조건. 문구가 중요하면 key_quote를 가리키는 말만 쓰고 원문을 여기 다시 쓰지 않는다.
 - 인물별 지금의 동기·두려움: 인물을 움직이는 바람과 두려움 중 원문에서 밝히거나 행동으로 보여 준 것만. 이루거나 실패하면 끝나는 목표는 threads가, 특정 상대에게 바라는 것·두려워하는 것은 relationships가 맡는다. PC는 USER가 직접 밝힌 것만.
 생활의 결·계속 지키는 약속·동기 세 항목은 매 턴 RP에 들어가므로 합계 약 1,000자 안에서 다음 장면에 다시 쓰일 만한 것부터 남기고, 줄마다 끝에 마지막으로 확인된 시점을 짧게 붙인다(예: '(최근 확인: 5년 후 생일 연회 다음 날)'). 시간을 크게 건너뛴 보고서나 'N년 후' 장면 뒤에는 이 세 항목과 지속 합의를 다시 확인하고, 새 장면·보고서와 다르면 새 것을 쓴다(예: 예전 합의 '외출 시 호위 동행'이 새 장면에서 '주 1회 변장 호위'로 바뀌었으면 새 것).
@@ -13181,11 +13183,24 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     // 실제 USER 전송 직전에만 그 메시지를 관련성 검색어로 사용합니다.
     // 인지 개별 수동 선택은 같은 USER의 리롤까지 유지하고, 이미 한 번 쓴 선택은 다음 새 USER 전송에서 자동 초기화합니다.
     const cognitionOverrides=cognitionOverridesForBridge(p,reason);
-    const cognition=await bridge?.getStableContext?.(apiChatIdOf(room),frame.stable,{useInput:reason==='before-send'||reason==='before-reroll',overrides:cognitionOverrides,fullFit:true});
+    // 인지 골라서: the scene is the turn the memory recall reads. Before a send it is the latest AI answer; a reroll reads the
+    // USER being rerolled and the carrier AI answer, never the answer it discards. Other reasons pass no scene.
+    const sceneOf=m=>m?recallSceneText(stripOurContextBlock(messageTextOf(m)).text):'';
+    const cognitionScene=reason==='before-send'?sceneOf(frame.latest):reason==='before-reroll'?[sceneOf(frame.carrier),String(messageTextOf(frame.messages.find(m=>messageRoleOf(m)==='user'&&String(messageIdOf(m)||'')===frame.latestUserId))||'')].filter(x=>x.trim()).join('\n\n'):'';
+    const cognition=await bridge?.getStableContext?.(apiChatIdOf(room),frame.stable,{useInput:reason==='before-send'||reason==='before-reroll',overrides:cognitionOverrides,fullFit:true,sceneText:cognitionScene,sticky:p.cognitionSticky||{}});
     if((reason==='before-send'||reason==='before-reroll')&&(cognitionOverrides.include.length||cognitionOverrides.exclude.length))normalizePendingCognitionOverrides(p).usedAt=Date.now();
     if(String((p.items||[]).find(i=>i.group==='cognition'||i.slotId==='__cognition')?.content||'')!==String(cognition?.text||''))p.recallNeedsRefresh=true;
     p.items=(p.items||[]).filter(i=>i.group!=='cognition'&&i.slotId!=='__cognition');
     p.cognitionIncludedIds=cognition?.includedIds||[];
+    if(cognition?.pick){
+      // A fact written in full on its own stays in full for the next two real sends (a reroll neither counts nor renews).
+      // Facts no longer in the context drop out of the sticky map.
+      const live=new Set(cognition.includedIds||[]),sticky={};
+      for(const [fid,n] of Object.entries(p.cognitionSticky||{})){const left=Number(n)-(reason==='before-send'?1:0);if(live.has(fid)&&left>0)sticky[fid]=left;}
+      if(reason==='before-send')for(const fid of cognition.pick.fresh)sticky[fid]=2;
+      if(Object.keys(sticky).length)p.cognitionSticky=sticky;else delete p.cognitionSticky;
+      p.cognitionPick={full:cognition.pick.full,brief:cognition.pick.brief,reasons:cognition.reasons||{}};
+    }else{delete p.cognitionPick;if(cognition)delete p.cognitionSticky;}
     if(cognition?.text)p.items.unshift({slotId:'__cognition',title:'인물별 인지 상태',group:'cognition',content:cognition.text,totalTurns:0,usedTurns:0,autoType:'cognition',turnStartUserId:frame.latestUserId,manualTurnOverride:cognitionOverrides.include.length>0});
     if(reason==='before-send'||reason==='before-reroll'){
       const latestUserText=frame.stable.find(message=>messageRoleOf(message)==='user');
@@ -14189,6 +14204,8 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
   const emptyState = () => ({ knowledge: {}, concealments: [], present: [] });
   const COGNITION_CONTEXT_MODES = ['smart','all'];
   const normalizeCognitionContextMode = value => COGNITION_CONTEXT_MODES.includes(String(value)) ? String(value) : 'smart';
+  // 인지 넣는 방식: all = every fact in full (the original), pick = facts tied to the scene in full, the rest as one line. Missing = all.
+  const normalizeCognitionSelectMode = value => value === 'pick' ? 'pick' : 'all';
   const COGNITION_FACT_INJECTION_MODES = ['auto','always','exclude'];
   function normalizeCognitionFactInjectionMode(factOrValue, legacyPinned = false) {
     const raw = typeof factOrValue === 'object' && factOrValue ? factOrValue.injectionMode : factOrValue;
@@ -14319,7 +14336,9 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     if(!present.size)for(const a of actors)if(a.isPlayer)focus.add(a.id);
     return {focus,present,mentioned};
   }
-  function buildContext(room, state, userText, budget = 1000, pendingTurns = 0, contextOverrides = {}) {
+  // pick (골라서): {sticky:{factId:remainingSends}}. userText is then the scene; a fact with no reason to be in full here and
+  // not kept by sticky gets one line (title, knowledge, concealment boundary). Null keeps the original output.
+  function buildContext(room, state, userText, budget = 1000, pendingTurns = 0, contextOverrides = {}, pick = null) {
     const value=room, mode=normalizeCognitionContextMode(value.contextMode),expression=SecondaryRebuild.cognitionProjector(value.id);
     const overrides=normalizeCognitionContextOverrides(contextOverrides), includeOnce=new Set(overrides.include), excludeOnce=new Set(overrides.exclude);
     room = roomAt(room,state);
@@ -14362,7 +14381,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       add(split,'현재 인물들의 앎이 서로 다름',110);
       add(sensitive&&focusActors.some(a=>know(state,a.id,f.id)==='unaware'),'현재 인물이 모른다고 확인된 중요 정보',95);
       add(factReviews.length>0,'인지 확인이 필요한 후보가 있음',90);
-      add(query.strong,'현재 입력과 직접 관련',85);
+      add(query.strong,pick?'지금 장면과 직접 관련':'현재 입력과 직접 관련',85);
       add(recent,'최근 인지 상태가 바뀜',70);
       add(includeThisTurn,'이번 턴에 수동으로 포함',220);
       add(!includeThisTurn&&permanentMode==='always','사용자가 항상 넣기로 설정',180);
@@ -14400,7 +14419,10 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
         parts.push(line + (scope && scope !== '지정 상대에게 비공개' ? '; 숨기는 범위: ' + (scope.length > 200 ? scope.slice(0, 200) + '…' : scope) : '')); }
       const defaultScore=conceals.length*20+unaware.length*8+unverified.length*3+(query.strong?18:0)+(includeThisTurn?300:0)+(permanentMode==='always'?220:0)+(recent?12:0)+(factReviews.length?16:0)+(split?18:0);
       const compact=['정보: '+String(f.label||'제목 없음')+' (상세 본문은 길이 제한으로 생략; 이 제목만으로 내용을 추정하지 않음)',...parts.slice(1,parts.length-lite.length),...lite].join('\n');
-      sections.push({id:f.id,text:parts.join('\n'),compact,score:mode==='all'?defaultScore:score,reason:reasons[0]||'모든 인지 정보',reasons,present:present.size,mentioned:mentioned.size});
+      const stuck=!!pick&&!reasons.length&&Number(pick.sticky?.[f.id])>0, brief=!!pick&&!reasons.length&&!stuck;
+      if(stuck)reasons.push('최근 장면에서 자세히 넣음');
+      const text=brief?['정보: '+String(f.label||'제목 없음')+' (지금 장면과 관련이 적어 상세 생략; 제목만으로 내용을 추정하지 않음)',...parts.slice(1,parts.length-lite.length),...lite].join('\n'):parts.join('\n');
+      sections.push({id:f.id,text,compact,score:mode==='all'?defaultScore:score,reason:reasons[0]||(brief?'지금 장면과 관련이 적음':'모든 인지 정보'),reasons,present:present.size,mentioned:mentioned.size,brief,fresh:!!pick&&!brief&&!stuck});
     }
     sections.sort((a,b)=>b.score-a.score||a.id.localeCompare(b.id));
     const included=[],dropped=[],compacted=[],reasonMap={};
@@ -14415,7 +14437,10 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       else if((text+'\n\n'+compactBlock+footerBlock).length<=budget){text+='\n\n'+compactBlock;included.push(s.id);compacted.push(s.id);}
       else dropped.push(s.id);
     }
-    return {text:included.length?text+footerBlock:'',included,dropped,compacted,suppressed,reasons:reasonMap,mode,selected:sections.map(s=>s.id)};
+    const out={text:included.length?text+footerBlock:'',included,dropped,compacted,suppressed,reasons:reasonMap,mode,selected:sections.map(s=>s.id)};
+    // full/brief: how each included fact was written; fresh: in full on its own (not by sticky) — the next sends keep it in full.
+    if(pick){const kept=new Set(included),of=test=>sections.filter(s=>kept.has(s.id)&&test(s)).map(s=>s.id);out.pick={full:of(s=>!s.brief),brief:of(s=>s.brief),fresh:of(s=>s.fresh)};}
+    return out;
   }
 
   function applyFactMaintenance(value,c) {
@@ -14506,14 +14531,19 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       const raw=newestFirst.map(m=>({_id:String(messageIdOf(m)),role:messageRoleOf(m)}));
       const safe=value.enabled&&value.historyPolicy==='stable-user-v1'&&(!value.lastAnalysis||raw.some(m=>m._id===value.lastAnalysis))&&sourceStillPresent(value.sourceManifest||[],raw);
       if(!safe){scheduleCognitionCatchup(String(rid),800);return null;}
-      const ctx=options.fullFit?buildContext({...value,contextMode:'all'},value.state,options.useInput===false?'':(contextInput.get(String(rid))||''),Number.MAX_SAFE_INTEGER,cognitionPendingCount(value),options.overrides||{}):cognitionContext(value,options?.useInput===false?'':undefined,options?.overrides||{});return {text:ctx.text,status:'확정 대화 기준 인지',updatedAt:Date.now(),includedIds:ctx.included||[],reasons:ctx.reasons||{}};
+      // 골라서 reads the scene (options.sceneText: the same turn the memory recall uses) with the draft; 전부 keeps the draft alone.
+      const draft=options.useInput===false?'':(contextInput.get(String(rid))||''),pick=options.fullFit&&normalizeCognitionSelectMode(value.selectMode)==='pick';
+      const ctx=options.fullFit?buildContext({...value,contextMode:'all'},value.state,pick?[String(options.sceneText||''),draft].filter(x=>x.trim()).join('\n\n'):draft,Number.MAX_SAFE_INTEGER,cognitionPendingCount(value),options.overrides||{},pick?{sticky:options.sticky||{}}:null):cognitionContext(value,options?.useInput===false?'':undefined,options?.overrides||{});return {text:ctx.text,status:'확정 대화 기준 인지',updatedAt:Date.now(),includedIds:ctx.included||[],reasons:ctx.reasons||{},...(ctx.pick?{pick:ctx.pick}:{})};
     },
     async invalidateRuntime(rid){rid=String(rid);contextInput.delete(rid);contextCache.delete(rid);passiveSendKinds.delete(rid);publishContext(rid,'','기록 새 기준 대기');},
     // Cognition runs go through U3 and are not tracked here, so the legacy isBusy() guards never block (unchanged).
     isBusy(){return false;},
     async snapshotRaw(rid){ return clone(await readRoom(String(rid))); },
     async getView(rid,options={}){
-      const value=await readRoom(String(rid)),ctx=cognitionContext(value,options?.useInput===false?'':undefined,options?.overrides||{});return {...roomAt(value),contextMode:normalizeCognitionContextMode(value.contextMode),effectiveAutoEvery:effectiveCognitionAutoEvery(value),contextDiagnostics:{mode:ctx.mode,included:ctx.included.length,includedIds:ctx.included,dropped:ctx.dropped.length,droppedIds:ctx.dropped,compacted:ctx.compacted?.length||0,suppressed:ctx.suppressed?.length||0,suppressedIds:ctx.suppressed||[],selected:ctx.selected?.length||0,reasons:ctx.reasons||{},waiting:!!ctx.waiting}};
+      const value=await readRoom(String(rid)),ctx=cognitionContext(value,options?.useInput===false?'':undefined,options?.overrides||{});
+      // 골라서 without an armed injection: the panel shows which facts would go in full or as one line (no scene, no sticky).
+      const pickCtx=normalizeCognitionSelectMode(value.selectMode)==='pick'&&!ctx.waiting?buildContext({...value,contextMode:'all'},value.state,options?.useInput===false?'':(contextInput.get(String(rid))||''),Number.MAX_SAFE_INTEGER,cognitionPendingCount(value),options?.overrides||{},{sticky:{}}):null;
+      return {...roomAt(value),contextMode:normalizeCognitionContextMode(value.contextMode),effectiveAutoEvery:effectiveCognitionAutoEvery(value),contextDiagnostics:{mode:ctx.mode,included:ctx.included.length,includedIds:ctx.included,dropped:ctx.dropped.length,droppedIds:ctx.dropped,compacted:ctx.compacted?.length||0,suppressed:ctx.suppressed?.length||0,suppressedIds:ctx.suppressed||[],selected:ctx.selected?.length||0,reasons:ctx.reasons||{},waiting:!!ctx.waiting,...(pickCtx?{pick:{full:pickCtx.pick.full,brief:pickCtx.pick.brief,reasons:pickCtx.reasons}}:{})}};
     },
     getSettings(){
       return clone({
@@ -14593,6 +14623,12 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       },rid);
       const value=await readRoom(rid),ctx=cognitionContext(value);publishContext(rid,ctx.text,'인지 정보 직접 편집');
       return resultId;
+    },
+    // A setting, not an edit of what anyone knows: editRev and the context snapshot stay as they are.
+    async setSelectMode(rid,mode){
+      rid=String(rid);mode=normalizeCognitionSelectMode(mode);
+      await updateRoom(rid,r=>{r.selectMode=mode;});
+      return mode;
     },
     async setFactInjectionMode(rid,factId,mode){
       rid=String(rid);factId=String(factId);mode=normalizeCognitionFactInjectionMode(mode);
@@ -14735,6 +14771,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
         const n=Number(value.autoEveryOverride);
         value.autoEveryOverride=Number.isInteger(n)&&n>=1&&n<=TURN_INTERVAL_MAX?n:null;
         value.contextMode=normalizeCognitionContextMode(value.contextMode);
+        if(value.selectMode!==undefined)value.selectMode=normalizeCognitionSelectMode(value.selectMode);
         value.facts=Array.isArray(value.facts)?value.facts.map(f=>{const mode=normalizeCognitionFactInjectionMode(f);return {...f,injectionMode:mode,pinned:mode==='always'};}):[];
         resolve(value);
       }; q.onerror = () => reject(q.error);
@@ -15568,6 +15605,7 @@ html.rpcm-mobile-keyboard-open #wish-rp-root{top:var(--rpcm-vv-top,0px);bottom:a
 .m3-external-mode{padding:6px 11px 12px;border-bottom:1px solid var(--m3-line2);margin-bottom:5px}
 #wish-rp-root .m3-external-mode>.m3-title-help{display:flex;font-size:11.5px;font-weight:600;color:var(--m3-fg2);margin-bottom:8px}
 .m3-external-mode .m3-tabs{margin:0}
+.m3-cog-mode .m3-tabs{flex:0 1 180px;margin:0}
 .m3-external-option{display:flex;align-items:center;gap:11px;width:100%;border:0;border-radius:9px;padding:11px 10px;background:transparent;color:var(--m3-fg);font:inherit;text-align:left;cursor:pointer}
 .m3-external-option:hover,.m3-external-option:focus-visible{background:var(--m3-accent-soft);outline:2px solid var(--m3-accent-line);outline-offset:-2px}
 .m3-external-option:disabled{opacity:.5;cursor:default}
@@ -16509,20 +16547,22 @@ function mRelationships() {
   const nm = id => (V.cog.actors.find(a => a.id === id) || {}).name || '?';
   function factPanel(f) {
     const off = V.pol.cog === 'off';
-    const badge = off ? '' : f.mode === 'exclude' ? kind('주입 안 함', '#8b93a9') : f.included ? kind(f.mode === 'always' ? '항상 선택' : '자동 선택', '#5aa98c') : '';
+    const pick = V.cog.selectMode === 'pick';
+    const badge = off ? '' : f.mode === 'exclude' ? kind('주입 안 함', '#8b93a9') : f.included ? kind(f.mode === 'always' ? '항상 선택' : !pick ? '자동 선택' : f.brief ? '한 줄' : '자세히', f.brief ? COL.cog : '#5aa98c') : '';
     return `<section class="m3-panel" data-key="ft-${esc(f.id)}" style="--cc:${COL.cog}"><div class="m3-row">${kind(L.fact[f.type] || f.type || '정보', COL.cog)}<b class="m3-grow">${esc(f.label)}</b>${badge}${selc('fact.mode:' + f.id, f.mode, [['auto', '자동'], ['always', '항상'], ['exclude', '제외']], 'm3-select mini', 'aria-label="주입 방식"')}</div><p>${esc(f.content)}</p>
     <div class="m3-know">${V.cog.actors.map(a => { const k = (f.know || {})[a.id] || 'unverified'; return `<span class="m3-chip ${k === 'aware' ? 'known' : k === 'unaware' ? 'never' : 'unknown'}">${k === 'aware' ? ic('check') : ''}${esc(a.name)} · ${L.know[k] || k}</span>`; }).join('')}</div>
     ${(f.con || []).map(c => `<div class="m3-secret">${ic('eye')}<span><b>${esc(nm(c.h))}</b>는 <b>${esc(nm(c.t))}</b>에게 숨김 · ${esc(c.scope)}${c.pub ? ` · 공개용 “${esc(c.pub)}”` : ''}</span></div>`).join('')}
-    ${f.included && f.why ? `<p class="m3-muted" style="margin-top:9px">이번 턴 선택 이유 · ${esc(f.why)}</p>` : ''}<div class="m3-row m3-card-actions">${btn('편집', 'ftEdit', { arg: f.id, cls: 'mini', icon: 'edit' })}${btn('삭제', 'ftDel', { arg: f.id, cls: 'danger mini' })}</div></section>`;
+    ${f.included && f.why ? `<p class="m3-muted" style="margin-top:9px">${pick ? '자세히 넣는 이유' : '이번 턴 선택 이유'} · ${esc(f.why)}</p>` : ''}<div class="m3-row m3-card-actions">${btn('편집', 'ftEdit', { arg: f.id, cls: 'mini', icon: 'edit' })}${btn('삭제', 'ftDel', { arg: f.id, cls: 'danger mini' })}</div></section>`;
   }
   function vCog() {
-    const c = V.cog, pick = c.facts.filter(f => f.included).length;
+    const c = V.cog, pick = c.facts.filter(f => f.included).length, brief = c.facts.filter(f => f.included && f.brief).length;
     return `${pageHead('인물 '+help(helpSections([['인물·인지','누가 무엇을 알고 모르는지, 누구에게 숨기는지를 관리합니다. 인지 주입 버튼과 각 정보의 포함·제외 설정을 따릅니다.'],['호칭·말투','화자→상대별 현재 호칭과 말투를 관리합니다. 호칭·말투 주입을 켜면 매턴 포함하며 과거 호칭보다 현재값을 우선합니다.'],['인물 묶음 정리','팝업에서 전체 확정 대화를 읽고 구간 수를 선택합니다. 인물·인지·호칭·말투·관계·감정선·은폐만 내장 API로 정리하고 결과 확인 후 적용합니다.']])), `<span class="m3-actions">${btn('자동 정리 설정', 'nav', { arg: 'settings', cls: 'quiet mini', icon: 'set' })}${btn('모아보기','personDossier',{cls:'mini',icon:'search'})}${btn('관계도','relationMap',{cls:'mini',icon:'relation'})}${btn('인물 묶음 정리', 'cogRe', { cls: 'mini', icon: 'refresh', dis: !!V.ai.manual })}</span>`)}
     ${tabs([['people', '인물·인지'], ['speech', '호칭·말투'], ['relationships','관계·감정선'], ['review', `검토 ${V.reviews.length}`]], S.cog, 'cogSub')}
     <div class="m3-sub" data-key="cog-${S.cog}">${S.cog === 'relationships' ? mRelationships() : S.cog === 'speech' ? mSpeech() : S.cog === 'review' ? `<div class="m3-sechead"><span class="m3-muted">자동 정리가 보류한 후보와 이전 버전 후보입니다. 반영하거나 제외해 주세요</span>${V.reviews.length ? btn('모두 제외', 'rvClear', { cls: 'quiet mini' }) : ''}</div>${heldCReviews()}` :
-      `<div class="m3-sechead"><b>인물 ${c.actors.length}</b><span class="m3-actions">${btn('인물 추가', 'acNew', { cls: 'mini', icon: 'plus' })}${chip('주입','cogInclude',V.pol.cog!=='off')}</span></div>
+      `<div class="m3-setting-row m3-cog-mode"><span class="m3-title-help"><b>인지 넣는 방식</b>${help(helpSections([['전부', '모든 인지를 자세히 넣습니다(지금까지의 방식).'], ['골라서', '지금 장면(내 입력과 최신 AI 답)에 관련된 인지는 자세히, 나머지는 누가 알고 누가 모르는지만 한 줄로 넣습니다. 주입 안 함으로 정한 인지만 빠집니다.']]))}</span>${tabs([['all', '전부'], ['pick', '골라서']], c.selectMode, 'cogSelectMode')}</div>
+      <div class="m3-sechead"><b>인물 ${c.actors.length}</b><span class="m3-actions">${btn('인물 추가', 'acNew', { cls: 'mini', icon: 'plus' })}${chip('주입','cogInclude',V.pol.cog!=='off')}</span></div>
       <div class="m3-people">${c.actors.map(a => `<div class="m3-who" data-key="who-${esc(a.id)}">${a.pc ? '<span class="m3-me">PC</span>' : ''}${a.present ? '<span class="m3-here">현장</span>' : ''}<button type="button" class="m3-person-open" data-act="acEdit" data-arg="${esc(a.id)}"><span class="m3-av">${esc(String(a.name || '?')[0])}</span><b>${esc(a.name)}</b><small>${esc((a.aliases || []).join(' · ') || '별칭 없음')}</small></button></div>`).join('') || '<p class="m3-muted">등록된 인물이 없습니다.</p>'}</div>
-      <div class="m3-sechead"><span class="m3-title-help"><b>인지 현황</b><small class="m3-muted">정보 ${c.facts.length}개 · 이번 턴 선택 ${pick}개</small></span>${btn('정보 추가', 'ftNew', { cls: 'mini', icon: 'plus' })}</div>
+      <div class="m3-sechead"><span class="m3-title-help"><b>인지 현황</b><small class="m3-muted">정보 ${c.facts.length}개 · ${c.selectMode === 'pick' ? `자세히 ${pick - brief}개 · 한 줄 ${brief}개` : `이번 턴 선택 ${pick}개`}</small></span>${btn('정보 추가', 'ftNew', { cls: 'mini', icon: 'plus' })}</div>
       ${c.facts.map(factPanel).join('') || empty('인지 정보가 없습니다.')}`}</div>`;
   }
 
@@ -17760,7 +17800,7 @@ nativeBundle(d) {
     const items = V.inj.items, on = items.filter(i => !i.off);
     const body = !V.inj.armed ? `<div class="wq-empty">${esc(V.labels.quickEmpty || '현재 주입 중인 항목이 없습니다.')}<div class="m3-topgap">${btn('주입 시작', 'arm', { cls: 'primary mini', icon: 'check' })}</div></div>` :
       `<div class="wq-gt">${V.inj.verified?'저장된 주입 확인':'주입 예정 · 확인 대기'} ${on.length}</div>${items.map(i => `<label class="wq-row ${i.off ? 'is-off' : ''}" data-key="q-${esc(i.rowKey||i.key)}"><input type="checkbox" data-bind="quick.item:${esc(i.key)}"${i.off ? '' : ' checked'}${has('quickItems') ? '' : ' disabled'}><i></i>${kind(i.label || KLABEL[i.kind] || '', COL[i.kind] || COL.guide)}<span class="m3-t"><b>${esc(i.title)}</b><small>${i.off ? esc(i.offReason||'현재 주입에서 제외됨') : fmt(i.size) + '자' + (!i.why||i.why==='켜져 있으면 계속 포함'?'':' · ' + esc(i.why))}</small></span></label>`).join('')}
-      ${V.quickCog.length ? `<div class="wq-gt">인지 개별 선택 · 이번 턴만</div>${V.quickCog.map(f => `<label class="wq-row ${f.included ? '' : 'is-off'}" data-key="qc-${esc(f.id)}"><input type="checkbox" data-bind="quick.cog:${esc(f.id)}"${f.included ? ' checked' : ''}${V.pol.cog === 'off' ? ' disabled' : ''}><i></i>${kind('인지', COL.cog)}<span class="m3-t"><b>${esc(f.label)}</b><small>기본 ${f.mode === 'always' ? '항상' : f.mode === 'exclude' ? '제외' : '자동'} · ${f.included ? '이번 턴 포함' : '이번 턴 제외'}</small></span></label>`).join('')}` : ''}`;
+      ${V.quickCog.length ? `<div class="wq-gt">인지 개별 선택 · 이번 턴만</div>${V.quickCog.map(f => `<label class="wq-row ${f.included ? '' : 'is-off'}" data-key="qc-${esc(f.id)}"><input type="checkbox" data-bind="quick.cog:${esc(f.id)}"${f.included ? ' checked' : ''}${V.pol.cog === 'off' ? ' disabled' : ''}><i></i>${kind('인지', COL.cog)}<span class="m3-t"><b>${esc(f.label)}</b><small>기본 ${f.mode === 'always' ? '항상' : f.mode === 'exclude' ? '제외' : '자동'} · ${f.included ? '이번 턴 포함' + (f.brief ? ' · 한 줄' : '') : '이번 턴 제외'}</small></span></label>`).join('')}` : ''}`;
     return `<div class="wq-head"><div class="m3-t"><b>현재 주입</b><small>${V.inj.armed ? `${V.inj.verified?'확인됨':'예정'} ${on.length}개 · ${fmt(V.inj.total)}자${V.reviews.length ? ` · 확인할 인지 ${V.reviews.length}건` : ''}` : '주입 꺼짐'}</small></div><button type="button" class="m3-ico" data-act="quickClose" aria-label="닫기">${ic('close')}</button></div><div class="wq-list">${body}</div><div class="wq-foot"><span class="m3-muted">${V.quickCog.length ? '인지 체크는 다음 턴에 자동 초기화 · ' : ''}${'켜진 항목은 계속 포함 · '}일반 항목 체크는 이번 주입 세션에 적용 · ${V.inj.legacyExclusions?'구버전 자료집 제외 '+V.inj.legacyExclusions+'건은 충돌 가능성으로 해제 · ':''}길게 누르면 전체 패널</span>${btn('전체 설정', 'quickFull', { cls: 'mini', icon: 'set' })}</div>`;
   }
   let quickEl = null;
@@ -18502,9 +18542,11 @@ function WUIReadLogView(room){
  return {rows:cached.rows.map(b=>({...b,pin:pinned.has(b.key),ex:excluded.has(b.key),man:manual.has(b.key)})),duplicateDates:cached.duplicateDates};
 }
 function WUIReadFactRows(cog,pending){
- const selected=new Set(pending?.cognitionIncludedIds||cog.contextDiagnostics?.includedIds||[]),byFact=new Map();
+ // 골라서: what the armed injection wrote (full or one line), else what it would write now. 전부 reads as before.
+ const pick=cog.selectMode==='pick'?pending?.cognitionPick||cog.contextDiagnostics?.pick||null:null,brief=new Set(pick?.brief||[]);
+ const selected=new Set(pick?[...(pick.full||[]),...brief]:pending?.cognitionIncludedIds||cog.contextDiagnostics?.includedIds||[]),byFact=new Map();
  for(const c of cog.state?.concealments||[]){if(!c.active)continue;let rows=byFact.get(c.factId);if(!rows)byFact.set(c.factId,rows=[]);rows.push(c);}
- return (cog.facts||[]).filter(f=>!f.archived).map(f=>({...f,mode:f.injectionMode||'auto',sel:selected.has(f.id),why:(cog.contextDiagnostics?.reasons?.[f.id]||[]).join(' · '),know:Object.fromEntries((cog.actors||[]).map(a=>[a.id,cog.state?.knowledge?.[a.id]?.[f.id]||'unverified'])),con:(byFact.get(f.id)||[]).map(c=>({...c,h:c.holderId,t:c.targetId,scope:c.scope||'',pub:c.publicName||''}))}));
+ return (cog.facts||[]).filter(f=>!f.archived).map(f=>({...f,mode:f.injectionMode||'auto',sel:selected.has(f.id),brief:brief.has(f.id),why:brief.has(f.id)?'':((pick||cog.contextDiagnostics)?.reasons?.[f.id]||[]).join(' · '),know:Object.fromEntries((cog.actors||[]).map(a=>[a.id,cog.state?.knowledge?.[a.id]?.[f.id]||'unverified'])),con:(byFact.get(f.id)||[]).map(c=>({...c,h:c.holderId,t:c.targetId,scope:c.scope||'',pub:c.publicName||''}))}));
 }
 function WUIReadModel(options={}){let D,S,items,logView;const preview=options?.preview!==false;const opened=new Set(),dateLabel=v=>v?new Date(v).toLocaleString('ko-KR'):'';
 function model(r){
@@ -18515,7 +18557,7 @@ function model(r){
  logs:logView.rows,
  speechOn:r.speechConfig?.enabled!==false,speech:resolvedSpeechRelations(r).map(x=>({...x,reg:x.register,src:x.sourcePackId?'lore':'room',pack:x.sourcePackName||'',note:x.note||''})),chars:chars('character'),extras:chars('extra'),
  memory:{enabled:m.enabled,...WUITurnCount(r),running:!!automaticMemoryJob,dirty:Number(m.dirtyScore||0),mode:sched.effectiveMode==='fixed'?'fixed':'adaptive',min:sched.minimum,max:sched.maximum,fixed:sched.fixed,target:sched.target,last:dateLabel(m.lastRunAt),status:m.lastError||m.lastStatus||''},
- cog:{auto:cfg.auto!==false,every:cs.autoEvery||1,budget:cfg.budget||1000,scope:cfg.initialScope||'recent',initial:cfg.initialTurns||12,extra:cfg.promptExtra||''},pol:{state:Number(p.currentStateEvery)>0&&!!slot('currentState')?.enabled,cog:Number(p.cognitionEvery)>0?'all':'off',log:Number(p.logEvery)>0&&!!slot('logSummary')?.enabled,lore:Number(p.loreEvery)>0&&lc.enabled!==false,char:Number(p.characterEvery)>0,extra:Number(p.extraEvery)>0,threads:Number(p.threadsEvery??1)>0},autoChar:r.autoCharacterDetection,
+ cog:{selectMode:cg.selectMode==='pick'?'pick':'all',auto:cfg.auto!==false,every:cs.autoEvery||1,budget:cfg.budget||1000,scope:cfg.initialScope||'recent',initial:cfg.initialTurns||12,extra:cfg.promptExtra||''},pol:{state:Number(p.currentStateEvery)>0&&!!slot('currentState')?.enabled,cog:Number(p.cognitionEvery)>0?'all':'off',log:Number(p.logEvery)>0&&!!slot('logSummary')?.enabled,lore:Number(p.loreEvery)>0&&lc.enabled!==false,char:Number(p.characterEvery)>0,extra:Number(p.extraEvery)>0,threads:Number(p.threadsEvery??1)>0},autoChar:r.autoCharacterDetection,
  actors:(cg.actors||[]).filter(a=>!a.archived).map(a=>({...a,aliases:a.aliases||[],pc:a.isPlayer,present:(cg.state?.present||[]).includes(a.id)})),
  facts:WUIReadFactRows(cg,r.pending),
  reviews:(cg.reviews||[]).slice().reverse().map(rv=>({id:rv.id,kind:v2ReviewLabel(rv),desc:v2ReviewDescription(rv,cg),quote:v2EvidenceQuote(rv),accept:v2ReviewNeedsInspect(rv,cg)?'':'이대로 반영',original:rv})),
@@ -18525,7 +18567,7 @@ function model(r){
  S={tab:({check:'home',cognition:'cog'})[state.v2Tab]||state.v2Tab||'home',mem:state.v2MemoryView==='character'?'char':['state','log','threads','speech','extra'].includes(state.v2MemoryView)?state.v2MemoryView:'state',cog:state.v2MemoryView==='cog-reviews'?'review':'people',open:opened,job:automaticMemoryJob?{label:'현재상태·날짜별 사건 정리 중'}:automaticLoreJob?{label:'자료 카드 정리 중'}:aiUpdateRunning&&!U3.checking()?{label:'기억 작업 마무리 중'}:null};
 }
 if(!state.currentRoom||!WUICache.ai)return {};model(state.currentRoom);const r=state.currentRoom;const injection=r.pending||preview?WUIInjectionView(r,items):{legacyExclusions:0,armed:false,verified:false,total:0,max:allFitLimit(r),groups:{},items:[],hasCarrier:false,hasOriginal:false,matchesSaved:false,selection:null,review:r.lastLoreSearch?{method:r.lastLoreSearch.reviewMethod,reason:r.lastLoreSearch.reviewReason,total:r.lastLoreSearch.reviewBaseTotal,limit:r.lastLoreSearch.reviewLimit,at:r.lastLoreSearch.at}:null,...pendingSyncIssue(null)},plan=injection.items;
-const rebuild=R31.get(r);const vm={held:WishHeldUI.view(r),apiEconomy:{...WishEconomy.settings(r),status:WishEconomy.describe(r)},cogInclude:Number(r.injectionPolicy?.cognitionEvery)>0,recall:recallSelectionSettings(r),rebuild:rebuild?{status:rebuild.status,message:rebuild.message,segments:rebuild.segments,ready:!!rebuild.draft}:null,rebuildRunning:R31.busy(),unified:U3.view(r),room:{...WishRoomNames.describe(r),name:D.room},version:SCRIPT_VERSION,save:{saving:state.saveStatus==='saving',at:state.lastSavedAt?new Date(state.lastSavedAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}):''},job:S.job,features:{autoDefault:false,semantic:false,density:false},inj:injection,memory:D.memory,cog:{...D.cog,actors:D.actors,facts:D.facts.map(f=>({...f,included:f.sel}))},reviews:D.reviews.map(rv=>({...rv,acceptLabel:rv.accept})),state:{inject:D.pol.state,sections:D.state,raw:String(r.slots?.find(s=>s.id==='currentState')?.content||'')},logs:{inject:D.pol.log,blocks:D.logs.map(b=>({...b,undated:b.date==='날짜 미상',included:D.pol.log&&plan.some(i=>i.kind==='log'&&!i.off&&(i.sourceKey===b.key||i.key==='log:'+b.key))})),dupDates:logView.duplicateDates},threads:WishThreads.view(r),relationships:{held:Array.isArray(r.relationshipHeld)?r.relationshipHeld:[],on:r.relationshipConfig?.enabled!==false,rows:WishRelationships.normalize(r.relationships)},speech:{on:D.speechOn,rows:D.speech},chars:{autoDetect:D.autoChar,rows:D.chars},extras:{rows:D.extras},presets:D.presets.map(p=>({...p,ret:p.retentionTurns})),lore:D.lore,ai:{providerLabel: getAiProviderLabel(D.ai.provider),model:D.ai.provider==='manual'?'API 없이 · 요청문 TXT 받기 → 답 붙여넣기':D.ai.model,manual:D.ai.provider==='manual',ready:isAiProviderReady(D.ai),job:D.ai.provider==='manual'?manualJobView(r):null},pol:D.pol,autoChar:D.autoChar,quickCog:D.facts.map(f=>({id:f.id,label:f.label,mode:f.mode,included:state.quickCognitionDesired.has(f.id)?state.quickCognitionDesired.get(f.id):f.sel})),recent:[D.memory.last,D.lore.auto.last].filter(Boolean),labels:{resetDesc:'현재 방의 기억·인지·이 방 전용 자동 자료를 초기화합니다. 일반 자료집은 유지됩니다.'}};
+const rebuild=R31.get(r);const vm={held:WishHeldUI.view(r),apiEconomy:{...WishEconomy.settings(r),status:WishEconomy.describe(r)},cogInclude:Number(r.injectionPolicy?.cognitionEvery)>0,recall:recallSelectionSettings(r),rebuild:rebuild?{status:rebuild.status,message:rebuild.message,segments:rebuild.segments,ready:!!rebuild.draft}:null,rebuildRunning:R31.busy(),unified:U3.view(r),room:{...WishRoomNames.describe(r),name:D.room},version:SCRIPT_VERSION,save:{saving:state.saveStatus==='saving',at:state.lastSavedAt?new Date(state.lastSavedAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}):''},job:S.job,features:{autoDefault:false,semantic:false,density:false},inj:injection,memory:D.memory,cog:{...D.cog,actors:D.actors,facts:D.facts.map(f=>({...f,included:f.sel}))},reviews:D.reviews.map(rv=>({...rv,acceptLabel:rv.accept})),state:{inject:D.pol.state,sections:D.state,raw:String(r.slots?.find(s=>s.id==='currentState')?.content||'')},logs:{inject:D.pol.log,blocks:D.logs.map(b=>({...b,undated:b.date==='날짜 미상',included:D.pol.log&&plan.some(i=>i.kind==='log'&&!i.off&&(i.sourceKey===b.key||i.key==='log:'+b.key))})),dupDates:logView.duplicateDates},threads:WishThreads.view(r),relationships:{held:Array.isArray(r.relationshipHeld)?r.relationshipHeld:[],on:r.relationshipConfig?.enabled!==false,rows:WishRelationships.normalize(r.relationships)},speech:{on:D.speechOn,rows:D.speech},chars:{autoDetect:D.autoChar,rows:D.chars},extras:{rows:D.extras},presets:D.presets.map(p=>({...p,ret:p.retentionTurns})),lore:D.lore,ai:{providerLabel: getAiProviderLabel(D.ai.provider),model:D.ai.provider==='manual'?'API 없이 · 요청문 TXT 받기 → 답 붙여넣기':D.ai.model,manual:D.ai.provider==='manual',ready:isAiProviderReady(D.ai),job:D.ai.provider==='manual'?manualJobView(r):null},pol:D.pol,autoChar:D.autoChar,quickCog:D.facts.map(f=>({id:f.id,label:f.label,mode:f.mode,included:state.quickCognitionDesired.has(f.id)?state.quickCognitionDesired.get(f.id):f.sel,brief:!state.quickCognitionDesired.has(f.id)&&f.brief})),recent:[D.memory.last,D.lore.auto.last].filter(Boolean),labels:{resetDesc:'현재 방의 기억·인지·이 방 전용 자동 자료를 초기화합니다. 일반 자료집은 유지됩니다.'}};
 Object.assign(vm.memory,{error:U3.monitor(r).error,enabled:vm.unified.enabled&&vm.unified.memoryEnabled,committed:vm.unified.memoryPending,target:vm.unified.memoryEvery,fixed:vm.unified.memoryEvery,running:vm.unified.running,status:vm.unified.error||vm.unified.status});Object.assign(vm.cog,{auto:vm.unified.enabled&&vm.unified.observeEnabled,every:vm.unified.observeEvery});vm.job=vm.unified.running?{label:vm.unified.jobLabel||'통합 결과 확인 중'}:vm.job;
 if(R31.busy())vm.job={label:rebuild?.message||'재구축 자료 준비 중'};
 const eligibility=sessionSetupEligibilityFor(r);vm.fresh=eligibility?.fresh&&WUICache.freshDismissed!==String(state.currentChatId)?{show:true,title:'새 방 시작 설정',desc:'켜진 기억·자료·인물 정보를 첫 AI 메시지에 적용합니다.'}:null;for(const [path,value] of Object.entries(WUISettingsDraft()))WUISetPath(vm,path,value);vm.diagnostics=WLOG.list();vm.job=WLOG.view()||vm.job;return vm;}
@@ -18823,6 +18865,14 @@ Object.assign(WUI_ADAPTER.act,{
  unifiedMemory:()=>U3.run(state.currentRoom,'memory'),cogRe:()=>U3.run(state.currentRoom,'observe'),
  memoryBase:()=>U3.baseline(state.currentRoom),unifiedRetry:()=>U3.run(state.currentRoom,'retry'),
 });
+// 인지 넣는 방식 is saved on the room's cognition record; an armed injection is rewritten right away.
+WUI_ADAPTER.act.cogSelectMode=async mode=>{
+ const room=state.currentRoom,bridge=cogBridge();if(!room||!bridge?.setSelectMode)throw Error('인지 기록이 준비되지 않았습니다.');
+ if((state.v2Cognition?.selectMode==='pick'?'pick':'all')===mode)return;
+ await bridge.setSelectMode(apiChatIdOf(room),mode);state.v2Cognition=await bridge.getView(apiChatIdOf(room),{overrides:cognitionOverridesForBridge(room.pending),useInput:false});
+ notify('인지 넣는 방식 · '+(mode==='pick'?'골라서':'전부'),'success',1800);
+ if(room.pending)try{await syncPendingCarrier(room,'category-injection-change');}catch(e){notify('설정은 저장됨 · 주입 재적용 대기: '+e.message,'warn',4000,{error:e});}
+};
 Object.assign(WUI_ADAPTER.act,{
  secondaryExport:()=>SecondaryRebuild.openExport(),secondaryExportRun:id=>SecondaryRebuild.exportFromDialog(id),secondaryImport:()=>SecondaryRebuild.importFile(),secondaryApply:id=>SecondaryRebuild.apply(id),secondaryEdit:id=>SecondaryRebuild.editReview(id),secondaryToggleEdit:arg=>{const [id,key]=arg.split('|'),d=WUI.ui.dlg(id);if(d&&!d.busy){d.draft.editing||={};d.draft.editing[key]=!d.draft.editing[key];WUI.paint(false);}},secondaryManage:()=>SecondaryRebuild.openManage(),secondaryChange:arg=>{const [id,mode]=arg.split('|');return SecondaryRebuild.change(id,mode);},
  unifiedAll:()=>{const r=state.currentRoom;if(isManualAiProvider()&&loadManualJob(r)&&!confirm('기다리는 외부 AI 작업이 있습니다. 새 요청문으로 바꿀까요?\n이미 외부 AI에 보낸 이전 요청문의 답은 쓸 수 없게 됩니다.'))return;return U3.run(r,'all');},rebuildRead:()=>R31.read(state.currentRoom),rebuildRun:()=>R31.run(state.currentRoom),rebuildApply:()=>R31.apply(state.currentRoom),rebuildStop:()=>R31.stop(),rebuildClear:()=>R31.clear(state.currentRoom),
