@@ -445,20 +445,21 @@
   }
 
   let wishCarrierLookupCache=null;
-  function findInjectedCarrierContainer(room) {
-    const p = room?.pending;
-    const messageId = String(p?.messageId || '');
-    if (!messageId) return null;
-
-    // Wish 단독 동작: Crack 순정 message id/group id를 가장 먼저 사용합니다.
+  // Wish 단독 동작: Crack 순정 message id/group id를 가장 먼저 사용합니다.
+  function exactMessageContainer(messageId) {
     let exact = null;
     try {
       const id = CSS.escape(messageId);
       exact = document.querySelector(`main [data-message-id="${id}"],main [data-message-group-id="${id}"],[data-message-id="${id}"],[data-message-group-id="${id}"]`);
     } catch (_) {}
-    if (exact?.isConnected) {
-      return messageRootFromNode(exact);
-    }
+    return exact?.isConnected ? messageRootFromNode(exact) : null;
+  }
+  function findInjectedCarrierContainer(room) {
+    const p = room?.pending;
+    const messageId = String(p?.messageId || '');
+    if (!messageId) return null;
+    const exact = exactMessageContainer(messageId);
+    if (exact) return exact;
 
     // DOM에 서버 messageId가 직접 노출되지 않는 화면은 서버 원문과 렌더 본문을
     // Wish 자체적으로 비교합니다. 다른 확프의 마커/함수에는 의존하지 않습니다.
@@ -466,7 +467,15 @@
     const cached=wishCarrierLookupCache;
     const cachedId=cached?.md?.closest('[data-message-id]')?.getAttribute('data-message-id');
     if(cached&&(!cachedId||cachedId===messageId)&&cached.room===room&&cached.id===messageId&&cached.original===p.originalText&&cached.md.isConnected&&cached.container.isConnected&&cached.md.textContent===cached.visible)return cached.container;
-    const target = normalizeMessageProbeText(p?.originalText || '');
+    const best = probeMessageMarkdown(messageId, p?.originalText);
+    if (!best) return null;
+    const container=messageRootFromNode(best)||best.parentElement||best;
+    wishCarrierLookupCache={room,id:messageId,original:p.originalText,md:best,visible:best.textContent,container};
+    return container;
+  }
+  // The one rendered message whose text matches rawText (server text); a tie or a weak match finds nothing.
+  function probeMessageMarkdown(messageId, rawText) {
+    const target = normalizeMessageProbeText(rawText || '');
     if (target.length < 18) return null;
     const head = target.slice(0, Math.min(96, target.length));
     const tail = target.slice(Math.max(0, target.length - 96));
@@ -489,10 +498,16 @@
       if (score > bestScore) { best = md; bestScore = score; ties = 1; }
       else if (score === bestScore && score > 0) ties++;
     }
-    if (!best || bestScore < 5 || ties > 1) return null;
-    const container=messageRootFromNode(best)||best.parentElement||best;
-    wishCarrierLookupCache={room,id:messageId,original:p.originalText,md:best,visible:best.textContent,container};
-    return container;
+    return !best || bestScore < 5 || ties > 1 ? null : best;
+  }
+  // A message that is mounted in the chat right now; a scrolled-away or not yet loaded message is not found.
+  function findChatMessageElement(messageId, rawText) {
+    const id = String(messageId || '');
+    if (!id) return null;
+    const exact = exactMessageContainer(id);
+    if (exact) return exact;
+    const best = probeMessageMarkdown(id, rawText);
+    return best ? messageRootFromNode(best) || best.parentElement || best : null;
   }
 
   function getCarrierMarkdown(container) {
@@ -3626,7 +3641,11 @@ function open(id){const room=state.currentRoom,old=normalize(room.relationships)
       return result;
     }
     function diff(before,after,covered=[]){const old=new Map(normalize(before).map(r=>[key(r.speaker,r.target),r])),seen=new Set(covered);return normalize(after).map(r=>{const k=key(r.speaker,r.target),prior=old.get(k);return {id:r.id,title:r.speaker+' → '+r.target,before:prior?displayBody(prior):'',after:displayBody(r),status:!prior?'추가':r.manual?'수동 보호 유지':!seen.has(k)?'미출력 · 기존 유지':semantic(prior)!==semantic(r)?'변경':'유지'};});}
-    return {heldRow,heldResolved,settleHeld,mergeHeld,normalizeHeld,openHeld,schema,fullSchema,commonGuide,guide,fullGuide,key,semantic,normalize,apply,rebuild,body,displayBody,messages,checkedEvidence,bind,items,contextRows,updateRange,continuityText,replacePending,mutate,open,save,diff};
+    // The quotes the panel shows for a row (the newest applied quotes, else the newest ledger record with quotes), and the
+    // 정리 묶음 end of the ledger record that holds them ('' when none does, e.g. a full relationship rebuild).
+    function shownEvidence(r){return r?.lastEvidence?.length?r.lastEvidence:[...(r?.evidenceHistory||[])].reverse().find(e=>Array.isArray(e?.evidence)&&e.evidence.length)?.evidence||[];}
+    function evidenceCutoff(r,evidence){const sig=list=>JSON.stringify((list||[]).map(e=>[e?.role||'',e?.quote||''])),want=sig(evidence);return String([...(r?.evidenceHistory||[])].reverse().find(e=>Array.isArray(e?.evidence)&&sig(e.evidence)===want)?.cutoff||'');}
+    return {shownEvidence,evidenceCutoff,heldRow,heldResolved,settleHeld,mergeHeld,normalizeHeld,openHeld,schema,fullSchema,commonGuide,guide,fullGuide,key,semantic,normalize,apply,rebuild,body,displayBody,messages,checkedEvidence,bind,items,contextRows,updateRange,continuityText,replacePending,mutate,open,save,diff};
   })();
 
   // 남은 일 (room.threads): promises, plans, open questions and dangers in the story that still wait for an ending.
@@ -9912,6 +9931,78 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     return {hasMessage,begin,seed,read,invalidate,changed,merge,install};
   })();
   async function observeFullRoomHistory(room,head=null){return WishHistory.read(room,head);}
+  // 원문 찾기: the RP message a memory item's stored quote came from. Read-only, nothing is saved. The message id stored on a
+  // thread or relationship marks the end of the 정리 묶음 that wrote it, not the quoted message, so the quote itself is looked up
+  // in the current branch: markdown marks, spacing and quote-mark style are ignored, the words are not. A quote that is not
+  // there is reported as not found; nothing is guessed. A lore card's source id is the quoted message itself.
+  const WishSourceJump=(()=>{
+    const QUOTES={'“':'"','”':'"','„':'"','‟':'"','″':'"','«':'"','»':'"','‘':"'",'’':"'",'‚':"'",'‛':"'",'′':"'"},MAX_HITS=20;
+    function project(s){let out='',space=true;const map=[];for(let i=0;i<s.length;i++){const c=s[i];if('*_~`'.includes(c))continue;if(/\s/.test(c)){if(!space){out+=' ';map.push(i);space=true;}continue;}out+=QUOTES[c]||c;map.push(i);space=false;}return {out,map};}
+    const needle=quote=>project(String(quote||'').normalize('NFC')).out.trim().replace(/^["'「『]+|["'」』]+$/g,'').trim();
+    // Exact words first; only then a quote with an ellipsis, its pieces in order within the same message (gaps up to 300 characters).
+    function locate(text,q){
+      const v=project(text),at=v.out.indexOf(q);
+      if(at>=0)return {start:v.map[at],end:v.map[at+q.length-1]+1,loose:false};
+      const parts=q.split(/…|\.{3,}/).map(x=>x.trim()).filter(x=>x.length>=2);
+      if(parts.length<2||parts.join('').length<4)return null;
+      let from=0,first=-1;for(const part of parts){const i=v.out.indexOf(part,from);if(i<0||(first>=0&&i-from>300))return null;if(first<0)first=i;from=i+part.length;}
+      return {start:v.map[first],end:v.map[from-1]+1,loose:true};
+    }
+    // A lore card's quote: the line itself for a key quote, else the evidence; the source is the id its sourceHash was made from.
+    const loreQuote=e=>String((e?.type==='key_quote'?e.exactQuote||e.evidence:e?.evidence||e?.exactQuote)||'').trim();
+    const loreSource=e=>(e?.sourceMessageIds||[]).find(id=>e.sourceHash&&aiHashTiny(id+'|'+(e.evidence||''))===e.sourceHash)||'';
+    function target(room,arg){
+      let kind,id,part;try{[kind,id,part]=JSON.parse(arg);}catch(_){return null;}
+      if(kind==='th'){const t=WishThreads.normalizeLoose(room.threads).find(x=>x.id===id),end=part==='closed'?t?.closed:t?.opened;return end?.evidence?{title:'남은 일 · '+t.title,quote:end.evidence,role:'',anchor:end.messageId||'',exact:false}:null;}
+      if(kind==='rel'){const r=WishRelationships.normalize(room.relationships).find(x=>x.id===id),ev=r?WishRelationships.shownEvidence(r):[],e=ev[Number(part)];return e?.quote?{title:'관계 · '+r.speaker+' → '+r.target,quote:e.quote,role:e.role||'',anchor:WishRelationships.evidenceCutoff(r,ev),exact:false}:null;}
+      if(kind==='lore'){const e=(lorePackCache||[]).find(p=>p.scopeId===id)?.entries?.find(x=>x.id===part),quote=loreQuote(e);return quote?{title:'자료 · '+e.name,quote,role:'',anchor:loreSource(e),exact:true}:null;}
+      return null;
+    }
+    // One search at a time; the read can take a few seconds on a long chat, so it runs as a panel job.
+    let finding=false;
+    async function find(arg,ui){if(finding)return;finding=true;try{await ui.job('원문 찾는 중',()=>search(arg,ui));}finally{finding=false;}}
+    async function search(arg,ui){
+      const room=state.currentRoom;if(!room)return;
+      const t=target(room,arg),q=t?needle(t.quote):'';
+      if(!t){ui.toast('이 항목에는 저장된 근거 문장이 없습니다.','info',3600);return;}
+      if(q.replace(/[\s"'….]/g,'').length<4){ui.toast('근거 문장이 너무 짧아 원문 위치를 정할 수 없습니다.','info',4200);return;}
+      if(generationPending(apiChatIdOf(room))){ui.toast('AI 답변이 끝난 뒤 다시 눌러 주세요.','info',3600);return;}
+      let all;try{all=await WishHistory.read(room);}catch(e){if(isWishHistoryStale(e)){ui.toast('대화가 바뀌는 중이라 원문을 찾지 못했습니다. 잠시 뒤 다시 눌러 주세요.','info',4200);return;}throw e;}
+      if(state.currentRoom!==room)return;
+      const list=all.filter(m=>['user','assistant'].includes(messageRoleOf(m))).map(m=>({id:String(messageIdOf(m)),role:messageRoleOf(m),raw:messageTextOf(m)})),textOf=m=>m.text??=stripAutomationNoise(m.raw,true,true).trim();
+      let turn=0;const turns=list.map(m=>m.role==='user'?++turn:turn),anchorAt=t.anchor?list.findIndex(m=>m.id===t.anchor):-1;
+      const label=i=>(list[i].role==='user'?'USER':'AI')+' · '+fmtTurn(turns[i])+' · 메시지 '+shortId(list[i].id);
+      // Quick skip: a message whose raw text lacks the quote's longest word (markdown marks removed) cannot match.
+      const word=(q.match(/[\p{L}\p{N}]+/gu)||[]).reduce((a,b)=>b.length>a.length?b:a,'');
+      const scan=role=>list.flatMap((m,i)=>{if((role&&m.role!==role)||!m.raw.replace(/[*_~`]/g,'').includes(word))return [];const at=locate(textOf(m),q);return at?[{i,...at}]:[];});
+      // The quote's role is searched first; a line the AI labeled by its speaker (a USER character narrated in an AI reply) is then looked for on both sides.
+      let hits=t.role?scan(t.role):[];if(!hits.length)hits=scan('');
+      // Nearest the point the item was written: at or before its anchor (newest first), then after it; without an anchor, oldest first.
+      const order=anchorAt<0?hits:[...hits.filter(h=>h.i<=anchorAt).reverse(),...hits.filter(h=>h.i>anchorAt)];
+      const view=h=>({id:list[h.i].id,raw:list[h.i].raw,text:textOf(list[h.i]),start:h.start,end:h.end,label:label(h.i)});
+      if(!order.length){
+        if(anchorAt<0){ui.toast(t.anchor?'이 기록을 만든 대화가 현재 분기에 없고, 근거 문장도 현재 대화에서 찾지 못했습니다. 재생성·삭제·편집으로 바뀌었을 수 있습니다.':'근거 문장을 현재 대화에서 찾지 못했습니다. 요약하거나 고쳐 쓴 인용이거나 다른 방에서 복사해 온 기록일 수 있습니다.','info',6000);return;}
+        const shown=view({i:anchorAt,start:0,end:0});
+        ui.openSheet('source',{title:t.title,quote:t.quote,hits:[shown],total:0,pos:0,text:shown.text,note:t.exact?'저장된 근거 문장을 원문에서 그대로 찾지 못했습니다. 아래는 카드가 가리키는 원문 메시지입니다.':'저장된 근거 문장을 원문에서 그대로 찾지 못했습니다. 요약하거나 고쳐 쓴 인용일 수 있습니다. 아래는 이 기록을 만든 정리 묶음의 마지막 AI 답입니다.'});
+        return;
+      }
+      const shown=order.slice(0,MAX_HITS).map(view);
+      const note=[t.anchor&&anchorAt<0?'이 기록을 만든 대화는 현재 분기에 없습니다(재생성·삭제·편집). 같은 문장이 있는 현재 분기의 메시지를 보여 드립니다.':'',
+        order.length>1?'같은 문장이 '+fmtCount(order.length)+'곳에 있습니다. '+(anchorAt<0?'앞쪽부터':'기록 시점에 가까운 곳부터')+' 보여 드립니다.':'',
+        order[0].loose?'인용의 생략(…) 부분을 건너뛰고 찾았습니다.':''].filter(Boolean).join(' ');
+      ui.openSheet('source',{title:t.title,quote:t.quote,hits:shown,total:order.length,pos:0,text:shown[0].text,note});
+    }
+    const fmtTurn=n=>n?n.toLocaleString('ko-KR')+'턴째':'시작 메시지';
+    const fmtCount=n=>n.toLocaleString('ko-KR');
+    function move(arg,ui){const [id,dir]=String(arg).split('|'),d=ui.dlg(id);if(!d?.hits?.length)return;d.pos=(d.pos+Number(dir)+d.hits.length)%d.hits.length;d.text=d.hits[d.pos].text;}
+    function jump(id,ui){
+      const d=ui.dlg(id),h=d?.hits?.[d.pos];if(!h)return;const el=findChatMessageElement(h.id,h.raw);
+      if(!el){ui.toast('이 메시지는 지금 채팅 화면에 불러와 있지 않습니다. 채팅을 위로 올려 그 부분을 불러온 뒤 다시 눌러 주세요.','info',5200);return;}
+      ui.closeSheet(id,true);ui.close();
+      setTimeout(()=>{if(!el.isConnected)return;el.scrollIntoView({block:'center',behavior:'smooth'});const st=el.style,prev=[st.outline,st.outlineOffset];st.outline='2px solid #e0a43a';st.outlineOffset='4px';setTimeout(()=>{st.outline=prev[0];st.outlineOffset=prev[1];},2400);},260);
+    }
+    return {find,move,jump,loreQuote,locate,needle};
+  })();
 
   async function fetchAllRoomMessages(chatId, onProgress = null, control = null) {
     const finish=typeof WishPerformance==='undefined'?()=>{}:WishPerformance.start('fullRead');
@@ -15443,6 +15534,8 @@ html.rpcm-mobile-keyboard-open #wish-rp-root{top:var(--rpcm-vv-top,0px);bottom:a
 .m3-fld small.wp-raw-hint{margin:0 0 6px}
 .wp-th-pre{white-space:pre-wrap;overflow-wrap:anywhere}
 .wp-th-rel{flex-wrap:wrap;gap:6px;margin-top:6px}
+.wp-src{display:flex;align-items:flex-start;gap:8px;margin:4px 0}.wp-src>p{flex:1;min-width:0;margin:0}.wp-src>.m3-btn{flex:none}
+mark.m3-src-mark{background:color-mix(in srgb,var(--m3-warn) 28%,transparent);color:inherit;border-radius:3px;padding:0 1px}
 .wp-th-badges{display:inline-flex;align-items:center;gap:6px;flex:none}
 @container (max-width:420px){.wp-th-badges{flex-direction:column;align-items:flex-end;gap:4px}}
 #wish-rp-root .m3-whybox.wp-th-suggest{--wc:var(--m3-warn)}
@@ -16268,6 +16361,8 @@ function createWishUI(AD) {
     const o = S.openSet.has(key);
     return `<details class="m3-fold2" data-key="f-${esc(key)}" data-open="${esc(key)}"${o ? ' open' : ''}><summary>${title}${ic('chev')}</summary><div class="m3-fb">${body}</div></details>`;
   }
+  // 원문 찾기 beside a stored quote; arg is [kind, id, part] for WishSourceJump.
+  const srcQuote = (label, quote, arg) => `<div class="wp-src"><p class="m3-muted wp-th-pre">${label ? esc(label) + ' · ' : ''}${esc(quote)}</p>${btn('원문 찾기', 'srcFind', { arg: JSON.stringify(arg), cls: 'quiet mini', icon: 'search' })}</div>`;
   const chip = (label, key, on) => `<button type="button" class="m3-choice ${on ? 'is-on' : ''}" data-act="flip" data-arg="${esc(key)}" aria-pressed="${!!on}"><i></i><em>${label}</em></button>`;
   const tog = (label, key, on, sub = '', aria = '') => `<label class="m3-toggle${label ? '' : ' bare'}"><span>${label}${sub ? `<small>${sub}</small>` : ''}</span><input type="checkbox" data-bind="${esc(key)}"${on ? ' checked' : ''}${label ? '' : ` aria-label="${esc(aria)}"`}><i></i></label>`;
   function step(label, key, val, o = {}) {
@@ -16409,7 +16504,7 @@ function createWishUI(AD) {
     const closed=t.status==='closed',s=t.suggestClose,flat=v=>String(v||'').replace(/\s+/g,'');
     const dates=new Set([thDate(t.opened.date),closed?thDate(t.closed.date):''].filter(Boolean).map(flat));
     const related=dates.size?V.logs.blocks.filter(b=>dates.has(flat(b.date))).slice(0,3):[];
-    const evidence=[t.opened.evidence&&`<p class="m3-muted wp-th-pre">열림 · ${esc(t.opened.evidence)}</p>`,closed&&t.closed.evidence&&`<p class="m3-muted wp-th-pre">닫힘 · ${esc(t.closed.evidence)}</p>`].filter(Boolean).join('');
+    const evidence=[t.opened.evidence&&srcQuote('열림',t.opened.evidence,['th',t.id,'opened']),closed&&t.closed.evidence&&srcQuote('닫힘',t.closed.evidence,['th',t.id,'closed'])].filter(Boolean).join('');
     const events=related.length?`<div class="m3-row wp-th-rel">${related.map(b=>btn(esc(String(b.title).replace(/^\d+\.\d+\/\d+\s+/,'')),'lgEdit',{arg:b.id,cls:'quiet mini'})).join('')}</div>`:'';
     return (t.detail?`<p class="wp-th-pre">${esc(t.detail)}</p>`:'')+(t.due?`<p class="m3-muted">기한·계기 · ${esc(t.due)}</p>`:'')
       +(closed&&t.closed.how?`<p class="m3-muted wp-th-pre">${esc(t.closeWord)} · ${esc(t.closed.how)}</p>`:'')
@@ -16491,7 +16586,7 @@ function mRelationships() {
     const pairStatus=list=>{const states=list.map(status);return states.every(s=>s==='주입 OFF')?'주입 OFF':states.every(s=>s==='주입 확인')?'주입 중':states.includes('후보 · 확인 대기')?'후보 · 확인 대기':states.includes('주입 확인')?'일부 주입':states.includes('저장됨')?'저장됨':'이번 주입 제외';};
     const relPairs=()=>{const key=r=>JSON.stringify([String(r.speakerActorId||r.speaker),String(r.targetActorId||r.target)].sort()),m=new Map();for(const r of rows){const k=key(r);if(!m.has(k))m.set(k,[]);m.get(k).push(r);}
       const one=s=>{const t=String(s||'').split(/(?<=[.。!?])\s+/)[0];return t.length>64?t.slice(0,63)+'…':t;};
-      const dir=r=>{const st=status(r);return `<div class="wp-rel-dir" data-key="rel-${esc(r.id)}"><div class="wp-rel-dh"><b>${esc(r.speaker)}<i>→</i>${esc(r.target)}</b>${tag(st,st==='주입 확인'?'ok':'')}${r.manual?tag('수동 보호'):''}${r.pinned?tag('고정 후보'):''}${btn('편집','relEdit',{arg:r.id,cls:'quiet mini',icon:'edit'})}</div><p class="wp-rel-now">${esc(r.current)}</p>${r.unresolved?`<div class="wp-rel-issue"><b>남은 쟁점</b><span>${esc(r.unresolved)}</span></div>`:''}<div class="wp-rel-more">${r.trajectory?fold('rel-history-'+r.id,'핵심 전환 · '+fmt(r.trajectory.length)+'자',`<p style="white-space:pre-wrap">${esc(r.trajectory)}</p>`):''}${(()=>{const ev=r.lastEvidence?.length?r.lastEvidence:[...(r.evidenceHistory||[])].reverse().find(e=>Array.isArray(e?.evidence)&&e.evidence.length)?.evidence;return ev?.length?fold('rel-evidence-'+r.id,'근거 '+(r.evidenceHistory||[]).length+'건 · 보관 '+(r.evidenceArchive||[]).length+'건 · 약 '+Math.ceil((jsonBytes(r.evidenceHistory||[])+jsonBytes(r.evidenceArchive||[])+3)/1024)+' KB',ev.map(e=>`<p class="m3-muted" style="white-space:pre-wrap">${esc(e.role==='user'?'USER':'CHAR/서술')}: ${esc(e.quote)}</p>`).join('')):'';})()}${heldARowList(r)}</div>${r.trajectory.length>=5000?'<p class="m3-warning">변화 이력이 저장 상한에 가까워졌습니다. 자료 관리의 외부 AI 인물 재구축에서 원문과 비교해 정리할 수 있습니다.</p>':''}</div>`;};
+      const dir=r=>{const st=status(r);return `<div class="wp-rel-dir" data-key="rel-${esc(r.id)}"><div class="wp-rel-dh"><b>${esc(r.speaker)}<i>→</i>${esc(r.target)}</b>${tag(st,st==='주입 확인'?'ok':'')}${r.manual?tag('수동 보호'):''}${r.pinned?tag('고정 후보'):''}${btn('편집','relEdit',{arg:r.id,cls:'quiet mini',icon:'edit'})}</div><p class="wp-rel-now">${esc(r.current)}</p>${r.unresolved?`<div class="wp-rel-issue"><b>남은 쟁점</b><span>${esc(r.unresolved)}</span></div>`:''}<div class="wp-rel-more">${r.trajectory?fold('rel-history-'+r.id,'핵심 전환 · '+fmt(r.trajectory.length)+'자',`<p style="white-space:pre-wrap">${esc(r.trajectory)}</p>`):''}${(()=>{const ev=WishRelationships.shownEvidence(r);return ev.length?fold('rel-evidence-'+r.id,'근거 '+(r.evidenceHistory||[]).length+'건 · 보관 '+(r.evidenceArchive||[]).length+'건 · 약 '+Math.ceil((jsonBytes(r.evidenceHistory||[])+jsonBytes(r.evidenceArchive||[])+3)/1024)+' KB',ev.map((e,i)=>srcQuote(e.role==='user'?'USER':'CHAR/서술',e.quote,['rel',r.id,i])).join('')):'';})()}${heldARowList(r)}</div>${r.trajectory.length>=5000?'<p class="m3-warning">변화 이력이 저장 상한에 가까워졌습니다. 자료 관리의 외부 AI 인물 재구축에서 원문과 비교해 정리할 수 있습니다.</p>':''}</div>`;};
       return [...m.values()].map(list=>{const a=list[0],issues=list.filter(r=>r.unresolved).length,on=list.filter(r=>status(r)==='주입 확인').length;
         const peek=`<span class="wp-rel-peek">${list.map(r=>`<span><em>${esc(r.speaker)} →</em>${esc(one(r.current))}</span>`).join('')}</span>`;
         return card('relpair-'+list.map(r=>r.id).join('-'),`${esc(a.speaker)}<i class="wp-rel-arrow">${list.length>1?'↔':'→'}</i>${esc(a.target)}`,`${list.length}방향${issues?' · 남은 쟁점 '+issues:''}${list.some(r=>r.manual)?' · 수동 보호':''}`+peek,list.map(dir).join(''),'',tag(pairStatus(list),on?'ok':''));}).join('');};
@@ -16539,7 +16634,7 @@ function mRelationships() {
       const origin=p.copyOrigin?(p.copyOrigin.mode==='split'?'직접 분리 · 독립 참고':'가져온 사본 · 독립 참고'):p.auto?'이 방 자동':p.ownerCurrent?'이 방 자료':p.ownerChatId?'다른 방 자료':p.active?'기존 자료 · 이 방 사용':'공용·기존 자료',foreignOwned=!!p.ownerChatId&&!p.ownerCurrent;
       const actions=vPackActions(p,foreignOwned);
       const controls=foreignOwned?`<div class="m3-status m3-warning m3-bottomgap">${ic('copy')}<span>다른 방 소유 팩입니다. 공유 연결 대신 <b>자료 관리 → 다른 방 자료 복사하기</b>에서 독립 사본으로 가져오세요.</span>${p.active?chip('기존 공유 사용 해제','pack.active:'+p.id,true):''}</div>`:`<div class="m3-toolbar m3-pack-controlbar">${p.desc?'<span class="m3-muted m3-grow">'+esc(p.desc)+'</span>':''}<div class="m3-row m3-pack-controls">${actions}${''}</div></div>`;
-      const body=S.openSet.has('lore-pack-'+p.id)?[...groups].sort(([a],[b])=>(order.includes(a)?order.indexOf(a):99)-(order.includes(b)?order.indexOf(b):99)).map(([type,list])=>`<section class="m3-date-group" data-key="lore-pack-${esc(p.id)}-type-${esc(type)}"><div class="m3-date-head"><b>${esc(L.lore[type]||type)}</b><small>${list.length}개</small></div>${list.map(e=>{const sp=e.speech,content=sp?`${sp.speaker} → ${sp.target}: “${sp.address}” · ${L.reg[sp.reg]||sp.reg||''}${sp.note?' · '+sp.note:''}`:e.full||e.compact||e.micro||'';return card('entry-'+p.id+'-'+e.id,esc(e.name),`${esc(L.lore[e.type]||e.type||'자료')}${e.prot?' · 수동 보호':e.auto?' · 자동':''}`,`<p>${esc(content)}</p>${(e.triggers||[]).length?`<div class="m3-aka">${e.triggers.map(t=>tag(esc(t))).join('')}</div>`:''}`,(foreignOwned?'':btn('편집','enEdit',{arg:p.id+'|'+e.id,cls:'mini',icon:'edit'})),tag(e.on===false?'사용 안 함':e.anchor?'항상 참고':e.emb?'의미 검색':'키워드',e.on!==false?'ok':''));}).join('')}</section>`).join('')||empty('이 팩에는 카드가 없습니다.') : '';
+      const body=S.openSet.has('lore-pack-'+p.id)?[...groups].sort(([a],[b])=>(order.includes(a)?order.indexOf(a):99)-(order.includes(b)?order.indexOf(b):99)).map(([type,list])=>`<section class="m3-date-group" data-key="lore-pack-${esc(p.id)}-type-${esc(type)}"><div class="m3-date-head"><b>${esc(L.lore[type]||type)}</b><small>${list.length}개</small></div>${list.map(e=>{const sp=e.speech,content=sp?`${sp.speaker} → ${sp.target}: “${sp.address}” · ${L.reg[sp.reg]||sp.reg||''}${sp.note?' · '+sp.note:''}`:e.full||e.compact||e.micro||'',quote=WishSourceJump.loreQuote(e);return card('entry-'+p.id+'-'+e.id,esc(e.name),`${esc(L.lore[e.type]||e.type||'자료')}${e.prot?' · 수동 보호':e.auto?' · 자동':''}`,`<p>${esc(content)}</p>${(e.triggers||[]).length?`<div class="m3-aka">${e.triggers.map(t=>tag(esc(t))).join('')}</div>`:''}${quote&&!foreignOwned?fold('entry-src-'+p.id+'-'+e.id,'근거',srcQuote('',quote,['lore',p.id,e.id])):''}`,(foreignOwned?'':btn('편집','enEdit',{arg:p.id+'|'+e.id,cls:'mini',icon:'edit'})),tag(e.on===false?'사용 안 함':e.anchor?'항상 참고':e.emb?'의미 검색':'키워드',e.on!==false?'ok':''));}).join('')}</section>`).join('')||empty('이 팩에는 카드가 없습니다.') : '';
       return card('lore-pack-'+p.id,esc(p.name),`${rows.length}개 · ${origin}${foreignOwned&&p.ownerLabel?' · '+esc(p.ownerLabel):''}`,controls+(foreignOwned?'<div class="m3-row m3-pack-actionbar">'+actions+'</div>':'')+body,'',(foreignOwned?kind('복사 필요','#8b93a9'):(!Lr.enabled?kind('자료집 꺼짐','#8b93a9'):'')+chip('주입','pack.active:'+p.id,p.active)),COL.lore);
     };
     return pageHead('자료집 '+help(guide)+'<span class="m3-lore-count">사용 자료 '+on+' / '+total+'개 · 팩 '+packs.length+'개</span>',(chip('주입','lore.enabled',Lr.enabled)))+
@@ -17569,6 +17664,13 @@ diff:`<div class="m3-shell">
     preview(d) {
       const items = V.inj.items.filter(i => !i.off);
       return sheet(d, { title: V.inj.verified ? '서버 저장 확인된 구성' : '주입 후보 · 확인 대기', desc: `${fmt(V.inj.total)} / ${fmt(V.inj.max)}자 · 카드 ${items.length}개 · 위에서부터 순서대로`, wide: true, body: `${capMeter()}<div class="m3-topgap">${items.map((i, n) => card('pv-' + (i.rowKey??i.key), `<span class="m3-pvn">${String(n + 1).padStart(2, '0')}</span>${esc(i.title)}`, `${fmt(i.size)}자${!i.why||i.why==='켜져 있으면 계속 포함'?'':' · '+esc(i.why)}`, i.content ? `<pre class="m3-block">${esc(i.content)}</pre>` : '<p class="m3-muted">본문 미리보기 없음</p>', '', kind(i.label || KLABEL[i.kind] || '', COL[i.kind] || COL.guide), COL[i.kind] || COL.guide)).join('') || empty('주입할 항목이 없습니다.')}</div>`, foot: `${btn('전체 원문', 'viewer', { cls: 'quiet mini', icon: 'eye' })}${SP}${closeBtn(d)}` });
+    },
+    /* props: { title, quote, hits:[{id,raw,text,start,end,label}], total, pos, text, note } — 원문 찾기 결과 */
+    source(d) {
+      const h = d.hits[d.pos] || d.hits[0], n = d.hits.length, pad = h.end > h.start ? 160 : 320, a = Math.max(0, h.start - pad), b = Math.min(h.text.length, (h.end > h.start ? h.end : 0) + pad);
+      const marked = (from, to) => from > h.start || to < h.end || h.end <= h.start ? esc(h.text.slice(from, to)) : esc(h.text.slice(from, h.start)) + `<mark class="m3-src-mark">${esc(h.text.slice(h.start, h.end))}</mark>` + esc(h.text.slice(h.end, to));
+      const nav = n > 1 ? `<div class="m3-row m3-sp m3-topgap">${btn('이전', 'srcMove', { arg: d.id + '|-1', cls: 'quiet mini' })}<span class="m3-muted">${d.pos + 1} / ${n}${d.total > n ? ' · 전체 ' + fmt(d.total) + '곳' : ''}</span>${btn('다음', 'srcMove', { arg: d.id + '|1', cls: 'quiet mini' })}</div>` : '';
+      return sheet(d, { title: esc(d.title), desc: esc(h.label), wide: true, body: `${d.note ? `<div class="m3-status m3-bottomgap">${ic('info')}<span>${esc(d.note)}</span></div>` : ''}<p class="m3-muted wp-th-pre">근거 · ${esc(d.quote)}</p>${nav}<p class="wp-th-pre m3-topgap">${a > 0 ? '…' : ''}${marked(a, b)}${b < h.text.length ? '…' : ''}</p>${fold('src-full-' + d.id, '메시지 전체 · ' + fmt(h.text.length) + '자', `<pre class="m3-block">${marked(0, h.text.length)}</pre>`)}`, foot: `${btn('복사', 'copyText', { arg: d.id, cls: 'mini', icon: 'copy' })}${SP}${btn('채팅에서 보기', 'srcJump', { arg: d.id, cls: 'mini', icon: 'eye' })}${closeBtn(d)}` });
     },
     /* props: { text, desc } */
     viewer(d) { return sheet(d, { title: d.title || (d.candidate ? 'Wish 주입 후보 원문' : '이 메시지에 들어간 Wish 주입'), desc: esc(d.desc || `${fmt(String(d.text || '').length)}자`), wide: true, body: `${d.plain?'':`<div class="m3-status m3-ok m3-bottomgap">${ic('check')}<span>${d.candidate?'갱신 전 후보입니다. 한도 선별과 서버 확인 뒤 실제 주입량이 확정됩니다.':'최신 AI 답변은 건드리지 않고, 그 바로 이전 AI 답변 뒤에 숨겨 붙인 내용입니다. 사용자에게는 보이지 않습니다.'}</span></div>`}<pre class="m3-block tall">${esc(d.text || '')}</pre>`, foot: `${btn('복사', 'copyText', { arg: d.id, cls: 'mini', icon: 'copy' })}${SP}${closeBtn(d)}` }); },
@@ -18741,6 +18843,7 @@ Object.assign(WUI_ADAPTER.act,{
  promptGuides:id=>WishPromptGuides.open(id||'apiCommon'),promptDefault:id=>WishPromptGuides.defaults(id),
  importPeopleContinue:id=>WishImportPeople.resume(id),
  raw:s=>WUIEditor('slot',s==='state'?'currentState':'logSummary'),stEdit:id=>WUIEditor('state',id),lgEdit:id=>WUIEditor('log',id),relNew:()=>WishRelationships.open(),relEdit:id=>WishRelationships.open(id),
+ srcFind:(arg,ui)=>WishSourceJump.find(arg,ui),srcMove:(arg,ui)=>WishSourceJump.move(arg,ui),srcJump:(id,ui)=>WishSourceJump.jump(id,ui),
  thNew:()=>WishThreads.open(),thEdit:id=>WishThreads.open(id),thClose:id=>WishThreads.openClose(id),thSuggestApply:id=>WishThreads.openClose(id,{fromSuggestion:true}),thSuggestDismiss:id=>WishThreads.dismiss(id),
  thReopen:id=>WishThreads.reopen(id),thInject:id=>WishThreads.toggle(id),thDel:id=>confirm('이 남은 일을 삭제할까요? 실제 RP 대화는 삭제하지 않습니다.')?WishThreads.remove(id):false,
  externalExport:scope=>ExternalBundles.exportFiles(scope),externalMode:mode=>{setExternalRebuildMode(mode);WUI.paint();},preciseCopy:async id=>{const d=WUI.ui.dlg(id);if(!d)return;const ok=await copyPlainText(d.prompt);d.copied=!!ok;notify(ok?'시작 문구를 복사했습니다.':'복사하지 못했습니다. 아래 칸의 글을 직접 선택해 복사해 주세요.',ok?'success':'warn',4000);WUI.paint();},externalImport:()=>ExternalBundles.importFile(),externalReviewApply:id=>ExternalBundles.apply(id),relReviewApply:id=>R31.applyRelationshipReview(id),
