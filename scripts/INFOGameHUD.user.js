@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         👾 Crack INFO Game HUD (미니 RPG HUD)
 // @namespace    crack-info-game-hud-clean
-// @version      3.6.1
+// @version      3.6.2
 // @description  크랙 채팅 최신 답변을 게임식 로그·관계도·HUD 코멘트로 정리하고, PET/마스코트·토큰 사용량·암호화 클라우드 인계·펫 다이어리를 지원합니다.
 // @author       뤼부이
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/INFOGameHUD.user.js
@@ -18,6 +18,7 @@
 // @connect      aiplatform.googleapis.com
 // @connect      *.aiplatform.googleapis.com
 // @connect      www.gstatic.com
+// @connect      content-firebaseappcheck.googleapis.com
 // @connect      identitytoolkit.googleapis.com
 // @connect      cigh-cloud-save-default-rtdb.asia-southeast1.firebasedatabase.app
 // @connect      *
@@ -29,7 +30,7 @@
   if (window.__CIGH_CLEAN_V240_RELEASE_LOADED__) return;
   window.__CIGH_CLEAN_V240_RELEASE_LOADED__ = true;
 
-  const VERSION = '3.6.1';
+  const VERSION = '3.6.2';
   const FAB_ID = 'cigh-clean-fab';
   const PANEL_ID = 'cigh-clean-panel';
   const POPUP_ID = 'cigh-clean-popup';
@@ -125,6 +126,8 @@
   const FIREBASE_CONFIG_STORE = 'cigh_clean_firebase_config_v1';
   const FIREBASE_LOCATION_STORE = 'cigh_clean_firebase_location_v1';
   const FIREBASE_SDK_VERSION_STORE = 'cigh_clean_firebase_sdk_version_v1';
+  // v3.6.2: 2026-11-02부터 Firebase AI Logic은 App Check가 필수. 콘솔에서 만든 디버그 토큰을 AI 요청 때만 교환한다.
+  const FIREBASE_APPCHECK_TOKEN_STORE = 'cigh_clean_firebase_appcheck_debug_token_v1';
 
   // 암호화 클라우드 인계 (게임 데이터 수동 저장/불러오기 전용)
   // Firebase 웹 API 키는 클라이언트 식별자이며 비밀키가 아닙니다.
@@ -1361,6 +1364,20 @@
     localStorage.setItem(FIREBASE_LOCATION_STORE, String(value || DEFAULT_FIREBASE_LOCATION).trim() || DEFAULT_FIREBASE_LOCATION);
   }
 
+  function getFirebaseAppCheckDebugToken() {
+    return String(localStorage.getItem(FIREBASE_APPCHECK_TOKEN_STORE) || '').trim();
+  }
+
+  function setFirebaseAppCheckDebugToken(value) {
+    const token = String(value || '').trim().replace(/^["'`]+|["'`]+$/g, '').replace(/\s+/g, '');
+    if (token) localStorage.setItem(FIREBASE_APPCHECK_TOKEN_STORE, token);
+    else localStorage.removeItem(FIREBASE_APPCHECK_TOKEN_STORE);
+  }
+
+  function hasFirebaseAppCheckDebugToken() {
+    return !!getFirebaseAppCheckDebugToken();
+  }
+
   function getFirebaseSdkVersion() {
     return String(localStorage.getItem(FIREBASE_SDK_VERSION_STORE) || DEFAULT_FIREBASE_SDK_VERSION).trim() || DEFAULT_FIREBASE_SDK_VERSION;
   }
@@ -1430,6 +1447,56 @@
     }
   }
 
+  // App Check: 디버그 토큰을 Firebase 교환 서버에서 1시간짜리 App Check 토큰으로 바꾼다.
+  // 같은 버전의 firebase-app.js에 등록돼야 하므로 SDK 버전을 맞춰 불러오고, 백그라운드 갱신 없이 AI 요청 때만 교환한다.
+  const firebaseAppChecks = new Map();
+
+  async function loadFirebaseAppCheckModule(version = DEFAULT_FIREBASE_SDK_VERSION) {
+    const safeVersion = String(version || DEFAULT_FIREBASE_SDK_VERSION).trim() || DEFAULT_FIREBASE_SDK_VERSION;
+    try {
+      const appCheckModule = await import(`https://www.gstatic.com/firebasejs/${encodeURIComponent(safeVersion)}/firebase-app-check.js`);
+      if (!appCheckModule?.initializeAppCheck || !appCheckModule?.CustomProvider || !appCheckModule?.getToken) {
+        throw new Error('firebase-app-check.js 모듈에서 initializeAppCheck/CustomProvider/getToken을 찾지 못했어요.');
+      }
+      return appCheckModule;
+    } catch (err) {
+      throw new Error(`Firebase App Check SDK 로드 실패: ${err.message || err}. SDK 버전(${safeVersion})을 확인해줘.`);
+    }
+  }
+
+  async function exchangeFirebaseAppCheckDebugToken(firebaseConfig, debugToken) {
+    const { projectId, appId, apiKey } = firebaseConfig;
+    const data = await gmRequestJson({
+      method: 'POST',
+      url: `https://content-firebaseappcheck.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}:exchangeDebugToken?key=${encodeURIComponent(apiKey)}`,
+      headers: { 'Content-Type': 'application/json' },
+      data: { debug_token: debugToken },
+      timeout: 30000,
+      label: 'Firebase App Check',
+    });
+    const token = String(data?.token || '');
+    if (!token) throw new Error('App Check 서버가 토큰을 주지 않았어요.');
+    const ttl = String(data?.ttl || '').match(/^([\d.]+)s$/);
+    const ttlMs = (ttl ? Number(ttl[1]) : 3600) * 1000;
+    // 만료 5분 전에 SDK가 새로 받도록 남은 시간을 줄여서 알려준다(짧은 TTL은 절반만 사용).
+    return { token, expireTimeMillis: Date.now() + Math.max(ttlMs / 2, ttlMs - 300000) };
+  }
+
+  async function ensureFirebaseAppCheck(app, firebaseConfig, debugToken, sdkVersion) {
+    if (firebaseAppChecks.has(app.name)) return firebaseAppChecks.get(app.name);
+    const missing = ['apiKey', 'projectId', 'appId'].filter(key => !String(firebaseConfig?.[key] || '').trim());
+    if (missing.length) throw new Error(`App Check를 쓰려면 Firebase Config에 ${missing.join('·')} 값이 있어야 해요.`);
+    const appCheckModule = await loadFirebaseAppCheckModule(sdkVersion);
+    if (firebaseAppChecks.has(app.name)) return firebaseAppChecks.get(app.name);
+    const appCheck = appCheckModule.initializeAppCheck(app, {
+      provider: new appCheckModule.CustomProvider({ getToken: () => exchangeFirebaseAppCheckDebugToken(firebaseConfig, debugToken) }),
+      isTokenAutoRefreshEnabled: false,
+    });
+    const entry = { appCheck, getToken: appCheckModule.getToken };
+    firebaseAppChecks.set(app.name, entry);
+    return entry;
+  }
+
   function extractTextFromGeminiResponseData(data) {
     return (data?.candidates || [])
       .flatMap(candidate => candidate.content?.parts || candidate.parts || [])
@@ -1465,10 +1532,26 @@
     const sdkVersion = String(geminiRequest.firebaseSdkVersion || DEFAULT_FIREBASE_SDK_VERSION).trim() || DEFAULT_FIREBASE_SDK_VERSION;
 
     const firebase = await loadFirebaseAiModules(sdkVersion);
-    const appName = `cigh-firebase-${hashTiny(getFirebaseConfigSummary(firebaseConfig))}`;
+    const debugToken = String(geminiRequest.firebaseAppCheckDebugToken || '').trim();
+    // App Check는 앱마다 한 번만 붙일 수 있으므로 토큰이 바뀌면 다른 이름의 앱으로 새로 연다.
+    const appName = `cigh-firebase-${hashTiny(getFirebaseConfigSummary(firebaseConfig))}${debugToken ? `-ac${hashTiny(debugToken)}` : ''}`;
     const app = firebase.getApps().some(existing => existing.name === appName)
       ? firebase.getApp(appName)
       : firebase.initializeApp(firebaseConfig, appName);
+
+    if (debugToken) {
+      // getAI보다 먼저 붙여야 AI 요청에 App Check 토큰이 실린다. 교환 실패는 원인 그대로 먼저 알린다.
+      const appCheck = await ensureFirebaseAppCheck(app, firebaseConfig, debugToken, sdkVersion);
+      try {
+        await appCheck.getToken(appCheck.appCheck, false);
+      } catch (err) {
+        const message = String(err?.message || err || '').replace(/\s+/g, ' ').trim();
+        const hint = /\b(400|403|404)\b/.test(message)
+          ? ' · Firebase 콘솔 > App Check > 앱 메뉴 > 디버그 토큰 관리에 이 토큰이 등록돼 있는지, Firebase Config가 같은 프로젝트·앱인지 확인해줘.'
+          : '';
+        throw new Error(`Firebase App Check 토큰 확인 실패: ${message || '알 수 없는 오류'}${hint}`);
+      }
+    }
 
     const ai = firebase.getAI(app, {
       backend: new firebase.VertexAIBackend(location),
@@ -1499,7 +1582,12 @@
       };
     } catch (err) {
       const message = String(err?.message || err || '').replace(/\s+/g, ' ').trim();
-      throw new Error(`Firebase AI Logic 호출 실패: ${message || '알 수 없는 오류'}`);
+      const status = Number(err?.customData?.status) || 0;
+      // 2026-11-02부터 Firebase AI Logic은 App Check를 필수로 요구한다.
+      const appCheckHint = (status === 401 || status === 403 || /\b40[13]\b/.test(message)) && /app.?check|unauthenticated|attestation/i.test(message)
+        ? (debugToken ? ' · App Check 디버그 토큰이 콘솔에 등록돼 있는지 확인해줘.' : ' · Firebase가 App Check를 요구해요. 설정의 App Check 디버그 토큰 칸을 채워줘.')
+        : '';
+      throw new Error(`Firebase AI Logic 호출 실패: ${message || '알 수 없는 오류'}${appCheckHint}`);
     }
   }
 
@@ -1628,6 +1716,7 @@
         provider,
         model,
         firebaseConfigJson,
+        firebaseAppCheckDebugToken: getFirebaseAppCheckDebugToken(),
         firebaseLocation: isGemini3xFlashModel(model) ? 'global' : getFirebaseLocation(),
         firebaseSdkVersion: getFirebaseSdkVersionForModel(model),
         headers: {},
@@ -15239,10 +15328,17 @@ ${String(brokenJson || '').slice(0, 14000)}`;
               <input id="cigh-clean-firebase-sdk-input" value="${esc(getFirebaseSdkVersion())}" placeholder="12.18.0">
             </label>
           </div>
+          <div class="cigh-clean-settings-grid">
+            <label>
+              <span>App Check 디버그 토큰</span>
+              <input id="cigh-clean-firebase-appcheck-input" type="password" autocomplete="off" spellcheck="false" placeholder="${hasFirebaseAppCheckDebugToken() ? '•••••••• 저장됨 · 새 토큰 입력 시 교체' : '123a4567-b89c-12d3-e456-789012345678'}">
+            </label>
+          </div>
           <div class="cigh-clean-settings-row" data-cigh-provider-action="firebase">
             <button type="button" class="cigh-clean-set-btn red" data-action="firebase-clear">Config 삭제</button>
           </div>
           <div class="cigh-clean-settings-help">Firebase Config + Location + Firebase SDK로 AI Logic을 호출합니다. Location은 특별한 이유가 없으면 global 권장.</div>
+          <div class="cigh-clean-settings-help">2026년 11월 2일부터 Firebase AI Logic은 App Check가 필수입니다. Firebase 콘솔 → App Check → 앱 메뉴(⋮) → 디버그 토큰 관리 → 토큰 생성 후 붙여넣고, App Check에서 Firebase AI Logic을 적용(Enforce)으로 바꿔주세요. 입력칸을 비워두면 저장된 토큰을 유지합니다.</div>
         </div>
       `, { subtitle: true })}
 
@@ -15417,6 +15513,7 @@ ${String(brokenJson || '').slice(0, 14000)}`;
     const firebaseInput = box.querySelector('#cigh-clean-firebase-input');
     const firebaseLocationInput = box.querySelector('#cigh-clean-firebase-location-input');
     const firebaseSdkInput = box.querySelector('#cigh-clean-firebase-sdk-input');
+    const firebaseAppCheckInput = box.querySelector('#cigh-clean-firebase-appcheck-input');
     const modelInput = box.querySelector('#cigh-clean-model-input');
     const thinkingInput = box.querySelector('#cigh-clean-thinking-input');
     const fontSizeInput = box.querySelector('#cigh-clean-font-size-input');
@@ -15495,6 +15592,12 @@ ${String(brokenJson || '').slice(0, 14000)}`;
           setFirebaseConfig(firebaseInput?.value || '');
           setFirebaseLocation(firebaseLocationInput?.value || DEFAULT_FIREBASE_LOCATION);
           setFirebaseSdkVersion(firebaseSdkInput?.value || DEFAULT_FIREBASE_SDK_VERSION);
+          const appCheckTokenCandidate = String(firebaseAppCheckInput?.value || '').trim();
+          if (appCheckTokenCandidate) {
+            setFirebaseAppCheckDebugToken(appCheckTokenCandidate);
+            firebaseAppCheckInput.value = '';
+            firebaseAppCheckInput.placeholder = '•••••••• 저장됨 · 새 토큰 입력 시 교체';
+          }
         } catch (err) {
           alert(`Firebase config 형식이 올바르지 않습니다.\n${err?.message || err}`);
           return;
@@ -15556,7 +15659,7 @@ ${String(brokenJson || '').slice(0, 14000)}`;
       const savedProvider = getGeminiProvider();
 
       const providerLine = savedProvider === 'firebase'
-        ? `▷Firebase AI Logic: ${hasFirebaseConfig() ? 'ON' : 'Config 없음'} (${getFirebaseLocation()}, SDK ${getFirebaseSdkVersion()})`
+        ? `▷Firebase AI Logic: ${hasFirebaseConfig() ? 'ON' : 'Config 없음'} (${getFirebaseLocation()}, SDK ${getFirebaseSdkVersion()}, App Check ${hasFirebaseAppCheckDebugToken() ? 'ON' : '없음'})`
         : savedProvider === 'deepseek'
           ? `▷DeepSeek: ${hasDeepSeekKey() ? 'ON' : '키 없음'} (${getDeepSeekModel()}, thinking ${getDeepSeekThinkingLabel()})`
           : `▷AI Studio API Key: ${hasGeminiKey() ? 'ON' : '없음'}`;
@@ -15645,9 +15748,14 @@ ${String(brokenJson || '').slice(0, 14000)}`;
           alert(err?.message || String(err));
         }
       } else if (action === 'firebase-clear') {
-        if (!confirm('저장된 Firebase Config를 삭제할까요?')) return;
+        if (!confirm('저장된 Firebase Config와 App Check 토큰을 삭제할까요?')) return;
         setFirebaseConfig('');
+        setFirebaseAppCheckDebugToken('');
         if (firebaseInput) firebaseInput.value = '';
+        if (firebaseAppCheckInput) {
+          firebaseAppCheckInput.value = '';
+          firebaseAppCheckInput.placeholder = '123a4567-b89c-12d3-e456-789012345678';
+        }
         setFooter('FIREBASE CLEARED');
         pushLog(['▷Firebase Config를 삭제했다!']);
       } else if (action === 'toggle') {
