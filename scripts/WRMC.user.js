@@ -6809,6 +6809,18 @@ function remapLogSelectionKeysByPairs(room,pairs,newBlocks){
  const remap=arr=>(arr||[]).map(String).filter(k=>byOldKey.has(k)).map(k=>byOldKey.get(k)).filter(k=>valid.has(k));
  room.autoLogPinnedKeys=remap(room.autoLogPinnedKeys);room.autoLogExcludedKeys=remap(room.autoLogExcludedKeys);room.manualLogSelectedKeys=remap(room.manualLogSelectedKeys);
 }
+// A raw log save can move blocks, and an unknown-date key holds its block position. An old unknown-date block takes the key of the new one
+// with the same heading+body, compared after the same cleanup the save applies (n-th copy to n-th copy, only when both sides hold as many
+// copies). A block edited in place keeps its key when it did not move and it is the only unmatched block with its heading on each side.
+// Any other unknown-date selection is dropped; dated keys stay as they are.
+function remapUnknownLogSelectionKeys(room,oldBlocks,newBlocks){
+ const olds=oldBlocks.filter(b=>b.isUnknown),news=newBlocks.filter(b=>b.isUnknown),byOldKey=new Map(),group=(list,id)=>{const m=new Map();for(const b of list){const k=id(b);if(!m.has(k))m.set(k,[]);m.get(k).push(b);}return m;};
+ const newRaw=group(news,b=>b.raw);for(const [raw,list] of group(olds,b=>cleanedPastedText(b.raw))){const next=newRaw.get(raw)||[];if(next.length===list.length)list.forEach((b,i)=>byOldKey.set(b.key,next[i].key));}
+ const used=new Set(byOldKey.values()),restOld=olds.filter(b=>!byOldKey.has(b.key)),restNew=news.filter(b=>!used.has(b.key)),restKeys=new Set(restNew.map(b=>b.key)),oldHead=group(restOld,b=>b.heading),newHead=group(restNew,b=>b.heading);
+ for(const b of restOld)if(restKeys.has(b.key)&&oldHead.get(b.heading).length===1&&(newHead.get(b.heading)||[]).length===1)byOldKey.set(b.key,b.key);
+ const remap=arr=>(arr||[]).map(String).filter(k=>!k.startsWith('unknown-')||byOldKey.has(k)).map(k=>byOldKey.get(k)||k);
+ room.autoLogPinnedKeys=remap(room.autoLogPinnedKeys);room.autoLogExcludedKeys=remap(room.autoLogExcludedKeys);room.manualLogSelectedKeys=remap(room.manualLogSelectedKeys);
+}
 
   function duplicateLogDateGroups(room) {
     const log = (room?.slots || []).find(s => s.id === 'logSummary');
@@ -8760,9 +8772,9 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
   const local=optional.map((item,id)=>({item,id})).sort((a,b)=>Number(b.item.recallScore||0)-Number(a.item.recallScore||0)||Number(b.item.logIndex||0)-Number(a.item.logIndex||0));
   const direct=item=>Number(item.recallKeywordScore??item.recallScore??0)>0;
   const sourcePayload=local.map(({item,id})=>({id,title:String(item.title||''),kind:injectionCadenceKind(item),text:String(item.content||''),local_match:direct(item)}));
-  const indexed=WishEconomy.settings(room).index,payload=indexed?WishEconomy.prepare(room,sourcePayload):sourcePayload;
+  const indexed=WishEconomy.settings(room).index,payload=indexed?WishEconomy.prepare(room,sourcePayload):sourcePayload,scene=options.sceneText??original;
   // 후보의 관련도 순위는 최종 글자 예산과 무관하므로 40k→36k 재시도에서도 그대로 재사용합니다.
-  const keySource=JSON.stringify(['selection-low-v1',WishPromptGuides.selectorStamp(),indexed,cfg,query,original,String(room.slots?.find(s=>s.id==='currentState')?.content||'').slice(0,5000),sourcePayload,items.map(i=>[i.slotId,i.content,i.autoType]),settings.provider,getAiSelectedModel(settings),isAiProviderReady(settings)]),key=aiHashTiny(keySource)+':'+keySource.length;
+  const keySource=JSON.stringify(['selection-low-v1',WishPromptGuides.selectorStamp(),indexed,cfg,query,original,scene,String(room.slots?.find(s=>s.id==='currentState')?.content||'').slice(0,5000),sourcePayload,items.map(i=>[i.slotId,i.content,i.autoType]),settings.provider,getAiSelectedModel(settings),isAiProviderReady(settings)]),key=aiHashTiny(keySource)+':'+keySource.length;
   let rank=allFitRankCache.get(key);
   if(rank?.method==='local-fallback'&&Date.now()-Number(rank.at||0)>=30000){allFitRankCache.delete(key);rank=null;}
   if(options.preferredKeys){const positions=new Map(optional.map((item,id)=>[pendingItemIdentity(item),id]));rank={ids:options.preferredKeys.filter(k=>positions.has(k)).map(k=>positions.get(k)),method:options.preferredMethod||'local',error:''};}
@@ -8781,7 +8793,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
         for(const candidates of batches){
           const remaining=selectionDeadline-Date.now();
           if(remaining<=0)throw Error(`주입 후보 AI 선별이 ${Math.ceil(RECALL_SELECTION_TIMEOUT_MS/1000)}초를 넘어 로컬 선별로 전환합니다.`);
-          const result=await callAiProvider(settings,getGuideText('apiRecall')+(indexed?getGuideText('apiIndex'):''),JSON.stringify({mode:cfg,query:String(query).slice(-8000),scene_context:{previous_answer:recallSceneText(original),current_state_excerpt:String(room.slots?.find(s=>s.id==='currentState')?.content||'').slice(0,5000),scope:'읽기 전용 일부 문맥 · 신규 사실 생성 금지'},candidates}),{taskKind:'select',responseMimeType:'application/json',maxOutputTokens:indexed?Math.min(16384,8192+candidates.filter(x=>x.build_index).length*600):4096,timeoutMs:remaining,operationLabel:cfg.semantic&&cfg.selector?'관련 기억 찾기·우선순위 정하기':cfg.semantic?'표현이 다른 기억 찾기':'기억 우선순위 정하기'});
+          const result=await callAiProvider(settings,getGuideText('apiRecall')+(indexed?getGuideText('apiIndex'):''),JSON.stringify({mode:cfg,query:String(query).slice(-8000),scene_context:{previous_answer:recallSceneText(scene),current_state_excerpt:String(room.slots?.find(s=>s.id==='currentState')?.content||'').slice(0,5000),scope:'읽기 전용 일부 문맥 · 신규 사실 생성 금지'},candidates}),{taskKind:'select',responseMimeType:'application/json',maxOutputTokens:indexed?Math.min(16384,8192+candidates.filter(x=>x.build_index).length*600):4096,timeoutMs:remaining,operationLabel:cfg.semantic&&cfg.selector?'관련 기억 찾기·우선순위 정하기':cfg.semantic?'표현이 다른 기억 찾기':'기억 우선순위 정하기'});
           const parsed=WLOG.parseJson(result.text,'주입 후보 선별',result.diagnostic),data=indexed?WishEconomy.decode(parsed):parsed,valid=new Set(candidates.map(x=>x.id)),seen=new Set();
           if(!data||Object.keys(data).some(k=>k!=='scores')||!Array.isArray(data.scores)||data.scores.length!==candidates.length)throw Error('후보 개수가 맞지 않는 AI 결과');
           for(const row of data.scores){if(!row||Object.keys(row).some(k=>!['id','relevance','related',...(indexed?['index_quotes']:[])].includes(k))||!valid.has(row.id)||seen.has(row.id)||!Number.isInteger(row.relevance)||row.relevance<0||row.relevance>100||typeof row.related!=='boolean')throw Error('유효하지 않은 AI 후보 선별');seen.add(row.id);scores.push(row);}
@@ -9541,7 +9553,7 @@ function openDefaultExtraPresetDialog(room){return WUIOpenPromise('presets',{wis
   })();
 
   async function createManagerBackup() {return await WLOG.run("백업 파일 구성 중",async task=>{
-    const names=[APP.storeName,APP.libraryStoreName,APP.cognitionStoreName,APP.runtimeStoreName,APP.historyStoreName];
+    await Promise.all([...storageWrites.values()].map(p=>p.catch(()=>{})));const names=[APP.storeName,APP.libraryStoreName,APP.cognitionStoreName,APP.runtimeStoreName,APP.historyStoreName];
     const data=await new Promise((resolve,reject)=>{
       const tx=state.db.transaction(names,'readonly'),out={};
       for(const name of names){const q=tx.objectStore(name).getAll();q.onsuccess=()=>{out[name]=q.result||[];};}
@@ -9984,6 +9996,15 @@ function formatLocalRecordTime(value){
     lorePackCacheLoaded = true;
 
     return pack;
+  }
+
+  async function putManualLorePack(value, base) {
+    // 수동 편집은 이 탭 캐시를 기준으로 하므로, 다른 탭이 먼저 저장한 자료집이면 덮어쓰지 않고 목록을 새로 불러옵니다.
+    const stale=async()=>{await loadLorePackCache(true).catch(e=>console.warn('[Wish] 자료 목록 갱신 보류',e));renderModalIfOpen();const error=new Error('다른 탭에서 자료집이 바뀌었어요. 다시 열어 확인해 주세요.');error.code='AUTO_LORE_STALE';return error;};
+    // The stored row is normalized like the cache before comparing, and embeddings (not part of the content fingerprint) are left out to keep big packs fast.
+    const raw=await getCharacterLibrary(base?.scopeId),lean=p=>({...p,entries:(Array.isArray(p?.entries)?p.entries:Array.isArray(p?.lore)?p.lore:[]).map(e=>{if(!e||typeof e!=='object')return e;const {embedding,...rest}=e;return rest;})});
+    if(!raw||autoLoreContentFingerprint(normalizeLorePack(lean(raw),raw.name||'자료집'))!==autoLoreContentFingerprint(lean(base)))throw await stale();
+    try{return await putLorePackIfFingerprint(value,lorePackStorageFingerprint(raw));}catch(error){if(error?.code==='AUTO_LORE_STALE')throw await stale();throw error;}
   }
 
   async function putLorePackAndRoomAtomic(value,expectedStorageFingerprint,room,nextLoreAutomation,options={}) {
@@ -10587,6 +10608,41 @@ ${AI_JSON_TEXT_RULE}
     catch(error){return String(error?.message||error||'현재 주입 갱신 실패');}
   }
 
+  // A manual actor edit (name, aliases, PC) carries over to the rows that store that person: relationships bound by actor id,
+  // speech rows by the old name. Rows are compared with the actor's current values, so saving the actor again repairs a sync that
+  // did not finish. A row that would land on a direction another row already holds, or a speech row whose old pair has a lore-pack
+  // rule (renaming it would let that rule show again beside the new row), keeps its old name and is listed.
+  async function syncActorEditRows(room,before,after,savedId=''){
+    const old=new Map((before||[]).map(a=>[a.id,a])),snap=a=>JSON.stringify([a.name,a.aliases||[],!!a.isPlayer]),live=(after||[]).filter(a=>!a.archived);
+    let kept=[];
+    try{
+      const bound=WishRelationships.normalize(room.relationships),sidesOf=(r,a)=>['speaker','target'].filter(side=>r[side+'ActorId']===a.id);
+      const changed=new Map(live.filter(a=>a.id===savedId||(old.has(a.id)&&snap(old.get(a.id))!==snap(a))||bound.some(r=>sidesOf(r,a).some(side=>speechNameKey(r[side])!==speechNameKey(a.name)||!!r[side+'PC']!==!!a.isPlayer))).map(a=>[a.id,a]));
+      if(!changed.size)return '';
+      // Old names: the name before this save and a stale name a bound row still holds. A name another actor uses now is left alone.
+      const taken=new Set(live.map(a=>speechNameKey(a.name))),renamed=new Map(),lore=new Set(resolvedSpeechRelations({...room,speechRelations:[]}).map(x=>speechPairKey(x.speaker,x.target)));
+      for(const a of changed.values())for(const name of [old.get(a.id)?.name,...bound.flatMap(r=>sidesOf(r,a).map(side=>r[side]))]){const k=speechNameKey(name);if(k&&k!==speechNameKey(a.name)&&!taken.has(k))renamed.set(k,a.name);}
+      const plan=(next,list)=>{
+        let count=0;const key=r=>WishRelationships.key(r.speaker,r.target),sides=r=>JSON.stringify([r.speaker,r.target,!!r.speakerPC,!!r.targetPC,r.speakerAliases||[],r.targetAliases||[]]),rows=WishRelationships.normalize(next.relationships),out=[];
+        rows.forEach((r,i)=>{const value={...r};for(const side of ['speaker','target']){const a=changed.get(r[side+'ActorId']);if(a)Object.assign(value,{[side]:a.name,[side+'PC']:!!a.isPlayer,[side+'Aliases']:[...(a.aliases||[])]});}
+          if(sides(value)===sides(r)){out.push(r);return;}
+          if(key(value)!==key(r)&&(speechNameKey(value.speaker)===speechNameKey(value.target)||[...out,...rows.slice(i+1)].some(x=>key(x)===key(value)))){list.push(r.speaker+' → '+r.target+'(관계·같은 방향 있음)');out.push(r);return;}
+          out.push(value);count++;});
+        const speech=Array.isArray(next.speechRelations)?next.speechRelations:[],spoken=[];let speechCount=0;
+        speech.forEach((r,i)=>{const speaker=renamed.get(speechNameKey(r.speaker))??r.speaker,target=renamed.get(speechNameKey(r.target))??r.target;if(speaker===r.speaker&&target===r.target){spoken.push(r);return;}
+          const pair=speechPairKey(speaker,target);if(lore.has(speechPairKey(r.speaker,r.target))){list.push(r.speaker+' → '+r.target+'(호칭·자료집 규칙 있음)');spoken.push(r);return;}
+          if(speechNameKey(speaker)===speechNameKey(target)||[...spoken,...speech.slice(i+1)].some(x=>speechPairKey(x.speaker,x.target)===pair)){list.push(r.speaker+' → '+r.target+'(호칭·같은 방향 있음)');spoken.push(r);return;}
+          spoken.push({...r,speaker,target});speechCount++;});
+        next.relationships=out;
+        // mutate() copies next.pending onto the room before it syncs the carrier, so the speech item is replaced here.
+        if(speechCount){next.speechRelations=normalizeSpeechRelations(spoken);if(next.pending)replaceSpeechPendingItem(next);}
+        return count+speechCount;
+      };
+      if(plan(structuredClone({relationships:room.relationships,speechRelations:room.speechRelations}),kept)){kept=[];await WishRelationships.mutate(room,next=>{plan(next,kept);});}
+    }catch(error){console.warn('[Wish] 관계·호칭 이름 동기화 보류',error);return error?.name==='AbortError'?'다른 작업 중이라 관계·호칭 이름은 그대로 뒀습니다. 작업이 끝난 뒤 인물을 다시 저장해 주세요.':'관계·호칭 이름은 바꾸지 못했습니다: '+String(error?.message||error)+' 인물을 다시 저장하면 다시 맞춥니다.';}
+    return kept.length?'이름을 그대로 둔 항목: '+kept.join(', '):'';
+  }
+
   function loreEntrySourceText(entry) {
     const speech=entry?.speechRule?`${entry.speechRule.speaker} → ${entry.speechRule.target}: ${entry.speechRule.address} / ${speechRegisterLabel(entry.speechRule.register)} / ${entry.speechRule.note||''}`:'';
     const quote=entry?.exactQuote?`실제 대사: ${entry.exactQuote}\n화자: ${entry.quoteSpeaker||''}\n상대: ${entry.quoteTarget||''}\n맥락: ${entry.sceneContext||''}\n장소: ${entry.sceneLocation||''}\n시점: ${entry.sceneDate||''}`:'';
@@ -10923,9 +10979,11 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
     const query=String(queryText||'').trim()||String(room.autoRecallContextText||'');
     const hasOriginal=!!carrierSource?.messageId&&typeof carrierSource.originalText==='string'&&!!carrierSource.originalText;
     const original=hasOriginal?carrierSource.originalText:String(pending.originalText||'');
+    // Before send the scene is the latest AI answer; otherwise it is the carrier text. Size checks always use the carrier.
+    const scene=hasOriginal&&String(carrierSource.sceneText||'').trim()?carrierSource.sceneText:original;
     // Local ranking reads the same turn as the AI review: the AI answer, then this USER input.
     // The input goes last so the 4,000-character semantic query window always keeps it.
-    const rankQuery=[recallSceneText(original),query].filter(Boolean).join('\n\n');
+    const rankQuery=[recallSceneText(scene),query].filter(Boolean).join('\n\n');
     const limit=allFitLimit(room);
     const previous=new Map((pending.items||[]).map(item=>[pendingItemIdentity(item),item]));
     const includeChoice=key=>pending.quickIncludes?.[key]||previous.get(key)?.quickChoice;
@@ -10988,7 +11046,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
     const inventory=JSON.stringify(['selection-low-v1',WishPromptGuides.selectorStamp(),recallSelectionSettings(room),SecondaryRebuild.stamp(room),WishEconomy.stamp(room),normalPlan.map(i=>[pendingItemIdentity(i),i.content,i.autoType,i.quickChoice]).sort((a,b)=>a[0].localeCompare(b[0]))]);
     const previousPlan=pending.recallPlan;
     const retained=!selection&&!allowAi&&previousPlan?.inventoryHash===aiHashTiny(inventory)&&previousPlan.inventoryChars===inventory.length&&previousPlan.method==='ai'&&Array.isArray(previousPlan.rankedKeys);
-    if(!selection)selection=await chooseAllFitItems(room,normalPlan,original,query,{forceLocal:!allowAi||!hasOriginal,...(retained?{preferredKeys:previousPlan.rankedKeys,preferredMethod:'ai'}:{})});
+    if(!selection)selection=await chooseAllFitItems(room,normalPlan,original,query,{forceLocal:!allowAi||!hasOriginal,sceneText:scene,...(retained?{preferredKeys:previousPlan.rankedKeys,preferredMethod:'ai'}:{})});
     assertPlan();
     const review={method:selection.method,error:selection.error,reason:selection.method==='all-fit'?'within-limit':retained?'prepared-result':selection.fullTotal<=APP.carrierSafeChars?'room-limit':selection.method==='ai'?'over-limit':selection.error?'ai-failure':'before-send-or-local'};
     const plan={fullTotal:selection.fullTotal,messageId:carrierSource?.messageId||''};
@@ -12569,6 +12627,8 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
         const originalText=stripOurContextBlock(messageTextOf(checked)).text;
         if(!originalText.trim())throw emptyCarrierBodyError(checked,newId);
         carrierSource={messageId:newId,originalText};checkedRead={message:checked,at:Date.now()};
+        // A new USER replies to the latest AI answer: rank with it as the scene. The carrier stays the write and size target.
+        if(reason==='before-send'&&latestId&&latestId!==newId){const sceneText=stripOurContextBlock(messageTextOf(frame.latest)).text;if(sceneText.trim())carrierSource.sceneText=sceneText;}
       }
       const refreshed=await refreshHybridRecall(room,room.autoRecallContextText||'',{allowAi:beforeSend||reason==='start',allowSemanticNetwork:beforeSend,carrierSource,onProgress:control?.onProgress});
       if(refreshed.reviewMethod==='all-fit'&&checkedRead)allFitCarrierRead=checkedRead;
@@ -13214,7 +13274,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       try{
         const ed=state.v2Editor||{},name=String(overlay.querySelector('[data-v2-lore-pack-name]')?.value||'').trim();if(!name)throw new Error('자료집 이름을 입력해 주세요.');
         const existing=(state.v2LorePacks||[]).find(item=>item.scopeId===ed.packId);
-        let pack=existing?structuredClone(existing):normalizeLorePack({name,entries:[],ownerChatId:room.chatId,ownerApiChatId:apiChatIdOf(room)},name);if(!existing){pack.ownerChatId=String(room.chatId||'');pack.ownerApiChatId=String(apiChatIdOf(room)||'');}pack.name=name.slice(0,160);pack.description=String(overlay.querySelector('[data-v2-lore-pack-description]')?.value||'').trim().slice(0,2000);pack=await putLorePack(pack);
+        let pack=existing?structuredClone(existing):normalizeLorePack({name,entries:[],ownerChatId:room.chatId,ownerApiChatId:apiChatIdOf(room)},name);if(!existing){pack.ownerChatId=String(room.chatId||'');pack.ownerApiChatId=String(apiChatIdOf(room)||'');}pack.name=name.slice(0,160);pack.description=String(overlay.querySelector('[data-v2-lore-pack-description]')?.value||'').trim().slice(0,2000);pack=existing?await putManualLorePack(pack,existing):await putLorePack(pack);
         if(!existing&&!(room.activeLorePackIds||[]).includes(pack.scopeId))room.activeLorePackIds.push(pack.scopeId);await saveRoom(room);const warning=await syncLoreMutation(room,'lore-pack-save');
         state.v2LoreOpenPackId=pack.scopeId;state.v2Editor=null;notify(`자료집 ‘${pack.name}’을 저장했습니다.${warning?' 현재 주입 갱신은 다음 전송 때 다시 시도합니다.':''}`,warning?'warn':'success',warning?5000:2400);renderModal();
       }catch(error){room.activeLorePackIds=beforeActive;notify(error.message,'error',6500,{error:error});if(btn.isConnected){delete btn.dataset.busy;btn.disabled=false;}}
@@ -13239,12 +13299,12 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
         const entry=normalizeLoreEntry({...old,id:old?.id||makeLoreEntryId(),name,type,triggers:String(overlay.querySelector('[data-v2-lore-entry-triggers]')?.value||'').split(',').map(x=>x.trim()).filter(Boolean),summary:{full,compact,micro},inject:{full,compact,micro},anchor:type==='speech'?false:!!overlay.querySelector('[data-v2-lore-entry-anchor]')?.checked,enabled:!!overlay.querySelector('[data-v2-lore-entry-enabled]')?.checked,speechRule,autoManaged:false,userProtected:storedPack.autoManaged===true||detachedFromAuto||old?.userProtected===true,autoLoreKey:String(old?.autoLoreKey||''),embedding:null,updatedAt:Date.now()});
         const pair=entry.speechRule&&speechPairKey(entry.speechRule.speaker,entry.speechRule.target),duplicate=pair?(pack.entries||[]).find(item=>item.id!==entry.id&&item.speechRule&&speechPairKey(item.speechRule.speaker,item.speechRule.target)===pair):null;
         if(duplicate){entry.id=duplicate.id;pack.entries=pack.entries.filter(item=>item.id!==old?.id&&item.id!==duplicate.id);}
-        const index=(pack.entries||[]).findIndex(item=>item.id===entry.id);if(index>=0)pack.entries[index]=entry;else pack.entries.push(entry);await putLorePack(pack);const warning=await syncLoreMutation(room,'lore-entry-save');state.v2LoreOpenPackId=pack.scopeId;state.v2Editor=null;notify(`자료 ‘${entry.name}’을 저장했습니다.${detachedFromAuto?' 자동 갱신에서 분리해 수동 보호했습니다.':''}${duplicate?' 같은 화자→상대의 이전 호칭 규칙을 교체했습니다.':''}${warning?' 현재 주입 갱신은 다음 전송 때 다시 시도합니다.':''}`,warning?'warn':'success',warning?5200:detachedFromAuto?4200:2400);renderModal();
+        const index=(pack.entries||[]).findIndex(item=>item.id===entry.id);if(index>=0)pack.entries[index]=entry;else pack.entries.push(entry);await putManualLorePack(pack,storedPack);const warning=await syncLoreMutation(room,'lore-entry-save');state.v2LoreOpenPackId=pack.scopeId;state.v2Editor=null;notify(`자료 ‘${entry.name}’을 저장했습니다.${detachedFromAuto?' 자동 갱신에서 분리해 수동 보호했습니다.':''}${duplicate?' 같은 화자→상대의 이전 호칭 규칙을 교체했습니다.':''}${warning?' 현재 주입 갱신은 다음 전송 때 다시 시도합니다.':''}`,warning?'warn':'success',warning?5200:detachedFromAuto?4200:2400);renderModal();
       }catch(error){notify(error.message,'error',6500,{error:error});if(btn.isConnected){delete btn.dataset.busy;btn.disabled=false;}}
     });
     overlay.querySelector('[data-v2-lore-entry-delete]')?.addEventListener('click',async()=>{
       const ed=state.v2Editor||{},storedPack=(state.v2LorePacks||[]).find(item=>item.scopeId===ed.packId),entry=(storedPack?.entries||[]).find(item=>item.id===ed.entryId);if(!storedPack||!entry||!confirm(`자료 ‘${entry.name}’을 삭제할까요?`))return;const pack=structuredClone(storedPack);
-      try{pack.entries=pack.entries.filter(item=>item.id!==entry.id);await putLorePack(pack);const warning=await syncLoreMutation(room,'lore-entry-delete');state.v2LoreOpenPackId=pack.scopeId;state.v2Editor=null;notify(`자료 ‘${entry.name}’을 삭제했습니다.${warning?' 현재 주입 갱신은 다음 전송 때 다시 시도합니다.':''}`,warning?'warn':'success',warning?5000:2400);renderModal();}catch(error){notify(error.message,'error',6500,{error:error});}
+      try{pack.entries=pack.entries.filter(item=>item.id!==entry.id);await putManualLorePack(pack,storedPack);const warning=await syncLoreMutation(room,'lore-entry-delete');state.v2LoreOpenPackId=pack.scopeId;state.v2Editor=null;notify(`자료 ‘${entry.name}’을 삭제했습니다.${warning?' 현재 주입 갱신은 다음 전송 때 다시 시도합니다.':''}`,warning?'warn':'success',warning?5000:2400);renderModal();}catch(error){notify(error.message,'error',6500,{error:error});}
     });
     overlay.querySelector('[data-v2-speech-enabled]')?.addEventListener('change',async event=>{
       const previous=room.speechConfig?.enabled!==false;room.speechConfig={version:1,enabled:!!event.currentTarget.checked};event.currentTarget.disabled=true;
@@ -13278,7 +13338,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       const ed=state.v2Editor,title=overlay.querySelector('[data-v2-ed-title]')?.value??'',body=overlay.querySelector('[data-v2-ed-body]')?.value??'';
       const editSlot=['slot','state','log'].includes(ed.type)?room.slots.find(s=>s.id===(ed.type==='slot'?ed.slotId:ed.type==='state'?'currentState':'logSummary')):null;
       const editBefore=editSlot?structuredClone(editSlot):null,editRevision=room._rev,editEpoch=room._epoch;
-      const editFields=ed.type==='log'?['autoLogPinnedKeys','autoLogExcludedKeys','manualLogSelectedKeys']:ed.type==='slot'?['deletedCharacterKeys']:[];
+      const editFields=ed.type==='log'||(ed.type==='slot'&&ed.slotId==='logSummary')?['autoLogPinnedKeys','autoLogExcludedKeys','manualLogSelectedKeys']:ed.type==='slot'?['deletedCharacterKeys']:[];
       const fieldsBefore=Object.fromEntries(editFields.map(k=>[k,{own:Object.hasOwn(room,k),value:structuredClone(room[k])}]));
       if(ed.type==='slot'){
         const s=room.slots.find(x=>x.id===ed.slotId);
@@ -13290,7 +13350,9 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
             if(retentionValue!=null)s.retentionTurns=normalizeRetentionTurns(retentionValue);
           }
           if(s.group==='character')s.aliases=String(overlay.querySelector('[data-v2-ed-alias]')?.value||'').split(',').map(x=>x.trim()).filter(Boolean);
+          const oldLogBlocks=s.id==='logSummary'?parseDatedLogBlocks(s.content||''):null;
           s.content=['currentState','logSummary'].includes(s.id)?cleanedPastedText(body):body;
+          if(oldLogBlocks)remapUnknownLogSelectionKeys(room,oldLogBlocks,parseDatedLogBlocks(s.content));
           if(s.group==='character')room.deletedCharacterKeys=(room.deletedCharacterKeys||[]).filter(key=>key!==libraryItemKey(s));
         }
       }
@@ -13365,7 +13427,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     overlay.querySelectorAll('[data-v2-cog-fact-remove]').forEach(btn=>btn.addEventListener('click',async()=>{const id=btn.dataset.v2CogFactRemove;if(!id||!confirm('이 정보를 완전히 삭제할까요? 인물별 앎 상태와 관련 은폐도 함께 삭제됩니다. 이후 RP에서 다시 중요한 정보로 등장하면 자동 분석이 새 정보로 등록할 수 있습니다.'))return;btn.disabled=true;try{if(!bridge?.deleteFact)throw new Error('인지 완전 삭제 기능이 아직 준비되지 않았습니다.');await bridge.deleteFact(apiChatIdOf(room),id);state.v2Cognition=await (bridge.getView||bridge.getRoom).call(bridge,apiChatIdOf(room));renderModal();}catch(e){notify(e.message,'error',6000,{error:e});if(btn.isConnected)btn.disabled=false;}}));
     overlay.querySelectorAll('[data-v2-cog-injection-mode]').forEach(sel=>sel.onchange=async()=>{const factId=sel.dataset.v2CogInjectionMode,mode=sel.value;sel.disabled=true;try{await bridge?.setFactInjectionMode?.(apiChatIdOf(room),factId,mode);state.v2Cognition=await (bridge.getView||bridge.getRoom).call(bridge,apiChatIdOf(room));notify(`인지 주입 · ${mode==='always'?'항상 넣기':mode==='exclude'?'넣지 않기':'자동 선택'}`,'success',1800);renderModal();}catch(e){notify(e.message,'error',6000,{error:e});sel.disabled=false;}});
     overlay.querySelector('[data-v2-cog-reviews-clear]')?.addEventListener('click',async()=>{if(!confirm('검토 후보만 비울까요? 확정된 인지 기록은 유지됩니다.'))return;await bridge?.clearReviews?.(apiChatIdOf(room));state.v2Cognition=null;v2ScheduleAsyncRefresh(room);renderModal();});
-    overlay.querySelector('[data-v2-cog-actor-save]')?.addEventListener('click',async()=>{try{const ed=state.v2Editor;await bridge?.upsertActor?.(apiChatIdOf(room),{id:ed.actorId||'',name:overlay.querySelector('[data-v2-cog-actor-name]')?.value||'',aliases:String(overlay.querySelector('[data-v2-cog-actor-aliases]')?.value||'').split(',').map(x=>x.trim()).filter(Boolean),isPlayer:!!overlay.querySelector('[data-v2-cog-actor-player]')?.checked,present:!!overlay.querySelector('[data-v2-cog-actor-present]')?.checked});if(ed.reviewId)await bridge?.dismissReview?.(apiChatIdOf(room),ed.reviewId);state.v2Cognition=await (bridge.getView||bridge.getRoom).call(bridge,apiChatIdOf(room));state.v2Editor=null;notify(ed.reviewId?'인지 인물을 저장하고 검토 후보를 정리했습니다.':'인지 인물을 저장했습니다.','success',2400);renderModal();}catch(e){notify(e.message,'error',6000,{error:e});}});
+    overlay.querySelector('[data-v2-cog-actor-save]')?.addEventListener('click',async()=>{try{const ed=state.v2Editor,before=(await bridge?.getRoom?.(apiChatIdOf(room)))?.actors||[];await bridge?.upsertActor?.(apiChatIdOf(room),{id:ed.actorId||'',name:overlay.querySelector('[data-v2-cog-actor-name]')?.value||'',aliases:String(overlay.querySelector('[data-v2-cog-actor-aliases]')?.value||'').split(',').map(x=>x.trim()).filter(Boolean),isPlayer:!!overlay.querySelector('[data-v2-cog-actor-player]')?.checked,present:!!overlay.querySelector('[data-v2-cog-actor-present]')?.checked});if(ed.reviewId)await bridge?.dismissReview?.(apiChatIdOf(room),ed.reviewId);state.v2Cognition=await (bridge.getView||bridge.getRoom).call(bridge,apiChatIdOf(room));state.v2Editor=null;const warn=await syncActorEditRows(room,before,state.v2Cognition?.actors,ed.actorId);notify((ed.reviewId?'인지 인물을 저장하고 검토 후보를 정리했습니다.':'인지 인물을 저장했습니다.')+(warn?' '+warn:''),warn?'warn':'success',warn?6500:2400);renderModal();}catch(e){notify(e.message,'error',6000,{error:e});}});
     overlay.querySelector('[data-v2-cog-actor-delete]')?.addEventListener('click',async()=>{const id=state.v2Editor?.actorId;if(!id||!confirm('이 인물을 인지 기록에서 삭제할까요? 관련 은폐 관계도 함께 정리됩니다.'))return;try{await bridge?.removeActor?.(apiChatIdOf(room),id);state.v2Cognition=await (bridge.getView||bridge.getRoom).call(bridge,apiChatIdOf(room));state.v2Editor=null;renderModal();}catch(e){notify(e.message,'error',6000,{error:e});}});
     overlay.querySelector('[data-v2-cog-fact-save]')?.addEventListener('click',async()=>{try{const ed=state.v2Editor,knowledge={};overlay.querySelectorAll('[data-v2-cog-knowledge]').forEach(sel=>knowledge[sel.dataset.v2CogKnowledge]=sel.value);const id=await bridge?.upsertFact?.(apiChatIdOf(room),{id:ed.factId||'',label:overlay.querySelector('[data-v2-cog-fact-label]')?.value||'',content:overlay.querySelector('[data-v2-cog-fact-content]')?.value||'',type:overlay.querySelector('[data-v2-cog-fact-type]')?.value||'other',injectionMode:overlay.querySelector('[data-v2-cog-fact-injection-mode]')?.value||'auto',knowledge});if(ed.reviewId)await bridge?.dismissReview?.(apiChatIdOf(room),ed.reviewId);state.v2Cognition=await (bridge.getView||bridge.getRoom).call(bridge,apiChatIdOf(room));state.v2Editor={type:'cog-fact',factId:id};notify(ed.reviewId?'인지 정보를 저장하고 검토 후보를 정리했습니다.':'인지 정보를 저장했습니다.','success',2400);renderModal();}catch(e){notify(e.message,'error',6000,{error:e});}});
     overlay.querySelector('[data-v2-cog-fact-delete]')?.addEventListener('click',async()=>{const id=state.v2Editor?.factId;if(!id||!confirm('이 정보의 추적을 종료할까요? 백업/이력용 원본 레코드는 남을 수 있습니다.'))return;try{await bridge?.archiveFact?.(apiChatIdOf(room),id);state.v2Cognition=await (bridge.getView||bridge.getRoom).call(bridge,apiChatIdOf(room));state.v2Editor=null;renderModal();}catch(e){notify(e.message,'error',6000,{error:e});}});
@@ -13730,10 +13792,14 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       if (aware.length) parts.push('- ' + aware.map(a => a.name).join('·') + ': 알고 있음');
       if (unaware.length) parts.push('- ' + unaware.map(a => a.name).join('·') + ': 아직 모름');
       if (unverified.length) parts.push('- ' + unverified.map(a => a.name).join('·') + ': 아는지 확인 안 됨; 이미 안다고 단정하지 않음');
-      for (const c of conceals) parts.push('- 은폐: ' + name(c.holderId) + '는 ' + name(c.targetId) + '에게 이를 감춤'
-        + (c.publicName ? '; 이 상황에서 ' + c.publicName + ' 사용' : ''));
+      // The stored scope says what exactly is hidden and how; the blank-input default adds nothing, and a long scope is cut at 200.
+      // The compact fallback (lite) keeps only the boundary line, so a tight budget still carries every concealment.
+      const lite = [];
+      for (const c of conceals) { const scope = String(c.scope || '').replace(/\s+/g, ' ').trim(), line = '- 은폐: ' + name(c.holderId) + '는 ' + name(c.targetId) + '에게 이를 감춤'
+        + (c.publicName ? '; 이 상황에서 ' + c.publicName + ' 사용' : ''); lite.push(line);
+        parts.push(line + (scope && scope !== '지정 상대에게 비공개' ? '; 숨기는 범위: ' + (scope.length > 200 ? scope.slice(0, 200) + '…' : scope) : '')); }
       const defaultScore=conceals.length*20+unaware.length*8+unverified.length*3+(query.strong?18:0)+(includeThisTurn?300:0)+(permanentMode==='always'?220:0)+(recent?12:0)+(factReviews.length?16:0)+(split?18:0);
-      const compact=['정보: '+String(f.label||'제목 없음')+' (상세 본문은 길이 제한으로 생략; 이 제목만으로 내용을 추정하지 않음)',...parts.slice(1)].join('\n');
+      const compact=['정보: '+String(f.label||'제목 없음')+' (상세 본문은 길이 제한으로 생략; 이 제목만으로 내용을 추정하지 않음)',...parts.slice(1,parts.length-lite.length),...lite].join('\n');
       sections.push({id:f.id,text:parts.join('\n'),compact,score:mode==='all'?defaultScore:score,reason:reasons[0]||'모든 인지 정보',reasons,present:present.size,mentioned:mentioned.size});
     }
     sections.sort((a,b)=>b.score-a.score||a.id.localeCompare(b.id));
@@ -16529,7 +16595,7 @@ diff:`<div class="m3-shell">
       q('[data-avg]').textContent=(t.calls/days).toFixed(1);
       q('[data-fail]').textContent=t.failed.toLocaleString();q('[data-failbox]').className=t.failed?'bad':'';
       const warn=q('[data-warn]');warn.hidden=!t.unknown;
-      warn.textContent=t.unknown?`공식 단가가 없는 모델 호출 ${t.unknown.toLocaleString()}회 · 비용 합계에서 빠짐`:'';
+      warn.textContent=t.unknown?`비용 미확인 호출 ${t.unknown.toLocaleString()}회(실패·사용량 기록 없음·단가 없음) · 합계에서 빠짐`:'';
       const byDay=new Map();rows.forEach(r=>{if(!byDay.has(r.date))byDay.set(r.date,[]);byDay.get(r.date).push(r);});
       const bins=all?[...months].reverse().map(m=>({lab:mlabel(m),rows:rows.filter(r=>r.date.startsWith(m)),now:m===cur}))
         :Array.from({length:len},(_,i)=>{const k=sel+'-'+String(i+1).padStart(2,'0');return {lab:mm+'월 '+(i+1)+'일',rows:byDay.get(k)||[],now:k===today};});
@@ -17940,7 +18006,7 @@ function WUIDedupeApply(d){
 }
 async function WUIPresetsSave(d,apply){const items=d.draft.list.map((x,i)=>({...x,title:String(x.title||'').trim()||'기타 '+(i+1),content:String(x.content||'').trim(),retentionTurns:normalizeRetentionTurns(x.ret)})).filter(x=>x.content);if(items.some(x=>x.content.length>APP.absoluteUiMax))throw Error('프리셋 내용이 최대 길이를 넘습니다.');const saved=saveDefaultExtraPreset({items});if(apply){applyDefaultExtraPresetToRoom(d.wishRoom,saved);await saveRoom(d.wishRoom);await WUISyncMemoryEdit(d.wishRoom);}WUIRefreshSettings();WUIResolve(d.id,true);notify('기본 프리셋을 저장했습니다.','success');}
 
-async function WUILoreConvert(d){d.draft.busy=true;WUI.paint();try{const room=d.wishRoom,entries=await convertTextToLoreEntries(d.draft.src),existingPack=(state.v2LorePacks||[]).find(p=>p.scopeId===d.draft.target);if(existingPack?.ownerChatId&&String(existingPack.ownerChatId)!==String(room.chatId||''))throw Error('다른 방 소유 자료집에는 직접 변환 결과를 넣을 수 없습니다. 독립 사본을 만든 뒤 사용해 주세요.');let pack=existingPack?structuredClone(existingPack):null,createdNew=!pack;if(pack){const byKey=new Map(pack.entries.map(e=>[loreEntryMergeKey(e),e]));for(const entry of entries){const old=byKey.get(loreEntryMergeKey(entry));if(old){entry.id=old.id;entry.anchor=entry.speechRule?false:old.anchor||entry.anchor;entry.enabled=old.enabled!==false;}byKey.set(loreEntryMergeKey(entry),entry);}pack.entries=[...byKey.values()];}else pack=normalizeLorePack({name:String(d.draft.name||'가져온 자료집').trim(),entries,ownerChatId:room.chatId,ownerApiChatId:apiChatIdOf(room)});pack=await putLorePack(pack);if(createdNew&&!(room.activeLorePackIds||[]).includes(pack.scopeId))room.activeLorePackIds.push(pack.scopeId);await saveRoom(room);if(room.pending){replaceLorePendingItems(room,room.autoRecallContextText||'',null);await syncPendingCarrier(room,'lore-convert');}notify('자료집 변환 완료 · '+entries.length+'개 자료','success');WUI.closeSheet(d);renderModalIfOpen();}finally{d.draft.busy=false;}}
+async function WUILoreConvert(d){d.draft.busy=true;WUI.paint();try{const room=d.wishRoom,entries=await convertTextToLoreEntries(d.draft.src),existingPack=(state.v2LorePacks||[]).find(p=>p.scopeId===d.draft.target);if(existingPack?.ownerChatId&&String(existingPack.ownerChatId)!==String(room.chatId||''))throw Error('다른 방 소유 자료집에는 직접 변환 결과를 넣을 수 없습니다. 독립 사본을 만든 뒤 사용해 주세요.');let pack=existingPack?structuredClone(existingPack):null,createdNew=!pack;if(pack){const byKey=new Map(pack.entries.map(e=>[loreEntryMergeKey(e),e]));for(const entry of entries){const old=byKey.get(loreEntryMergeKey(entry));if(old){entry.id=old.id;entry.anchor=entry.speechRule?false:old.anchor||entry.anchor;entry.enabled=old.enabled!==false;}byKey.set(loreEntryMergeKey(entry),entry);}pack.entries=[...byKey.values()];}else pack=normalizeLorePack({name:String(d.draft.name||'가져온 자료집').trim(),entries,ownerChatId:room.chatId,ownerApiChatId:apiChatIdOf(room)});pack=existingPack?await putManualLorePack(pack,existingPack):await putLorePack(pack);if(createdNew&&!(room.activeLorePackIds||[]).includes(pack.scopeId))room.activeLorePackIds.push(pack.scopeId);await saveRoom(room);if(room.pending){replaceLorePendingItems(room,room.autoRecallContextText||'',null);await syncPendingCarrier(room,'lore-convert');}notify('자료집 변환 완료 · '+entries.length+'개 자료','success');WUI.closeSheet(d);renderModalIfOpen();}finally{d.draft.busy=false;}}
 
 const WUI_ACTION_MAP={arm:'arm',spDel:'speech-delete',packExport:'lore-pack-export',ftDel:'cog-fact-remove',rvClear:'cog-reviews-clear',rvAccept:'review-accept',rvDismiss:'review-dismiss',fileBackup:'backup',fileRestore:'restore',reset:'reset',};
 const WUI_ADAPTER={isChatPath:path=>!!getChatIdFromPath(path),vm:WUIReadModel,monitor:WUIReadMonitor,streaming:()=>!!state.currentRoom&&backgroundWorkPending(apiChatIdOf(state.currentRoom)),act:Object.fromEntries(Object.entries(WUI_ACTION_MAP).map(([name,action])=>[name,async arg=>{const ok=await WUIInvoke(action,arg);if(ok)WUIRefreshSettings();return ok;}])),bind:{},save:WUISaveEditor,remove:WUIRemoveEditor,
