@@ -3848,8 +3848,83 @@ function open(id){const room=state.currentRoom,old=normalize(room.relationships)
       if(text.length>cap)text=cap>1?text.slice(0,cap-1).trimEnd()+'…':'';
       return {text,rows:rows.map(r=>({id:r.id,mode:r.mode})),summary:['열림 '+rows.length+'개',short?'제목만 '+short+'개':'',out?'빠짐 '+out+'개':''].filter(Boolean).join(' · ')};
     }
+
+    // Tab view: each row carries the per-turn mode from injection(), so the badges and the injected list never disagree.
+    // Open rows: most recently changed first, then title. Closed rows: most recently closed first, later rows first on a tie.
+    const VIEW=new WeakMap();
+    function view(room){
+      const stored=normalizeLoose(room?.threads),now=clock(room),hit=VIEW.get(stored);
+      if(hit&&hit.now===now)return hit.out;
+      const inj=injection(room),modes=new Map(inj.rows.map(r=>[r.id,r.mode])),open=[],closed=[];
+      stored.forEach((t,i)=>{
+        const done=t.status==='closed';
+        (done?closed:open).push({i,row:{...t,kindLabel:kindLabel(t.kind),closeWord:done?closeWord(t.kind,t.closed.type):'',
+          ageTurns:done||!t.opened.turn||!now?null:Math.max(0,now-t.opened.turn),mode:done?'':t.enabled===false?'off':modes.get(t.id)||''}});
+      });
+      open.sort((a,b)=>b.row.updatedTurn-a.row.updatedTurn||a.row.title.localeCompare(b.row.title,'ko'));
+      closed.sort((a,b)=>(b.row.closed.turn-a.row.closed.turn)||b.i-a.i);
+      const out={open:open.length,closed:closed.length,listChars:inj.text.length,cap:INJECT_CHARS,rows:[...open,...closed].map(x=>x.row)};
+      VIEW.set(stored,{now,out});return out;
+    }
+    // Panel edits. Every write goes clone → save → assign under the room's AI lock (a running 함께 정리 finishes first), then
+    // the pending list is rebuilt and the carrier synced, the same way as relationship edits.
+    const CHANGED='남은 일이 바뀌었습니다. 편집창을 다시 열어 주세요.',GONE='남은 일이 바뀌었습니다. 목록을 다시 확인해 주세요.';
+    async function mutate(room,change){
+      const epoch=localRestoreEpoch;
+      await withRoomExclusiveKeys([apiChatIdOf(room),'ai:'+apiChatIdOf(room)],async()=>{
+        if(epoch!==localRestoreEpoch||state.currentRoom!==room||localRestoreInProgress())throw Error('방 또는 복원 상태가 바뀌었습니다.');
+        const next=structuredClone(room);
+        assign(next,normalizeLoose(prune(change([...normalizeLoose(next.threads)],clock(next)))));
+        await saveRoom(next);Object.assign(room,next);
+        if(room.pending){room.pending.recallNeedsRefresh=true;replaceThreadsPendingItem(room);}
+      });
+      if(room.pending){try{await syncPendingCarrier(room,'threads-change');}catch(error){notify('남은 일은 저장했지만 주입 반영은 다음 전송에서 다시 시도합니다: '+error.message,'warn',4000,{error});}}
+      WUI.paint();return true;
+    }
+    function edit(id,change){
+      const room=state.currentRoom;if(!room)return false;
+      return mutate(room,(rows,now)=>{const i=rows.findIndex(t=>t.id===id);if(i<0)throw Error(GONE);const v=change(rows[i],now);if(v)rows[i]=v;else rows.splice(i,1);return rows;});
+    }
+    const reopen=id=>edit(id,(t,now)=>({...t,status:'open',closed:null,updatedTurn:now}));
+    const toggle=id=>edit(id,t=>({...t,enabled:t.enabled===false}));
+    const dismiss=id=>edit(id,t=>{const v={...t};delete v.suggestClose;return v;});
+    const remove=id=>edit(id,()=>null);
+    const live=id=>normalizeLoose(state.currentRoom?.threads).find(t=>t.id===id);
+    function open(id){
+      const old=id?live(id):null;if(id&&!old)throw Error(GONE);
+      return WUI.openSheet('eThread',{ref:old?.id,isNew:!old,manual:old?.origin==='manual',chatId:String(state.currentRoom?.chatId||''),baseline:{record:old?structuredClone(old):null},
+        draft:old?{kind:old.kind,title:old.title,detail:old.detail,who:old.who.join(', '),due:old.due,enabled:old.enabled!==false}:{kind:'promise',title:'',detail:'',who:'',due:'',enabled:true}});
+    }
+    function openClose(id,{fromSuggestion=false}={}){
+      const t=live(id),s=fromSuggestion?t?.suggestClose:null;if(!t||t.status==='closed'||(fromSuggestion&&!s))throw Error(GONE);
+      return WUI.openSheet('eThreadClose',{ref:id,kind:t.kind,threadTitle:t.title,chatId:String(state.currentRoom?.chatId||''),record:structuredClone(t),suggestion:s?structuredClone(s):null,
+        draft:{type:s?.type||'done',how:s?.how||'',date:s&&s.date.display!==UNKNOWN_DATE.display?s.date.display:''}});
+    }
+    // Sheet save. A content change on an AI item makes it manual (the AI no longer rewrites or closes it); the 매 턴 switch,
+    // closing and reopening keep the origin. A user close keeps the suggestion's evidence and date when it came from one.
+    async function save(d,removing=false){
+      const room=state.currentRoom;if(!room||d.chatId!==String(room.chatId||''))throw Error(CHANGED);
+      const x=d.draft||{},record=d.type==='eThreadClose'?d.record:d.baseline?.record;
+      const title=text(x.title).replace(/\s+/g,' ');
+      if(d.type==='eThread'&&!removing&&!title)throw Error('제목을 입력해 주세요.');
+      return mutate(room,(rows,now)=>{
+        const i=d.ref?rows.findIndex(t=>t.id===d.ref):-1;
+        if((d.ref||removing||d.type==='eThreadClose')&&(i<0||JSON.stringify(rows[i])!==JSON.stringify(record)))throw Error(CHANGED);
+        if(removing){rows.splice(i,1);return rows;}
+        if(d.type==='eThreadClose'){
+          const s=d.suggestion,display=text(x.date),date=!display?{...UNKNOWN_DATE}:s&&s.date.display===display?{...s.date}:{kind:'custom',display};
+          const done={...rows[i],status:'closed',closed:{type:CLOSE_TYPES.includes(x.type)?x.type:'done',how:text(x.how),date,evidence:s?.evidence||'',messageId:'',turn:now},updatedTurn:now};
+          delete done.suggestClose;rows[i]=done;return rows;
+        }
+        const value={kind:KINDS.includes(x.kind)?x.kind:'other',title,detail:text(x.detail),who:namesOf(String(x.who??'').replace(/→/g,',')),due:text(x.due)};
+        if(i<0){rows.push({id:'th_'+crypto.randomUUID(),...value,status:'open',origin:'manual',enabled:x.enabled!==false,opened:{date:{...UNKNOWN_DATE},evidence:'',messageId:'',turn:now},closed:null,updatedTurn:now});return rows;}
+        const t=rows[i],same=JSON.stringify([t.kind,t.title,t.detail,t.who,t.due])===JSON.stringify([value.kind,value.title,value.detail,value.who,value.due]);
+        rows[i]={...t,...value,origin:same?t.origin:'manual',enabled:x.enabled!==false,updatedTurn:same?t.updatedTurn:now};return rows;
+      });
+    }
     return {KINDS,KIND_LABEL,FULL_KINDS,CLOSE_TYPES,DATE_KINDS,UNKNOWN_DATE,KIND_ALIAS,CLOSE_ALIAS,STATUS_ALIAS,INJECT_CHARS,SHRINK_CAPS,STALE_TURNS,STATUS_CHARS,TITLE_CHARS,CLOSED_INDEX_MAX,OPEN_MAX,CLOSED_KEEP,RULES,DELTA_SCHEMA,TXT_ROW_SCHEMA,
-      list,kindLabel,closeWord,canon,key,userCount,clock,normalizeLoose,validateStored,prune,assign,carry,guide,requestInput,applyDelta,injection};
+      list,kindLabel,closeWord,canon,key,userCount,clock,normalizeLoose,validateStored,prune,assign,carry,guide,requestInput,applyDelta,injection,
+      view,mutate,open,openClose,save,reopen,toggle,dismiss,remove};
   })();
 
   // 2.7.2: request-local metadata only; persisted room/event schemas stay unchanged.
@@ -15133,6 +15208,14 @@ html.rpcm-mobile-keyboard-open #wish-rp-root{top:var(--rpcm-vv-top,0px);bottom:a
 .m3-fld input:focus,.m3-fld textarea:focus,.m3-fld select:focus,.m3-select:focus{border-color:var(--m3-accent-line);background:var(--m3-card);box-shadow:0 0 0 3.5px var(--m3-accent-soft)}
 .m3-fld small{display:block;font-size:11.5px;color:var(--m3-muted);margin-top:6px;line-height:1.65}
 .wp-raw-warn{color:var(--m3-warn)}
+.wp-th-view{margin:0 0 10px}
+.wp-th-list.is-closed .m3-card{opacity:.72}
+.wp-th-list.is-closed .m3-card[open]{opacity:1}
+.wp-th-pre{white-space:pre-wrap;overflow-wrap:anywhere}
+.wp-th-rel{flex-wrap:wrap;gap:6px;margin-top:6px}
+.wp-th-badges{display:inline-flex;align-items:center;gap:6px;flex:none}
+@container (max-width:420px){.wp-th-badges{flex-direction:column;align-items:flex-end;gap:4px}}
+#wish-rp-root .m3-whybox.wp-th-suggest{--wc:var(--m3-warn)}
 .m3-select{width:auto;padding:6px 10px;font-size:12.5px;background:var(--m3-card)}
 .m3-select.mini{padding:3px 7px;font-size:11.5px}
 .m3-grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
@@ -15865,7 +15948,7 @@ function createWishUI(AD) {
     ret: [['1', '1턴'], ['3', '3턴'], ['5', '5턴'], ['10', '10턴'], ['0', '직접 해제 전까지']] };
 
   /* ───────── 3. 화면 상태 (UI 전용 · 저장 안 함) ───────── */
-  const S = { open: false, leaving: false, tab: 'check', mem: 'state', cog: 'people', openSet: new Set(['inj']), dialogs: [], toasts: [], jobs: [],
+  const S = { open: false, leaving: false, tab: 'check', mem: 'state', thView: 'open', cog: 'people', openSet: new Set(['inj']), dialogs: [], toasts: [], jobs: [],
     quick: false, quickLeaving: false, monHold: false, pos: null, size: null, dragging: false, search: '',   scrollTop: false, wantFocus: false };
 
   /* ───────── 4. 뷰모델 기본값 — AD.vm()이 빠뜨린 값은 여기로 채운다 ───────── */
@@ -15877,6 +15960,7 @@ function createWishUI(AD) {
     reviews: [],
     state: { inject: true, sections: [] },
     logs: { inject: true, blocks: [], dupDates: 0 },
+    threads: { open: 0, closed: 0, listChars: 0, cap: 1500, rows: [] },
     speech: { on: false, rows: [] },
     relationships: { on: false, rows: [] },
     chars: { autoDetect: false, rows: [] },
@@ -15927,7 +16011,7 @@ function createWishUI(AD) {
   function helpToggle(label,key,on,tip){const id='wish-setting-'+key.replace(/[^a-z0-9]/gi,'-');return '<div class="m3-setting-row"><div class="m3-title-help"><label for="'+id+'">'+esc(label)+'</label>'+help(tip)+'</div>'+tog('',key,on,'',label).replace('<input ','<input id="'+id+'" ')+'</div>';}
   function btn(label, act, o = {}) {
     if (o.feat && !has(o.feat)) return '';
-    const icons={economyBackup:'down',api:'key',memoryBase:'clock',unifiedMemory:'refresh',unifiedAll:'spark',unifiedRetry:'refresh',cogRe:'refresh',rebuildRead:'book',rebuildRun:'spark',rebuildApply:'check',rebuildStop:'pause',rebuildClear:'trash',secondaryExport:'down',secondaryImport:'up',fileBackup:'down',fileRestore:'up',spDel:'trash',charDel:'trash',xDel:'trash',ftDel:'trash',freshRemove:'trash'};
+    const icons={economyBackup:'down',api:'key',memoryBase:'clock',unifiedMemory:'refresh',unifiedAll:'spark',unifiedRetry:'refresh',cogRe:'refresh',rebuildRead:'book',rebuildRun:'spark',rebuildApply:'check',rebuildStop:'pause',rebuildClear:'trash',secondaryExport:'down',secondaryImport:'up',fileBackup:'down',fileRestore:'up',spDel:'trash',charDel:'trash',xDel:'trash',ftDel:'trash',thDel:'trash',freshRemove:'trash'};
     if(!o.icon&&icons[act])o={...o,icon:icons[act]};
     const aiCall=new Set(['unifiedMemory','unifiedAll','unifiedRetry','cogRe','rebuildRun','nativeBundleRun','lcRun','loreConvert','loreApiBundle','loreApiRun','aiTest']).has(act);
     const classes=String(o.cls||'').split(/\s+/).filter(c=>c&&(c!=='primary'||act==='aiSave'||act==='manualTxt')&&(!aiCall||c!=='quiet'));
@@ -16080,6 +16164,40 @@ function createWishUI(AD) {
     return `<div class="m3-toolbar m3-logbar"><div class="m3-actions m3-grow">${`${btn('달력','logCalendar',{cls:'mini',icon:'calendar'})}`}${btn('<i class="wp-lp-pre">주입 </i>로그 고르기','logPick',{cls:'mini',icon:'pin',feat:'logPick'})}${dupN&&has('dedupe')?`<button type="button" class="m3-dupwarn" data-act="logDedupe" title="중복 날짜 정리">${ic('alert')}<span>중복 <b>${dupN}</b></span></button>`:''}</div>${chip('주입','logs.inject',V.logs.inject)}<details class="m3-more" data-key="log-more" data-open="log-more"${moreOpen?' open':''}><summary class="m3-btn mini m3-more-btn" aria-label="정리 도구">${ic('more')}</summary><div class="m3-more-menu" role="menu"><div class="m3-more-h">정리 도구</div>${btn('원문 편집','raw',{arg:'log',cls:'mini',icon:'edit'})}${btn('날짜 표기 정리','logNorm',{cls:'mini',icon:'date',feat:'dateNorm'})}${btn('중복 날짜 정리'+(dupN?' · '+dupN+'개':''),'logDedupe',{cls:'mini',icon:'merge',feat:'dedupe'})}</div></details></div>
     ${groups.map(([d,bs])=>`<section class="m3-date-group" data-key="dg-${esc(d)}"><div class="m3-date-head"><b>${esc(d)}</b><small>${bs.length}블록</small></div>${bs.map(b=>card('lg-'+b.id,esc(String(b.title).replace(/^\d+\.\d+\/\d+\s+/,'')),fmt(b.size)+'자',(S.openSet.has('lg-'+b.id)?logWhyBox(b)+`<p>${esc(b.body)}</p>`:''),btn('편집','lgEdit',{arg:b.id,cls:'mini',icon:'edit'})+btn('삭제','lgDel',{arg:b.id,cls:'danger mini'}),logBadges(b))).join('')}</section>`).join('')||empty('날짜로그가 비어 있습니다.')}`;
   }
+  // 남은 일: the card's right side holds the kind and one status, stacked on narrow panels so the title keeps its width; the
+  // other statuses go to the end of the meta line, in the same order.
+  const TH_HELP=helpSections([['남은 일','아직 결말이 나지 않은 약속·예정·목표·수수께끼·위험·복선입니다. "이 일은 언젠가 끝나는가?"로 가릅니다. 끝나는 때가 있으면 남은 일, 끝없이 계속 지키는 약속이나 부상·임신처럼 지금 이어지는 상태는 현재상태입니다.'],['매 턴 넣기','열린 항목이 짧은 목록으로 매 턴 들어갑니다(최대 1,500자). 약속·예정·목표는 한 줄 설명까지, 나머지는 제목만 넣습니다. 약 300턴 동안 바뀌지 않았거나 자리가 모자라면 제목만 넣고, 주입을 끈 항목은 넣지 않습니다.'],['닫기','결말 장면이 있을 때 닫습니다. 직접 관리하는 항목은 AI가 닫지 않고 "닫아도 될 것 같아요"라고만 알려 줍니다. 잘못 닫혔으면 닫힘 목록에서 [다시 열기]를 누르세요.']]);
+  const TH_MODE={stale:['오래됨 · 매 턴 제목만','warn'],budget:['자리 부족 · 제목만',''],out:['이번 목록에서 빠짐','']};
+  const thDate=d=>d?.display&&d.display!=='날짜 미상'?d.display:'';
+  function threadStatuses(t){
+    if(t.status==='closed')return t.origin==='manual'?[['직접 관리','']]:[];
+    return [t.suggestClose&&['닫기 제안','warn'],t.enabled===false&&['주입 꺼짐',''],TH_MODE[t.mode],t.origin==='manual'&&['직접 관리','']].filter(Boolean);
+  }
+  function threadBody(t){
+    const closed=t.status==='closed',s=t.suggestClose,flat=v=>String(v||'').replace(/\s+/g,'');
+    const dates=new Set([thDate(t.opened.date),closed?thDate(t.closed.date):''].filter(Boolean).map(flat));
+    const related=dates.size?V.logs.blocks.filter(b=>dates.has(flat(b.date))).slice(0,3):[];
+    const evidence=[t.opened.evidence&&`<p class="m3-muted wp-th-pre">열림 · ${esc(t.opened.evidence)}</p>`,closed&&t.closed.evidence&&`<p class="m3-muted wp-th-pre">닫힘 · ${esc(t.closed.evidence)}</p>`].filter(Boolean).join('');
+    const events=related.length?`<div class="m3-row wp-th-rel">${related.map(b=>btn(esc(String(b.title).replace(/^\d+\.\d+\/\d+\s+/,'')),'lgEdit',{arg:b.id,cls:'quiet mini'})).join('')}</div>`:'';
+    return (t.detail?`<p class="wp-th-pre">${esc(t.detail)}</p>`:'')+(t.due?`<p class="m3-muted">기한·계기 · ${esc(t.due)}</p>`:'')
+      +(closed&&t.closed.how?`<p class="m3-muted wp-th-pre">${esc(t.closeWord)} · ${esc(t.closed.how)}</p>`:'')
+      +(s?`<div class="m3-whybox wp-th-suggest"><b>닫아도 될 것 같아요</b><span>${esc([WishThreads.closeWord(t.kind,s.type),s.how].filter(Boolean).join(' · '))}</span><div class="m3-whyact m3-row">${btn('닫기','thSuggestApply',{arg:t.id,cls:'mini',icon:'check'})}${btn('무시','thSuggestDismiss',{arg:t.id,cls:'quiet mini'})}</div></div>`:'')
+      +(evidence||events?fold('th-ev-'+t.id,events?'근거 · 관련 사건':'근거',evidence+events):'');
+  }
+  function threadCard(t){
+    const closed=t.status==='closed',st=threadStatuses(t),key='th-'+t.id;
+    const when=closed?[t.closeWord,thDate(t.closed.date)].filter(Boolean).join(' · '):t.ageTurns==null?t.opened.date?.display||'':t.ageTurns?'열린 지 '+fmt(t.ageTurns)+'턴':'방금 열림';
+    const meta=[t.who.join(' → '),when,...st.slice(1).map(x=>x[0])].filter(Boolean).map(esc).join(' · ');
+    const actions=closed?btn('다시 열기','thReopen',{arg:t.id,cls:'mini',icon:'refresh'})+btn('삭제','thDel',{arg:t.id,cls:'danger mini'})
+      :btn('편집','thEdit',{arg:t.id,cls:'mini',icon:'edit'})+btn('닫기','thClose',{arg:t.id,cls:'mini',icon:'check'})+btn(t.enabled===false?'주입 켜기':'주입 끄기','thInject',{arg:t.id,cls:'quiet mini'})+btn('삭제','thDel',{arg:t.id,cls:'danger mini'});
+    return card(key,esc(t.title),meta,S.openSet.has(key)?threadBody(t):'',actions,`<span class="wp-th-badges">${kind(t.kindLabel,COL.threads)}${st[0]?tag(st[0][0],st[0][1]):''}</span>`,COL.threads);
+  }
+  function mThreads() {
+    const T=V.threads,view=S.thView==='closed'?'closed':'open',rows=T.rows.filter(t=>(t.status==='closed')===(view==='closed'));
+    return `<div class="m3-toolbar"><span class="m3-muted m3-grow">열림 ${fmt(T.open)} · 닫힘 ${fmt(T.closed)} · 매 턴 목록 ${fmt(T.listChars)} / ${fmt(T.cap)}자 ${help(TH_HELP)}</span><div class="m3-actions">${btn('직접 추가','thNew',{cls:'mini',icon:'plus'})}${chip('주입','pol.threads',V.pol.threads)}</div></div>`
+      +`<div class="m3-whychips wp-th-view" role="group" aria-label="남은 일 보기">${[['open','열림'],['closed','닫힘']].map(([k,l])=>`<button type="button" class="m3-whychip" data-act="thView" data-arg="${k}" aria-pressed="${view===k}">${l}</button>`).join('')}</div>`
+      +`<div class="wp-th-list${view==='closed'?' is-closed':''}" data-key="th-list-${view}">${rows.map(threadCard).join('')||empty(view==='open'?'열린 남은 일이 없습니다. 함께 정리나 재구축이 약속·예정·목표·수수께끼·위험·복선을 찾으면 여기에 쌓입니다. [직접 추가]로 적을 수도 있습니다.':'닫힌 남은 일이 없습니다.')}</div>`;
+  }
     function heldHeader(domain,title='보류 제안'){
     const group=V.held?.domains?.[domain];if(!group)return '';const n=group.live.length,m=group.queue.length;
     if(!n&&!m&&!V.held.error)return '';
@@ -16164,9 +16282,9 @@ function mRelationships() {
     ${V.extras.rows.map(x => card('x-' + x.id, esc(x.title), `${fmt(x.size)}자${''}`, `<p>${esc(x.content)}</p>`, btn('편집', 'xEdit', { arg: x.id, cls: 'mini', icon: 'edit' }) + btn('삭제', 'xDel', { arg: x.id, cls: 'danger mini' }), chip('주입', 'extra.enabled:' + x.id, x.enabled), COL.extra)).join('') || empty('기타·OOC 항목이 없습니다.')}`;
   }
   function vMemory() {
-    const t = [['state', '현재상태'], ['log', '날짜로그'], ['char', '캐릭터'], ['extra', '기타·OOC']].filter(([k]) => k !== 'speech' || has('speech'));
+    const t = [['state', '현재상태'], ['log', '날짜로그'], ['threads', '남은 일'], ['char', '캐릭터'], ['extra', '기타·OOC']].filter(([k]) => k !== 'speech' || has('speech'));
     if (!t.some(x => x[0] === S.mem)) S.mem = 'state';
-    const sub = { state: mState, log: mLog, speech: mSpeech, char: mChar, extra: mExtra }[S.mem]();
+    const sub = { state: mState, log: mLog, threads: mThreads, speech: mSpeech, char: mChar, extra: mExtra }[S.mem]();
     return `${pageHead('기억 '+help(helpSections([['하이브리드 회수','전체 기억은 저장소에 보존하고, 최근 기억과 현재 맥락에 관련된 날짜로그·자료만 골라 주입합니다.'],['오래된 기억','에리식 의미검색과 키워드 검색이 전체 과거 기록에서 오래된 사건을 다시 찾습니다.'],['보조 AI 재검토','설정한 경우 후보가 40,000자를 넘으면 USER 전송 직전에 AI 선별을 최대 60초 기다립니다.'],['안전선','40,000자 안전선은 유지하고 서버 500이면 같은 선택본을 36,000자까지 한 번만 줄입니다.']])), '<span class="m3-actions">'+(btn('자동 정리 설정','nav',{arg:'settings',cls:'quiet mini',icon:'set'}))+btn('기억 묶음 정리','unifiedMemory',{cls:'mini',icon:'spark',dis:!!V.ai.manual})+'</span>')}${memDiffStrip()}${tabs(t, S.mem, 'memSub')}<div class="m3-sub" data-key="mem-${S.mem}">${sub}</div>`;
   }
 
@@ -17393,6 +17511,10 @@ nativeBundle(d) {
     eLog(d) { const x = d.draft; return sheet(d, { title: '날짜로그 블록 편집', desc: '날짜와 사건 제목이 같으면 같은 블록으로 봅니다', body: `<div class="m3-grid2">${field('날짜', inp(D(d, 'date'), x.date || ''))}${field('사건 제목', inp(D(d, 'title'), x.title || ''))}</div>${field('본문', ta(D(d, 'body'), x.body || '', '', '180'))}${x.pin !== undefined ? `<div class="m3-stack">${tog('항상 호출', D(d, 'pin'), x.pin, '관련도와 상관없이 매번 넣음')}${tog('자동 호출에서 제외', D(d, 'ex'), x.ex, '직접 고를 때만 들어감')}</div>` : ''}`, foot: `${delBtn(d)}${SP}${closeBtn(d, '취소')}${saveBtn(d)}` }); },
     /* props: { isNew, ref, draft:{speaker,target,address,reg,note} } */
     eRelationship(d) {const x=d.draft;return sheet(d,{title:d.isNew?'관계·감정선 추가':'관계·감정선 편집',desc:'주체 → 대상 방향의 감정·태도입니다. 역방향은 별도 기록합니다.',body:`<div class="m3-grid2">${field('주체',inp(D(d,'speaker'),x.speaker))}${field('대상',inp(D(d,'target'),x.target))}</div>${field('현재 관계·감정의 깊이 · 700자',ta(D(d,'current'),x.current))}${field('핵심 변화 · 6,000자',ta(D(d,'trajectory'),x.trajectory),'결정적 계기와 관계적 결과만 남기고 초기·이후·현재를 구분합니다. 사건 전문은 반복하지 않습니다.')}${field('남은 쟁점 · 400자',ta(D(d,'unresolved'),x.unresolved))}${tog('이 관계 주입 사용',D(d,'enabled'),x.enabled!==false,'끄면 이 관계만 주입 후보에서 제외합니다. 저장값은 유지됩니다.')}${tog('수동 보호',D(d,'manual'),x.manual,'켜면 AI가 이 방향을 수정하지 않습니다.')}${tog('항상 주입 후보에 포함',D(d,'pinned'),x.pinned,'꺼져 있으면 현재 맥락의 CHAR 이름·별칭으로 선택합니다.')}`,foot:`${!d.isNew?delBtn(d):''}${SP}${closeBtn(d,'취소')}${saveBtn(d)}`});},
+    /* props: { isNew, ref, manual, chatId, baseline:{record}, draft:{kind,title,detail,who,due,enabled} } */
+    eThread(d) {const x=d.draft;return sheet(d,{title:d.isNew?'남은 일 직접 추가':'남은 일 편집',desc:d.isNew?'직접 추가한 항목은 AI가 고치거나 닫지 않습니다.':d.manual?'':'고치면 직접 관리하는 항목이 되어 AI가 내용을 바꾸거나 닫지 않습니다.',body:`<div class="m3-grid2">${field('종류',selc(D(d,'kind'),x.kind,WishThreads.KINDS.map(k=>[k,WishThreads.kindLabel(k)])))}${field('기한·계기 · 선택',inp(D(d,'due'),x.due||''))}</div>${field('제목',inp(D(d,'title'),x.title||'','예: 하쿠에게 한 대가 경고'))}${field('내용',ta(D(d,'detail'),x.detail||'','','120'),"끝에 '지금: …'을 쓰면 매 턴 목록에는 그 부분만 들어갑니다.")}${field('누가 → 누구 · 쉼표로 구분',inp(D(d,'who'),x.who||''))}${tog('매 턴 넣기',D(d,'enabled'),x.enabled!==false)}`,foot:`${!d.isNew?delBtn(d):''}${SP}${closeBtn(d,'취소')}${saveBtn(d)}`});},
+    /* props: { ref, kind, threadTitle, chatId, record, suggestion, draft:{type,how,date} } */
+    eThreadClose(d) {const x=d.draft;return sheet(d,{title:'남은 일 닫기',desc:esc(d.threadTitle||''),body:`${field('어떻게 끝났나요',selc(D(d,'type'),x.type,WishThreads.CLOSE_TYPES.map(t=>[t,WishThreads.closeWord(d.kind,t)])))}${field('끝난 내용',ta(D(d,'how'),x.how||'','','90'))}${field('날짜 · 선택',inp(D(d,'date'),x.date||'','예: 8월 29일'))}`,foot:`${SP}${closeBtn(d,'취소')}${saveBtn(d,'닫기')}`});},
     eSpeech(d) { const x = d.draft; return sheet(d, { title: d.isNew ? '호칭·말투 추가' : '호칭·말투 편집', desc: '같은 화자→상대 방향은 하나만 유지됩니다', body: `<div class="m3-grid2">${field('화자', inp(D(d, 'speaker'), x.speaker || ''))}${field('상대', inp(D(d, 'target'), x.target || ''))}</div><div class="m3-grid2">${field('부르는 말', inp(D(d, 'address'), x.address || ''), '호칭을 모르면 비워 두고 확인된 말투만 기록할 수 있습니다.')}${field('말투', selc(D(d, 'reg'), x.reg, Object.entries(L.reg)))}</div>${field('메모 · 선택', inp(D(d, 'note'), x.note || ''))}`, foot: `${!d.isNew ? delBtn(d) : ''}${SP}${closeBtn(d, '취소')}${saveBtn(d)}` }); },
     /* props: { isNew, ref, owner, titleMax=20, bodyMax=300, draft:{title,body} } */
 
@@ -17556,7 +17678,7 @@ nativeBundle(d) {
   const findDlg = id => S.dialogs.find(x => x.id === id);
   // Keep editor objects in memory: no per-keystroke disk writes or automatic commits.
   const editorDrafts=new Map();
-  const isDraftEditor=type=>/^e(Slot|State|Log|Speech|Pack|Entry|Actor|Fact|Relationship|Con)$/.test(type)||['promptGuide','presets','loreConvert'].includes(type);
+  const isDraftEditor=type=>/^e(Slot|State|Log|Speech|Pack|Entry|Actor|Fact|Relationship|Thread|Con)$/.test(type)||['promptGuide','presets','loreConvert'].includes(type);
   function editorKey(type,p){return JSON.stringify([location.pathname,type,p.ref??'',p.kind??'',p.pack??'',p.group??'',p.parent??'',p.idx??'',p.wishSpeechParent??'']);}
   function openSheet(type, props = {}) {
     // One AI connection sheet at a time: a second, older copy could later save stale values over the new ones.
@@ -17662,7 +17784,7 @@ ${open ? `<div class="wp-err-body"><div class="wp-err-row"><span>원인</span><p
     kvOpen:()=>WishKoofr.open(),kvSettings:()=>WishKoofr.settings(),kvRefresh:()=>WishKoofr.refresh(),kvBackup:()=>WishKoofr.backup(),kvRestore:id=>WishKoofr.restore(id),kvTest:id=>WishKoofr.test(id),kvSave:id=>WishKoofr.save(id),kvDisconnect:()=>WishKoofr.disconnect(),kvSelect:id=>WishKoofr.select(id),kvPick:a=>WishKoofr.pick(a),kvRemove:id=>WishKoofr.remove(id),kvRoomPick:a=>WishKoofr.roomPick(a),kvRoomAccept:id=>WishKoofr.roomAccept(id),
     personDossier:arg=>openSheet('personDossier',{draft:{person:arg||personOptions()[0]?.[0]||'',category:'all',limit:40}}),
     recordsMore:id=>{const d=findDlg(id);if(d)d.draft.limit=(Number(d.draft.limit)||40)+40;},
-    usageLedger:localUsageOpen,logCalendar:localCalendarOpen,relationMap:localGraphOpen,memDiff:localDiffOpen,memDiffSeen:()=>{MemoryDiff.dismiss(state.currentRoom);},injWhy:a=>{S.injWhy=a;},
+    usageLedger:localUsageOpen,logCalendar:localCalendarOpen,relationMap:localGraphOpen,memDiff:localDiffOpen,memDiffSeen:()=>{MemoryDiff.dismiss(state.currentRoom);},injWhy:a=>{S.injWhy=a;},thView:a=>{S.thView=a==='closed'?'closed':'open';},
     secondaryExpand:arg=>{const [id,key]=arg.split('|'),d=findDlg(id);if(d&&!d.busy){d.draft.open||={};d.draft.open[key]=!d.draft.open[key];}},
     secondaryMore:id=>{const d=findDlg(id);if(d&&!d.busy)d.draft.limit=(Number(d.draft.limit)||30)+30;},
     secondaryPick:arg=>{const [id,mode]=arg.split('|');SecondaryRebuild.selectReviewRows(findDlg(id),mode);},
@@ -18210,10 +18332,10 @@ function model(r){
 
  lore:{enabled:lc.enabled!==false&&Number(p.loreEvery)>0,sem:lc.semanticEnabled,max:lc.maxEntries,dens:lc.budgetChars<=2600?'light':lc.budgetChars>=7600?'rich':'balanced',lastSel:{lore:r.lastLoreSearch?.matchedLore||0,logs:r.lastLoreSearch?.matchedLogs||0,sem:r.lastLoreSearch?.semanticUsed},auto:{enabled:la.enabled&&!la.paused,interval:la.intervalTurns,read:la.readTurns,pending:la.committedTurns||0,last:la.lastError||la.lastStatus||dateLabel(la.lastRunAt)},packs:visibleLorePacksForRoom(r).filter(pk=>!pk.ownerChatId||String(pk.ownerChatId)===String(r.chatId)||(r.activeLorePackIds||[]).includes(pk.scopeId)).map(pk=>({id:pk.scopeId,name:wishLoreDisplayName(pk,r),desc:pk.description,copyOrigin:pk.copyOrigin||null,originLabel:pk.copyOrigin?wishLoreOriginLabel(pk):'',ownerLabel:wishLoreOwnerLabel(pk,r),active:(r.activeLorePackIds||[]).includes(pk.scopeId),auto:pk.autoManaged,ownerChatId:String(pk.ownerChatId||''),ownerApiChatId:String(pk.ownerApiChatId||''),ownerCurrent:!!String(pk.ownerChatId||'')&&String(pk.ownerChatId||'')===String(r.chatId||''),entries:(pk.entries||[]).map(e=>({...e,on:e.enabled,emb:!!e.embedding&&e.embedding.sourceHash===loreEntrySourceHashCached(e)&&e.embedding?.model===lc.embeddingModel&&Number(e.embedding?.dimensions)===Number(lc.embeddingDimensions),auto:e.autoManaged,prot:e.userProtected,speech:e.speechRule?{...e.speechRule,reg:e.speechRule.register}:null,full:loreTextAtLevel(e,'full'),micro:loreTextAtLevel(e,'micro'),compact:loreTextAtLevel(e,'compact')}))}))},
  ai:{...ai,model:getAiSelectedModel(ai),dsModel:getAiSelectedModel(ai)},presets:WUICache.presets.items||[],};
- S={tab:({check:'home',cognition:'cog'})[state.v2Tab]||state.v2Tab||'home',mem:state.v2MemoryView==='character'?'char':['state','log','speech','extra'].includes(state.v2MemoryView)?state.v2MemoryView:'state',cog:state.v2MemoryView==='cog-reviews'?'review':'people',open:opened,job:automaticMemoryJob?{label:'현재상태·날짜별 사건 정리 중'}:automaticLoreJob?{label:'자료 카드 정리 중'}:aiUpdateRunning&&!U3.checking()?{label:'기억 작업 마무리 중'}:null};
+ S={tab:({check:'home',cognition:'cog'})[state.v2Tab]||state.v2Tab||'home',mem:state.v2MemoryView==='character'?'char':['state','log','threads','speech','extra'].includes(state.v2MemoryView)?state.v2MemoryView:'state',cog:state.v2MemoryView==='cog-reviews'?'review':'people',open:opened,job:automaticMemoryJob?{label:'현재상태·날짜별 사건 정리 중'}:automaticLoreJob?{label:'자료 카드 정리 중'}:aiUpdateRunning&&!U3.checking()?{label:'기억 작업 마무리 중'}:null};
 }
 if(!state.currentRoom||!WUICache.ai)return {};model(state.currentRoom);const r=state.currentRoom;const injection=r.pending||preview?WUIInjectionView(r,items):{legacyExclusions:0,armed:false,verified:false,total:0,max:allFitLimit(r),groups:{},items:[],hasCarrier:false,hasOriginal:false,matchesSaved:false,selection:null,review:r.lastLoreSearch?{method:r.lastLoreSearch.reviewMethod,reason:r.lastLoreSearch.reviewReason,total:r.lastLoreSearch.reviewBaseTotal,limit:r.lastLoreSearch.reviewLimit,at:r.lastLoreSearch.at}:null,...pendingSyncIssue(null)},plan=injection.items;
-const rebuild=R31.get(r);const vm={held:WishHeldUI.view(r),apiEconomy:{...WishEconomy.settings(r),status:WishEconomy.describe(r)},cogInclude:Number(r.injectionPolicy?.cognitionEvery)>0,recall:recallSelectionSettings(r),rebuild:rebuild?{status:rebuild.status,message:rebuild.message,segments:rebuild.segments,ready:!!rebuild.draft}:null,rebuildRunning:R31.busy(),unified:U3.view(r),room:{...WishRoomNames.describe(r),name:D.room},version:SCRIPT_VERSION,save:{saving:state.saveStatus==='saving',at:state.lastSavedAt?new Date(state.lastSavedAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}):''},job:S.job,features:{autoDefault:false,semantic:false,density:false},inj:injection,memory:D.memory,cog:{...D.cog,actors:D.actors,facts:D.facts.map(f=>({...f,included:f.sel}))},reviews:D.reviews.map(rv=>({...rv,acceptLabel:rv.accept})),state:{inject:D.pol.state,sections:D.state,raw:String(r.slots?.find(s=>s.id==='currentState')?.content||'')},logs:{inject:D.pol.log,blocks:D.logs.map(b=>({...b,undated:b.date==='날짜 미상',included:D.pol.log&&plan.some(i=>i.kind==='log'&&!i.off&&(i.sourceKey===b.key||i.key==='log:'+b.key))})),dupDates:logView.duplicateDates},relationships:{held:Array.isArray(r.relationshipHeld)?r.relationshipHeld:[],on:r.relationshipConfig?.enabled!==false,rows:WishRelationships.normalize(r.relationships)},speech:{on:D.speechOn,rows:D.speech},chars:{autoDetect:D.autoChar,rows:D.chars},extras:{rows:D.extras},presets:D.presets.map(p=>({...p,ret:p.retentionTurns})),lore:D.lore,ai:{providerLabel: getAiProviderLabel(D.ai.provider),model:D.ai.provider==='manual'?'API 없이 · 요청문 TXT 받기 → 답 붙여넣기':D.ai.model,manual:D.ai.provider==='manual',ready:isAiProviderReady(D.ai),job:D.ai.provider==='manual'?manualJobView(r):null},pol:D.pol,autoChar:D.autoChar,quickCog:D.facts.map(f=>({id:f.id,label:f.label,mode:f.mode,included:state.quickCognitionDesired.has(f.id)?state.quickCognitionDesired.get(f.id):f.sel})),recent:[D.memory.last,D.lore.auto.last].filter(Boolean),labels:{resetDesc:'현재 방의 기억·인지·이 방 전용 자동 자료를 초기화합니다. 일반 자료집은 유지됩니다.'}};
+const rebuild=R31.get(r);const vm={held:WishHeldUI.view(r),apiEconomy:{...WishEconomy.settings(r),status:WishEconomy.describe(r)},cogInclude:Number(r.injectionPolicy?.cognitionEvery)>0,recall:recallSelectionSettings(r),rebuild:rebuild?{status:rebuild.status,message:rebuild.message,segments:rebuild.segments,ready:!!rebuild.draft}:null,rebuildRunning:R31.busy(),unified:U3.view(r),room:{...WishRoomNames.describe(r),name:D.room},version:SCRIPT_VERSION,save:{saving:state.saveStatus==='saving',at:state.lastSavedAt?new Date(state.lastSavedAt).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}):''},job:S.job,features:{autoDefault:false,semantic:false,density:false},inj:injection,memory:D.memory,cog:{...D.cog,actors:D.actors,facts:D.facts.map(f=>({...f,included:f.sel}))},reviews:D.reviews.map(rv=>({...rv,acceptLabel:rv.accept})),state:{inject:D.pol.state,sections:D.state,raw:String(r.slots?.find(s=>s.id==='currentState')?.content||'')},logs:{inject:D.pol.log,blocks:D.logs.map(b=>({...b,undated:b.date==='날짜 미상',included:D.pol.log&&plan.some(i=>i.kind==='log'&&!i.off&&(i.sourceKey===b.key||i.key==='log:'+b.key))})),dupDates:logView.duplicateDates},threads:WishThreads.view(r),relationships:{held:Array.isArray(r.relationshipHeld)?r.relationshipHeld:[],on:r.relationshipConfig?.enabled!==false,rows:WishRelationships.normalize(r.relationships)},speech:{on:D.speechOn,rows:D.speech},chars:{autoDetect:D.autoChar,rows:D.chars},extras:{rows:D.extras},presets:D.presets.map(p=>({...p,ret:p.retentionTurns})),lore:D.lore,ai:{providerLabel: getAiProviderLabel(D.ai.provider),model:D.ai.provider==='manual'?'API 없이 · 요청문 TXT 받기 → 답 붙여넣기':D.ai.model,manual:D.ai.provider==='manual',ready:isAiProviderReady(D.ai),job:D.ai.provider==='manual'?manualJobView(r):null},pol:D.pol,autoChar:D.autoChar,quickCog:D.facts.map(f=>({id:f.id,label:f.label,mode:f.mode,included:state.quickCognitionDesired.has(f.id)?state.quickCognitionDesired.get(f.id):f.sel})),recent:[D.memory.last,D.lore.auto.last].filter(Boolean),labels:{resetDesc:'현재 방의 기억·인지·이 방 전용 자동 자료를 초기화합니다. 일반 자료집은 유지됩니다.'}};
 Object.assign(vm.memory,{error:U3.monitor(r).error,enabled:vm.unified.enabled&&vm.unified.memoryEnabled,committed:vm.unified.memoryPending,target:vm.unified.memoryEvery,fixed:vm.unified.memoryEvery,running:vm.unified.running,status:vm.unified.error||vm.unified.status});Object.assign(vm.cog,{auto:vm.unified.enabled&&vm.unified.observeEnabled,every:vm.unified.observeEvery});vm.job=vm.unified.running?{label:vm.unified.jobLabel||'통합 결과 확인 중'}:vm.job;
 if(R31.busy())vm.job={label:rebuild?.message||'재구축 자료 준비 중'};
 const eligibility=sessionSetupEligibilityFor(r);vm.fresh=eligibility?.fresh&&WUICache.freshDismissed!==String(state.currentChatId)?{show:true,title:'새 방 시작 설정',desc:'켜진 기억·자료·인물 정보를 첫 AI 메시지에 적용합니다.'}:null;for(const [path,value] of Object.entries(WUISettingsDraft()))WUISetPath(vm,path,value);vm.diagnostics=WLOG.list();vm.job=WLOG.view()||vm.job;return vm;}
@@ -18284,7 +18406,7 @@ function WUIEditor(type,id='',extra={}){
  if(type==='fact'){const f=v.cog.facts.find(x=>x.id===id);ed={type:'cog-fact',factId:id,...extra};d=WUI.openSheet('eFact',{ref:id,isNew:!id,fromReview:extra.reviewId,draft:{label:f?.label||'',type:f?.type||'other',content:f?.content||'',mode:f?.mode||'auto',know:structuredClone(f?.know||{}),con:structuredClone(f?.con||[])}});}
  if(d?.type==='eEntry')d.originalSpeechNote=visibleLorePacksForRoom(r).find(p=>p.scopeId===extra.pack)?.entries.find(e=>e.id===id)?.speechRule?.note||'';if(!d)throw Error('지원하지 않는 편집 종류: '+type);d.wishEditor=ed;return d;
 }
-async function WUISaveEditor(d){if(d.editPath&&d.editPath!==location.pathname)throw Error('편집을 시작한 방으로 돌아온 뒤 저장해 주세요.');if(d.type==='promptGuide')return WishPromptGuides.save(d);if(d.type==='eRelationship')return WishRelationships.save(d);return await WLOG.run("편집 내용 검증·저장 중",async task=>{if(['ePack','eEntry'].includes(d.type)&&d.wishEditor?.packId){const livePack=await getCharacterLibrary(d.wishEditor.packId);if(livePack?.ownerChatId&&String(livePack.ownerChatId)!==String(state.currentRoom?.chatId||''))throw Error('다른 방 소유 자료집은 현재 방에서 수정할 수 없습니다. 독립 사본으로 복사한 뒤 편집해 주세요.');}if(d.wishSpeechParent){const p=WUI.ui.dlg(d.wishSpeechParent);if(!p)throw Error('원래 자료 편집창이 닫혔습니다.');p.draft.full=d.draft.content;return true;}if(d.type==='eEntry'&&d.draft.type==='speech'&&!String(d.draft.full||'').trim()){WUI.openSheet('eSlot',{kind:'extra',wishSpeechParent:d.id,isNew:true,draft:{title:'호칭 자료 상세 내용',content:'',ret:'0'}});notify('호칭 자료의 상세 원문도 입력해 주세요.','warn');return false;}const x=d.draft,ed=d.wishEditor||{},fields={};let action='editor-save';const set=(k,v)=>fields['[data-v2-'+k+']']=v;
+async function WUISaveEditor(d){if(d.editPath&&d.editPath!==location.pathname)throw Error('편집을 시작한 방으로 돌아온 뒤 저장해 주세요.');if(d.type==='promptGuide')return WishPromptGuides.save(d);if(d.type==='eRelationship')return WishRelationships.save(d);if(d.type==='eThread'||d.type==='eThreadClose')return WishThreads.save(d);return await WLOG.run("편집 내용 검증·저장 중",async task=>{if(['ePack','eEntry'].includes(d.type)&&d.wishEditor?.packId){const livePack=await getCharacterLibrary(d.wishEditor.packId);if(livePack?.ownerChatId&&String(livePack.ownerChatId)!==String(state.currentRoom?.chatId||''))throw Error('다른 방 소유 자료집은 현재 방에서 수정할 수 없습니다. 독립 사본으로 복사한 뒤 편집해 주세요.');}if(d.wishSpeechParent){const p=WUI.ui.dlg(d.wishSpeechParent);if(!p)throw Error('원래 자료 편집창이 닫혔습니다.');p.draft.full=d.draft.content;return true;}if(d.type==='eEntry'&&d.draft.type==='speech'&&!String(d.draft.full||'').trim()){WUI.openSheet('eSlot',{kind:'extra',wishSpeechParent:d.id,isNew:true,draft:{title:'호칭 자료 상세 내용',content:'',ret:'0'}});notify('호칭 자료의 상세 원문도 입력해 주세요.','warn');return false;}const x=d.draft,ed=d.wishEditor||{},fields={};let action='editor-save';const set=(k,v)=>fields['[data-v2-'+k+']']=v;
  if(d.type==='eSlot'){set('ed-title',x.title);set('ed-body',x.content);set('ed-alias',x.aliases);}
  else if(d.type==='eState'){set('ed-title',x.title);set('ed-body',x.body);}
  else if(d.type==='eLog'){const block=parseDatedLogBlocks(state.currentRoom.slots.find(s=>s.id==='logSummary')?.content||'')[ed.index];let heading=block?.heading||d.originalHeading;if(String(x.title)!==String(block?.events||'')||String(x.date)!==String(d.originalDate||''))heading=formatDatedLogHeading(x.date||'날짜 미상',x.title||'사건');if(parseDatedLogBlocks(heading+'\n'+String(x.body||'')).length!==1)throw Error('날짜 형식을 확인해 주세요. 예: 2026년 9월 18일');set('ed-title',heading);set('ed-body',x.body);}
@@ -18325,7 +18447,7 @@ async function WUIDeleteMemory(kind,id,expected){
  try{await saveRoom(room);}catch(e){room.slots=before.slots;room.pending=before.pending;room.autoLogPinnedKeys=before.pins;room.manualLogSelectedKeys=before.manual;room.autoLogExcludedKeys=before.excluded;room.deletedCharacterKeys=before.deleted;throw e;}
  await WUISyncMemoryEdit(room);notify('기억 카드를 삭제했습니다.','success');renderModalIfOpen();return true;
 }
-async function WUIRemoveEditor(d){if(d.editPath&&d.editPath!==location.pathname)throw Error('편집을 시작한 방으로 돌아온 뒤 삭제해 주세요.');if(d.type==='eRelationship')return WishRelationships.save(d,true);if(['ePack','eEntry'].includes(d.type)&&d.wishEditor?.packId){const livePack=await getCharacterLibrary(d.wishEditor.packId);if(livePack?.ownerChatId&&String(livePack.ownerChatId)!==String(state.currentRoom?.chatId||''))throw Error('다른 방 소유 자료집은 현재 방에서 삭제할 수 없습니다.');}if(d.type==='eLog')return WUIDeleteMemory('log',d.wishEditor?.index??d.ref,d.baseline);if(d.type==='eState')return WUIDeleteMemory('state',d.wishEditor?.index??d.ref,d.baseline);if(d.type==='eSlot'&&['char','extra'].includes(d.kind))return WUIDeleteMemory('slot',d.wishEditor?.slotId||d.ref);const action={eSlot:'editor-delete',eSpeech:'speech-delete-editor',ePack:'lore-pack-delete',eEntry:'lore-entry-delete',eActor:'cog-actor-delete',eFact:'cog-fact-delete',}[d.type];if(!action){notify('이 항목의 삭제는 원문 편집에서 처리해 주세요.','warn');return false;}return WUIInvoke(action,'',{},d.wishEditor);}
+async function WUIRemoveEditor(d){if(d.editPath&&d.editPath!==location.pathname)throw Error('편집을 시작한 방으로 돌아온 뒤 삭제해 주세요.');if(d.type==='eRelationship')return WishRelationships.save(d,true);if(d.type==='eThread')return WishThreads.save(d,true);if(['ePack','eEntry'].includes(d.type)&&d.wishEditor?.packId){const livePack=await getCharacterLibrary(d.wishEditor.packId);if(livePack?.ownerChatId&&String(livePack.ownerChatId)!==String(state.currentRoom?.chatId||''))throw Error('다른 방 소유 자료집은 현재 방에서 삭제할 수 없습니다.');}if(d.type==='eLog')return WUIDeleteMemory('log',d.wishEditor?.index??d.ref,d.baseline);if(d.type==='eState')return WUIDeleteMemory('state',d.wishEditor?.index??d.ref,d.baseline);if(d.type==='eSlot'&&['char','extra'].includes(d.kind))return WUIDeleteMemory('slot',d.wishEditor?.slotId||d.ref);const action={eSlot:'editor-delete',eSpeech:'speech-delete-editor',ePack:'lore-pack-delete',eEntry:'lore-entry-delete',eActor:'cog-actor-delete',eFact:'cog-fact-delete',}[d.type];if(!action){notify('이 항목의 삭제는 원문 편집에서 처리해 주세요.','warn');return false;}return WUIInvoke(action,'',{},d.wishEditor);}
 
 function WUIAIConfig(d){const fresh=loadAiSettings(),opened=aiSettingsDraft(d.saved||fresh),latest=aiSettingsDraft(fresh),x={...d.draft};
 // Fields left as they were when the sheet opened follow the latest saved settings, so a stale sheet (opened twice, or in another tab) cannot put old values back.
@@ -18374,6 +18496,8 @@ Object.assign(WUI_ADAPTER.act,{
  promptGuides:id=>WishPromptGuides.open(id||'apiCommon'),promptDefault:id=>WishPromptGuides.defaults(id),
  importPeopleContinue:id=>WishImportPeople.resume(id),
  raw:s=>WUIEditor('slot',s==='state'?'currentState':'logSummary'),stEdit:id=>WUIEditor('state',id),lgEdit:id=>WUIEditor('log',id),relNew:()=>WishRelationships.open(),relEdit:id=>WishRelationships.open(id),
+ thNew:()=>WishThreads.open(),thEdit:id=>WishThreads.open(id),thClose:id=>WishThreads.openClose(id),thSuggestApply:id=>WishThreads.openClose(id,{fromSuggestion:true}),thSuggestDismiss:id=>WishThreads.dismiss(id),
+ thReopen:id=>WishThreads.reopen(id),thInject:id=>WishThreads.toggle(id),thDel:id=>confirm('이 남은 일을 삭제할까요? 실제 RP 대화는 삭제하지 않습니다.')?WishThreads.remove(id):false,
  externalExport:scope=>ExternalBundles.exportFiles(scope),externalMode:mode=>{setExternalRebuildMode(mode);WUI.paint();},preciseCopy:async id=>{const d=WUI.ui.dlg(id);if(!d)return;const ok=await copyPlainText(d.prompt);d.copied=!!ok;notify(ok?'시작 문구를 복사했습니다.':'복사하지 못했습니다. 아래 칸의 글을 직접 선택해 복사해 주세요.',ok?'success':'warn',4000);WUI.paint();},externalImport:()=>ExternalBundles.importFile(),externalReviewApply:id=>ExternalBundles.apply(id),relReviewApply:id=>R31.applyRelationshipReview(id),
  relReviewExpand:arg=>{const [id,key]=arg.split('|'),d=WUI.ui.dlg(id);if(d&&!d.busy){d.draft.open[key]=!d.draft.open[key];WUI.paint();}},
  relReviewEdit:arg=>{const [id,key]=arg.split('|'),d=WUI.ui.dlg(id);if(d&&!d.busy){d.draft.editing||={};d.draft.editing[key]=!d.draft.editing[key];d.draft.open[key]=true;WUI.paint(false);}},relReviewReset:arg=>{const [id,key]=arg.split('|'),d=WUI.ui.dlg(id);if(d&&!d.busy){delete d.draft.edit[key];d.draft.reviewed=false;WUI.paint();}},relReviewMore:id=>{const d=WUI.ui.dlg(id);if(d&&!d.busy){d.draft.limit+=30;WUI.paint();}},spNew:()=>WUIEditor('speech'),spEdit:id=>WUIEditor('speech',id),charEdit:id=>WUIEditor('slot',id),xEdit:id=>WUIEditor('slot',id),
