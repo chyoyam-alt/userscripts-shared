@@ -268,7 +268,7 @@
 1. 전체 입력을 끝까지 읽고 마지막으로 채택된 RP 분기를 정사로 삼는다.
 2. 사용자 직접 정정·확정 설정 > 최신 직접 RP > 객관 서술 > 인물의 주장·추측·오해 > 모델 추론 순서로 판정한다.
 3. 꿈·가정·환상·연극·미실행 계획·거짓말·소문을 객관 사실로 승격하지 않는다.
-4. Manager 주입문, 기존 자동 기억, 이전 자료 카드, 오류 메시지와 이야기 밖 출력(AI의 메타 설명, 캐릭터 점검, 싱크로율, 보정 선언, IF·다른 버전 출력)을 새 사건의 근거로 사용하지 않는다. 그 안의 인물 평가도 카드에 옮기지 않는다.
+4. Manager 주입문, 기존 자동 기억, 이전 자료 카드, 오류 메시지와 이야기 밖 출력(AI의 메타 설명, 캐릭터 점검, 싱크로율, 보정 선언, IF·다른 버전 출력)을 카드의 근거로 쓰지 않는다. 그 안의 인물 평가도 카드에 옮기지 않는다. USER가 OOC로 요청해 받은 보고서·요약·시간 건너뛰기·'보지 못한 일' 서술은 뒤의 RP가 그 내용을 사실로 이어받았을 때 카드의 근거로 쓴다. 인물들이 그 내용을 말하거나 그에 따라 행동하고 반박하지 않으면 이어받은 것이다. 그 출력이 로그의 맨 끝이라 이어받았는지 알 수 없으면, USER가 요청해 받아들인 내용까지 쓴다. 뒤의 RP가 다르게 흘러갔으면 RP 본문을 따르고, USER가 정정·거부했거나 다시 생성하게 해 다른 출력으로 대체된 것은 쓰지 않는다. USER가 요청한 문체·분량·진행 방식은 진행 규칙이지 카드로 남길 사실이 아니다.
 5. 뒤에서 다시 언급되지 않았다는 이유만으로 물건이 이동·소멸하거나 복장이 바뀌거나 세계 규칙이 폐기됐다고 판단하지 않는다. 침묵은 변경이 아니다.
 6. 수치·날짜가 충돌하고 명시적 정정이 없으면 임의로 하나를 고르지 말고, 충돌한 차원만 안전한 표현으로 낮춘다.
 
@@ -12206,7 +12206,7 @@ rp는 이번 구간의 확정 대화다. 구간은 과거부터 차례대로 제
 [판정]
 사용자 직접 정정·고정 설정 > 최신 직접 RP > 객관 서술 > 인물의 주장·추측 순으로 해석한다.
 소문·거짓말·꿈·회상·미실행 계획을 현행 객관 사실로 만들지 않는다. 근거 없는 날짜·수치·이름을 보충하지 않는다.
-AI의 메타 설명·캐릭터 점검·싱크로율·보정 선언·IF 출력 같은 이야기 밖 출력은 카드의 근거로 쓰지 않고, 그 안의 인물 평가도 옮기지 않는다.
+AI의 메타 설명·캐릭터 점검·싱크로율·보정 선언·IF 출력 같은 이야기 밖 출력은 카드의 근거로 쓰지 않고, 그 안의 인물 평가도 옮기지 않는다. USER가 OOC로 요청해 받은 보고서·요약·시간 건너뛰기·'보지 못한 일' 서술은 뒤의 RP가 그 내용을 사실로 이어받았을 때 카드의 근거로 쓴다. 인물들이 그 내용을 말하거나 그에 따라 행동하고 반박하지 않으면 이어받은 것이다. 그 출력이 이번 구간의 맨 끝이라 이어받았는지 아직 알 수 없으면, USER가 요청해 받아들인 내용까지 쓴다. 뒤의 RP가 다르게 흘러갔으면 RP 본문을 따르고, USER가 정정·거부했거나 다시 생성하게 해 다른 출력으로 대체된 것은 쓰지 않는다. USER가 요청한 문체·분량·진행 방식은 진행 규칙이지 카드로 남길 사실이 아니다.
 기존 대상은 반드시 기존 ref를 재사용한다. 이름·소유자·위치가 바뀌어도 동일 물건이면 새 카드로 만들지 않는다.
 새 자료만 NEW_REF_로 시작하는 ref를 사용한다. protected는 수정·복제하지 않는다.
 변경한 기존 카드는 바뀐 조각만이 아니라 기존 유효 사실을 보존한 완전한 최신 교체본으로 출력한다.
@@ -18629,8 +18629,8 @@ const WishPromptGuides=(()=>{
   // A text saved against an older default: shown in the editor only. Each guide is compared with the version in which its own
   // default last changed (a saved text without a version counts as oldest); apiIndex, apiLoreConversion and externalSecondary
   // have kept their defaults since saved texts carry a version.
-  const DEFAULT_CHANGED={apiMemory:'1.8.0',apiLoreBundle:'1.8.0',apiThreads:'1.8.0',apiRelationships:'1.8.0',apiDelta:'1.8.0',apiRecall:'1.8.0',apiBundleMemory:'1.8.0',apiBundlePeople:'1.8.0',externalAll:'1.8.0',externalMemory:'1.8.0',externalPeople:'1.8.0',externalRelationships:'1.8.0',
-    apiCommon:'1.7.0',apiObserve:'1.7.0',apiSpeech:'1.7.0',apiDate:'1.7.0',manualRelay:'1.7.0',loreExternal:'1.7.0',currentState:'1.7.0',logSummary:'1.7.0',loreAuto:'1.7.0'};
+  const DEFAULT_CHANGED={apiMemory:'1.8.0',apiLoreBundle:'1.8.0',apiThreads:'1.8.0',apiRelationships:'1.8.0',apiDelta:'1.8.0',apiRecall:'1.8.0',apiBundleMemory:'1.8.0',apiBundlePeople:'1.8.0',externalAll:'1.8.0',externalMemory:'1.8.0',externalPeople:'1.8.0',externalRelationships:'1.8.0',loreExternal:'1.8.0',
+    apiCommon:'1.7.0',apiObserve:'1.7.0',apiSpeech:'1.7.0',apiDate:'1.7.0',manualRelay:'1.7.0',currentState:'1.7.0',logSummary:'1.7.0',loreAuto:'1.7.0'};
   const versionParts=v=>{const m=String(v||'').match(/^(\d+)\.(\d+)\.(\d+)$/);return m?m.slice(1).map(Number):[0,0,0];};
   function stale(id){
     const r=readGuideRecord(id),since=DEFAULT_CHANGED[id];if(!r||!since)return false;
