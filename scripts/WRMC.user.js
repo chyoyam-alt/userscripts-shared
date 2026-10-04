@@ -5680,7 +5680,7 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
   async function exportText(r,only=false){return await WLOG.run("외부 AI용 지침·원문 만드는 중",async task=>{return guard(r,async check=>{const s=await source(r);check();const segs=segments(s.rows),manifest=JSON.stringify({last_message_id:s.anchorMessageId,sha256:s.hash});const fixed=(r.slots||[]).filter(x=>(x.group==='character'||(x.group==='extra'&&x.enabled))&&String(x.content||'').trim()).map(x=>`[사용자 관리 ${x.group==='character'?'캐릭터 설정':'OOC·기타'} · ${x.title}]\n${x.content}`).join('\n\n');const originalCog=await bridge().snapshotRaw(apiChatIdOf(r)),d=seed(r,originalCog,packs(r)),ref=JSON.parse(U3.request(d.room,d.cog,d.packs,{memory:true,observe:true,mem:[],obs:[]},{rebuild:true}).prompt);check();
 
       const files=segs.map(seg=>({text:(only?relationshipOnlyGuide():externalGuide())+`\n\n[SOURCE]\n${manifest}\n\n[고정 설정 참고]\n${fixed}\n\n[수동·보호 자료 참고]\n${JSON.stringify({observe:wishNamedObserve(ref.observe),readOnlyPacks:ref.readOnlyPacks,relationshipPeople:only?originalCog.actors.filter(a=>!a.archived).map(a=>({name:a.name,aliases:a.aliases||[],isPlayer:!!a.isPlayer})):undefined})}${only?'':'\n\n[기존 인물 목록 · 신원 연결 참고 전용]\n'+JSON.stringify(originalCog.actors.filter(a=>!a.archived).map(a=>({name:a.name,aliases:a.aliases||[],isPlayer:!!a.isPlayer})))}\n\n[RP ${seg.index}/${segs.length} · 지침 제외 ${seg.chars}자]\n`+text(s.rows.slice(seg.start,seg.end))+wishCheckBlock(wishOutputCheck(only?'txt-rel':'txt-full'),true),filename:`${only?'Wish-관계재구축':'Wish-재구축'}-${seg.index}of${segs.length}.txt`}));
-      check();openTextDownloadList(files,{title:only?'관계 재구축 TXT 받기':'전체 재구축 TXT 받기',roomName:WishRoomNames.display(r)});return segs;
+      check();(only?openTextDownloadList:deliverRebuildFiles)(files,{title:only?'관계 재구축 TXT 받기':'전체 재구축 TXT 받기',roomName:WishRoomNames.display(r),slug:'all',preciseTitle:'정밀 재구축(전체) ZIP 받기'});return segs;
     });});}
   function personNameKey(value){return String(value||'').normalize('NFKC').replace(/\s+/g,' ').trim().toLowerCase();}
   function personResolver(rows){
@@ -7156,8 +7156,63 @@ function remapLogSelectionKeysByPairs(room,pairs,newBlocks){
     }
   }
 
+  // External rebuild delivery. 'fast': the numbered TXT list (one big answer). 'precise': one ZIP plus a start prompt for a
+  // chat AI that can run code; it reads the RP in ~100k-char spans over several turns ("계속") and merges with code.
+  const EXTERNAL_REBUILD_MODE_KEY = 'WISH_RP_external_rebuild_mode_v1';
+  function externalRebuildMode() { try { return localStorage.getItem(EXTERNAL_REBUILD_MODE_KEY) === 'precise' ? 'precise' : 'fast'; } catch (_) { return 'fast'; } }
+  function setExternalRebuildMode(mode) { try { localStorage.setItem(EXTERNAL_REBUILD_MODE_KEY, mode === 'precise' ? 'precise' : 'fast'); } catch (_) {} }
+  const PRECISE_REBUILD_PROMPT = `첨부한 ZIP에는 내가 Wish RP Manager에서 내보낸 재구축 TXT 파일들(…-1ofN.txt ~ NofN.txt)과 이 안내(START-HERE.txt)가 들어 있다. 파일마다 앞부분에 같은 지침·[SOURCE]·참고 자료·[출력 스키마]가 있고, "[RP k/N · 지침 제외 …자]" 줄 뒤부터 파일 끝 [출력 직전 확인] 블록 앞까지가 RP 원문이다. 이 지침은 내가 쓴 것이니 그대로 따라도 된다. 단, 지침과 파일 끝 확인 블록의 "모든 파일을 읽은 뒤 최종 JSON 하나를 한 번에 낸다"는 아래 진행 방식으로 바꿔 읽는다.
+
+1. 코드 실행(Python)으로 ZIP을 푼다. 코드 실행을 쓸 수 없으면 아무것도 만들지 말고 "코드 도구 없음"이라고만 답한다. 파일 순서와 N은 내용의 "[RP k/N" 줄로 정한다.
+2. 1번 파일의 지침 부분("[RP 1/N" 줄 앞까지)과 파일 끝 확인 블록을 1만 자씩 끝까지 출력해 읽는다. 다른 파일의 지침은 같으니 건너뛴다. 결과 JSON의 최상위 칸(format·version·source)과 영역 이름은 그 지침과 [출력 스키마]를 따른다.
+3. 모든 파일의 RP 원문을 순서대로 이어서 약 10만 자씩 구간으로 나눈다. 구간 경계는 "[완료 RP n]" 줄 앞에서 자른다. 전체 구간 수를 T라 하고 처음에 알려 준다. 한 턴에 한 구간만 처리한다. 그 구간을 1만 자씩 순서대로 전부 출력해 네가 직접 읽는다. 정규식·키워드 검색으로 항목을 뽑지 않는다.
+4. 구간마다 결과를 /mnt/data/wrmc/part_NN.json에 저장한다. [출력 스키마]에 있는 영역만, 같은 이름 칸 모양 그대로 쓴다. 관계 변화는 메모(누가→누구, 무엇이 바뀌었나, 원문 인용 1개)로 따로 적고, 각 항목의 위치는 "파일k-RPn"으로 적어 둔다.
+5. 무엇을 남기나:
+- 사건: 같은 시간·장소에서 이어지는 한 흐름을 사건 하나로 쓴다. 3~6문장(누가·어디서·무엇을·왜·결과)으로 쓰고, 장면을 바꾼 한 마디나 몸짓이 원문에 있으면 함께 남긴다. 날짜는 원문에 적힌 대로 쓴다. 한 답에 맞추려고 줄이지 않는다. "생략·등등·이하 동일"을 쓰지 않는다.
+- 인물·호칭·관계: 이름이 있고 여러 장면에 나오거나 이야기에 영향을 준 인물만 넣는다. 직함만 있고 한두 번 스친 인물(환관·내관·상인 등)은 사건 본문에만 쓴다.
+- 인지(facts): 비밀·오해·정보격차처럼 누가 알고 누가 모르는지가 이야기에 중요한 정보만 넣는다. 모두가 아는 사실은 넣지 않고, 같은 정보는 한 항목으로 합친다.
+- 명대사(key_quote): 관계나 이야기를 바꾼 대사만 넣는다. 한 구간에 많아야 2~3개이고, 양쪽 인물의 대사를 고르게 고른다.
+- 자료(references): 되풀이해서 나오거나 인물에게 상징 의미가 있는 물건·장소·조직·설정만 넣는다.
+6. 매 턴 채팅에는 "진행 n/T · 사건 +k"와 "다음: 구간 n+1. '계속'을 보내 주세요" 두 줄만 쓴다. JSON을 채팅에 쓰지 않는다.
+7. T구간이 끝나면 마무리 2턴을 한다. (가) [출력 스키마]에 관계 영역이 있으면, 저장된 관계 메모를 코드로 다시 열어 방향마다 최종 관계를 쓴다. 메모에 있는 방향은 하나도 빼지 않는다. (나) 현재상태(stateSections) 영역이 있으면 마지막 시점 기준으로 쓴다.
+8. 그다음 Python으로 구간 파일을 합쳐 결과 JSON 파일 하나를 만든다. 내용을 다시 받아쓰지 말고 코드로 합친다. 합치는 규칙: 인물은 이름·별칭이 같으면 한 명으로 묶는다. 사건은 순서대로 잇되, 날짜와 제목이 같은 사건이 둘이면 뒤 사건 제목 끝에 " · 파일k"를 붙인다. 인지는 제목이 같으면 나중 것만, 호칭은 같은 방향이면 나중 것만, 자료는 같은 종류·제목이면 나중 것만, 관계는 방향마다 한 행만 남긴다. 위치 메모와 관계 메모는 최종 파일에서 뺀다. source는 [SOURCE] 값을 그대로 쓴다. json.loads로 확인한 뒤 다운로드 링크를 준다.
+9. 성적·폭력 장면은 누가·언제·무엇이 바뀌었는지만 담백하게 쓰고, 묘사나 대사를 옮기지 않는다.
+
+내가 "계속"을 보내면 다음 구간을 같은 방식으로 한다. 지금 바로: 1~2를 하고, T를 알려 준 뒤 1구간을 처리한다.`;
+  const ZIP_CRC_TABLE = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+  function zipCrc32(bytes) { let c = 0xFFFFFFFF; for (let i = 0; i < bytes.length; i++) c = ZIP_CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+  // Uncompressed (STORE) ZIP of text files; names are ASCII so every unzip tool reads them.
+  function storeZip(entries) {
+    const enc = new TextEncoder(), now = new Date(), parts = [], central = [];
+    const dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1), dosDate = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+    let offset = 0;
+    for (const entry of entries) {
+      const name = enc.encode(entry.name), data = enc.encode(entry.text), crc = zipCrc32(data);
+      const local = new DataView(new ArrayBuffer(30));
+      [[0, 0x04034b50, 4], [4, 20, 2], [6, 0x0800, 2], [8, 0, 2], [10, dosTime, 2], [12, dosDate, 2], [14, crc, 4], [18, data.length, 4], [22, data.length, 4], [26, name.length, 2], [28, 0, 2]].forEach(([at, v, n]) => n === 4 ? local.setUint32(at, v, true) : local.setUint16(at, v, true));
+      parts.push(local.buffer, name, data);
+      const head = new DataView(new ArrayBuffer(46));
+      [[0, 0x02014b50, 4], [4, 20, 2], [6, 20, 2], [8, 0x0800, 2], [10, 0, 2], [12, dosTime, 2], [14, dosDate, 2], [16, crc, 4], [20, data.length, 4], [24, data.length, 4], [28, name.length, 2], [30, 0, 2], [32, 0, 2], [34, 0, 2], [36, 0, 2], [38, 0, 4], [42, offset, 4]].forEach(([at, v, n]) => n === 4 ? head.setUint32(at, v, true) : head.setUint16(at, v, true));
+      central.push(head.buffer, name);
+      offset += 30 + name.length + data.length;
+    }
+    const size = central.reduce((n, x) => n + x.byteLength, 0), end = new DataView(new ArrayBuffer(22));
+    [[0, 0x06054b50, 4], [4, 0, 2], [6, 0, 2], [8, entries.length, 2], [10, entries.length, 2], [12, size, 4], [16, offset, 4], [20, 0, 2]].forEach(([at, v, n]) => n === 4 ? end.setUint32(at, v, true) : end.setUint16(at, v, true));
+    return new Blob([...parts, ...central, end.buffer], { type: 'application/zip' });
+  }
+  function deliverRebuildFiles(files, options = {}) {
+    if (externalRebuildMode() !== 'precise') return openTextDownloadList(files, options);
+    if (!WUI) throw new Error('다운로드 화면이 아직 준비되지 않았습니다.');
+    const slug = options.slug || 'all', stamp = new Date().toISOString().slice(0, 10);
+    const blob = storeZip([{ name: 'START-HERE.txt', text: PRECISE_REBUILD_PROMPT }, ...files.map((file, i) => ({ name: 'Wish-rebuild-' + slug + '-' + (i + 1) + 'of' + files.length + '.txt', text: file.text }))]);
+    const row = { filename: 'Wish-rebuild-' + slug + '-' + stamp + '.zip', url: URL.createObjectURL(blob), bytes: blob.size, requested: false };
+    const d = WUI.openSheet('preciseRebuild', { title: options.preciseTitle || '정밀 재구축 ZIP 받기', roomName: String(options.roomName || ''), files: [row], parts: files.length, prompt: PRECISE_REBUILD_PROMPT, copied: null });
+    copyPlainText(PRECISE_REBUILD_PROMPT).then(ok => { const live = WUI.ui.dlg(d?.id); if (live) { live.copied = !!ok; WUI.paint(); } }).catch(() => {});
+    return d;
+  }
+
   function releaseTextDownloadList(dialog) {
-    if (dialog?.type !== 'txtDownloads' || dialog.urlsReleased) return;
+    if (!['txtDownloads', 'preciseRebuild'].includes(dialog?.type) || dialog.urlsReleased) return;
     dialog.urlsReleased = true;
     const urls = (dialog.files || []).map(file => file.url);
     // A closing sheet must not immediately invalidate the browser's last request.
@@ -11026,7 +11081,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
         const protectedReference=scope==='people'?wishNamedObserve(reference.observe):undefined,segs=R31.segments(s.rows),manifest={last_message_id:s.anchorMessageId,sha256:s.hash};
         const header=getGuideText(guideIds[scope])+(scope==='people'?R31.personContract('people'):'')+contract(scope)+'\n\n[SOURCE]\n'+JSON.stringify(manifest)+'\n\n[사용자 고정 설정 · 참고 전용]\n'+JSON.stringify(fixed)+'\n\n[수동·보호 '+labels[scope]+' · 참고 전용]\n'+JSON.stringify(protectedReference||{})+(scope==='people'?'\n\n[기존 인물 목록 · 신원 연결 참고 전용]\n'+JSON.stringify(c.actors.filter(a=>!a.archived).map(a=>({name:a.name,aliases:a.aliases||[],isPlayer:!!a.isPlayer}))):'');
         const files=segs.map(seg=>({filename:'Wish-'+labels[scope]+'재구축-'+seg.index+'of'+segs.length+'.txt',text:header+'\n\n[RP '+seg.index+'/'+segs.length+' · 지침 제외 '+seg.chars+'자]\n'+R31.text(s.rows.slice(seg.start,seg.end))+wishCheckBlock(wishOutputCheck('txt-'+scope),true)}));
-        check();openTextDownloadList(files,{title:labels[scope]+' 재구축 TXT 받기',roomName:WishRoomNames.display(r)});return files;
+        check();deliverRebuildFiles(files,{title:labels[scope]+' 재구축 TXT 받기',roomName:WishRoomNames.display(r),slug:scope,preciseTitle:'정밀 재구축('+labels[scope]+') ZIP 받기'});return files;
       }));
     }
     function resolvePeople(rows){return label=>{const key=speechNameKey(label),named=rows.filter(a=>speechNameKey(a.name)===key),found=named.length?named:rows.filter(a=>(a.aliases||[]).some(x=>speechNameKey(x)===key));if(found.length!==1)throw WishImportPeople.error(label,found.length>1);return found[0].id;};}
@@ -14825,6 +14880,13 @@ html.rpcm-mobile-keyboard-open #wish-rp-root{top:var(--rpcm-vv-top,0px);bottom:a
 .m3-external-menuhead{padding:10px 11px 12px;border-bottom:1px solid var(--m3-line2);margin-bottom:5px}
 .m3-external-menuhead b{display:block;font-size:12px;font-weight:600}
 .m3-external-menuhead small{display:block;font-size:11px;color:var(--m3-fg2);margin-top:4px}
+.m3-external-mode{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:4px 4px 9px;border-bottom:1px solid var(--m3-line2);margin-bottom:5px}
+.m3-external-mode-btn{display:block;border:1px solid var(--m3-line);border-radius:9px;padding:8px 9px;background:transparent;color:var(--m3-fg);font:inherit;text-align:left;cursor:pointer}
+.m3-external-mode-btn b{display:block;font-size:12px;font-weight:600}
+.m3-external-mode-btn small{display:block;font-size:10px;color:var(--m3-fg2);line-height:1.55;margin-top:3px;word-break:keep-all}
+.m3-external-mode-btn.is-on{border-color:var(--m3-accent-line);background:var(--m3-accent-soft)}
+.m3-external-mode-btn:focus-visible{outline:2px solid var(--m3-accent-line);outline-offset:-2px}
+.m3-external-mode-btn:disabled{opacity:.5;cursor:default}
 .m3-external-option{display:flex;align-items:center;gap:11px;width:100%;border:0;border-radius:9px;padding:11px 10px;background:transparent;color:var(--m3-fg);font:inherit;text-align:left;cursor:pointer}
 .m3-external-option:hover,.m3-external-option:focus-visible{background:var(--m3-accent-soft);outline:2px solid var(--m3-accent-line);outline-offset:-2px}
 .m3-external-option:disabled{opacity:.5;cursor:default}
@@ -15754,9 +15816,9 @@ function mRelationships() {
   }
 
   function vExternalRebuild(dis=false){
-    const open=S.openSet.has('external-export');
+    const open=S.openSet.has('external-export'),mode=externalRebuildMode();
     const options=[['all','전체','기억 · 자료집 · 인물 모두','doc'],['memory','기억','현재상태 · 날짜로그','memory'],['lore','자료집','세계관 · 물건 · 복장 · 장소 등','book'],['people','인물','인지 · 호칭말투 · 관계감정선 · 은폐','people']];
-    return '<section class="m3-panel m3-external-panel" data-key="external"><b>외부 AI로 재구축</b><div class="m3-muted">전체 대화를 읽고, 선택한 영역을 다시 정리합니다.</div><div class="m3-row m3-card-actions m3-external-actions"><details class="m3-external-picker" data-open="external-export"'+(open?' open':'')+'><summary class="m3-btn mini" aria-expanded="'+open+'" aria-disabled="'+dis+'">'+ic('down')+'<span>지침 + TXT 받기</span>'+ic('chev','m3-external-chevron')+'</summary><div class="m3-external-options" popover="manual" aria-label="재구축 영역 선택"><div class="m3-external-menuhead"><b>어떤 영역을 재구축할까요?</b><small>선택하면 TXT 다운로드창이 열립니다.</small></div>'+options.map(([scope,label,desc,icon])=>'<button type="button" class="m3-external-option" data-act="externalExport" data-arg="'+scope+'"'+(dis?' disabled':'')+'><span class="m3-external-option-icon">'+ic(icon)+'</span><span><b>'+label+'</b><small>'+desc+'</small></span>'+ic('chev')+'</button>').join('')+'<p class="m3-external-menufoot">모두 전체 확정 대화를 읽으며, 정리 대상만 달라집니다.</p></div></details>'+btn('JSON 가져오기','externalImport',{cls:'mini',icon:'up',dis})+btn('지침','promptGuides',{arg:'externalAll',cls:'mini',icon:'doc',dis})+'</div>';
+    return '<section class="m3-panel m3-external-panel" data-key="external"><b>외부 AI로 재구축</b><div class="m3-muted">전체 대화를 읽고, 선택한 영역을 다시 정리합니다.</div><div class="m3-row m3-card-actions m3-external-actions"><details class="m3-external-picker" data-open="external-export"'+(open?' open':'')+'><summary class="m3-btn mini" aria-expanded="'+open+'" aria-disabled="'+dis+'">'+ic('down')+'<span>'+(mode==='precise'?'지침 + ZIP 받기':'지침 + TXT 받기')+'</span>'+ic('chev','m3-external-chevron')+'</summary><div class="m3-external-options" popover="manual" aria-label="재구축 영역 선택"><div class="m3-external-menuhead"><b>어떤 영역을 재구축할까요?</b><small>'+(mode==='precise'?'선택하면 ZIP과 시작 문구가 준비됩니다. 자료집은 TXT로 받습니다.':'선택하면 TXT 다운로드창이 열립니다.')+'</small></div><div class="m3-external-mode" role="group" aria-label="재구축 방식">'+[['fast','빠르게','TXT를 첨부하고 답 한 번 · 몇 분 · 긴 대화는 얇게 정리됨'],['precise','정밀하게','ZIP 첨부 후 "계속" 반복 · 코드 실행되는 AI(ChatGPT Plus 등) · 오래 걸리지만 자세함']].map(([m,l,t])=>'<button type="button" class="m3-external-mode-btn'+(mode===m?' is-on':'')+'" data-act="externalMode" data-arg="'+m+'" aria-pressed="'+(mode===m)+'"'+(dis?' disabled':'')+'><b>'+l+'</b><small>'+t+'</small></button>').join('')+'</div>'+options.map(([scope,label,desc,icon])=>'<button type="button" class="m3-external-option" data-act="externalExport" data-arg="'+scope+'"'+(dis?' disabled':'')+'><span class="m3-external-option-icon">'+ic(icon)+'</span><span><b>'+label+'</b><small>'+desc+'</small></span>'+ic('chev')+'</button>').join('')+'<p class="m3-external-menufoot">모두 전체 확정 대화를 읽으며, 정리 대상만 달라집니다.</p></div></details>'+btn('JSON 가져오기','externalImport',{cls:'mini',icon:'up',dis})+btn('지침','promptGuides',{arg:'externalAll',cls:'mini',icon:'doc',dis})+'</div>';
   }
   const POPOVER_OK=typeof HTMLElement!=='undefined'&&typeof HTMLElement.prototype.showPopover==='function';
   function positionExternalMenu(){
@@ -16625,6 +16687,14 @@ diff:`<div class="m3-shell">
         foot:`<button type="button" class="m3-btn" data-txt-all="${d.id}">${ic('down')}<span>${batched?`${from+1}–${to}번 받기`:'전체 다운'}</span></button><span class="m3-txt-progress" role="status" aria-live="polite">다운로드 요청 ${requested} / ${files.length}</span>${SP}${closeBtn(d)}`});
     },
 
+    preciseRebuild(d) {
+      const file=d.files?.[0],size=bytes=>bytes<1048576?(bytes/1024).toLocaleString('ko-KR',{maximumFractionDigits:1})+' KB':(bytes/1048576).toLocaleString('ko-KR',{maximumFractionDigits:1})+' MB';
+      const copied=d.copied===true?'<p class="m3-muted m3-topgap" aria-live="polite">시작 문구를 복사해 두었습니다.</p>':d.copied===false?'<p class="m3-muted m3-topgap" aria-live="polite">시작 문구를 자동으로 복사하지 못했습니다. [시작 문구 복사]를 눌러 주세요.</p>':'';
+      return sheet(d,{title:esc(d.title),desc:'TXT '+fmt(d.parts||0)+'개를 ZIP 하나로 묶었습니다'+(d.roomName?' · '+esc(d.roomName):''),
+        body:`<ol class="m3-muted" style="margin:0 0 10px;padding-left:18px;line-height:1.7"><li>아래 ZIP을 받습니다.</li><li>코드를 실행할 수 있는 AI(ChatGPT Plus 이상 등)에서 <b>새 대화</b>를 열고, 생각 수준을 높게 고릅니다.</li><li>ZIP을 첨부하고 시작 문구를 붙여 넣어 보냅니다. ZIP 안의 START-HERE.txt에도 같은 글이 있습니다.</li><li>AI가 진행 상황을 보고하면 <b>"계속"</b>만 보냅니다. 긴 대화일수록 여러 번 보냅니다.</li><li>마지막에 AI가 주는 결과 JSON 파일을 받아 [JSON 가져오기]로 넣습니다.</li></ol><p class="m3-muted m3-bottomgap">끝날 때까지 이 방에서 RP를 진행하지 마세요. 원문이 바뀌면 가져오기가 거절됩니다.</p>${file?`<div class="m3-txt-list" role="list" aria-label="ZIP 파일"><div class="m3-txt-row${file.requested?' is-requested':''}" data-key="zip-${d.id}" role="listitem"><div class="m3-txt-info"><b>${esc(file.filename)}</b><div class="m3-txt-meta"><span>${size(file.bytes)}</span><span class="m3-txt-state">${file.requested?'다운로드 요청됨':'준비됨'}</span></div></div><a class="m3-txt-download" href="${esc(file.url)}" download="${esc(file.filename)}" target="_blank" rel="noopener" data-txt-download="${d.id}" data-file-index="0" aria-label="${esc(file.filename)} 다운로드" title="${esc(file.filename)} 다운로드" data-autofocus>${ic('down')}</a></div></div>`:''}${copied}<textarea class="wp-ip-text m3-topgap" readonly rows="6" aria-label="시작 문구" spellcheck="false">${esc(d.prompt||'')}</textarea>`,
+        foot:`${btn('시작 문구 복사','preciseCopy',{arg:d.id,cls:'mini',icon:'copy'})}${SP}${closeBtn(d)}`});
+    },
+
     importPeople(d){
       const x = d.draft, isNew = x.target === 'new', selected = d.candidates.find(p => p.id === x.target);
       const choices = [['', '연결할 인물 선택'], ...d.candidates.map(p => [p.id, `${p.name} · ${p.isPlayer ? 'PC' : 'CHAR'} · ${p.origin}`]), ['new', '새 인물 직접 등록'], ['skip', '이 이름이 들어간 항목만 빼고 가져오기']];
@@ -17097,7 +17167,7 @@ nativeBundle(d) {
     if(d.busy&&['roomCopy','roomName','loreSplit','secondaryExport','secondaryReview','secondaryManage','importPeople'].includes(d.type))return;
     if(d.editKey&&(d.busy||d.draft?.busy))return;
     if(d.editKey&&!preserveDraft)editorDrafts.delete(d.editKey);
-    if(d.type==='txtDownloads')releaseTextDownloadList(d);
+    if(d.type==='txtDownloads'||d.type==='preciseRebuild')releaseTextDownloadList(d);
     if (instant) { S.dialogs = S.dialogs.filter(x => x !== d); paint(); return; }
     d.leaving = true; paint(); setTimeout(() => { if(!d.leaving)return; S.dialogs = S.dialogs.filter(x => x !== d); paint(false); }, 220);
   }
@@ -17876,7 +17946,7 @@ Object.assign(WUI_ADAPTER.act,{
  promptGuides:id=>WishPromptGuides.open(id||'apiCommon'),promptDefault:id=>WishPromptGuides.defaults(id),
  importPeopleContinue:id=>WishImportPeople.resume(id),
  raw:s=>WUIEditor('slot',s==='state'?'currentState':'logSummary'),stEdit:id=>WUIEditor('state',id),lgEdit:id=>WUIEditor('log',id),relNew:()=>WishRelationships.open(),relEdit:id=>WishRelationships.open(id),
- externalExport:scope=>ExternalBundles.exportFiles(scope),externalImport:()=>ExternalBundles.importFile(),externalReviewApply:id=>ExternalBundles.apply(id),relReviewApply:id=>R31.applyRelationshipReview(id),
+ externalExport:scope=>ExternalBundles.exportFiles(scope),externalMode:mode=>{setExternalRebuildMode(mode);WUI.paint();},preciseCopy:async id=>{const d=WUI.ui.dlg(id);if(!d)return;const ok=await copyPlainText(d.prompt);d.copied=!!ok;notify(ok?'시작 문구를 복사했습니다.':'복사하지 못했습니다. 아래 칸의 글을 직접 선택해 복사해 주세요.',ok?'success':'warn',4000);WUI.paint();},externalImport:()=>ExternalBundles.importFile(),externalReviewApply:id=>ExternalBundles.apply(id),relReviewApply:id=>R31.applyRelationshipReview(id),
  relReviewExpand:arg=>{const [id,key]=arg.split('|'),d=WUI.ui.dlg(id);if(d&&!d.busy){d.draft.open[key]=!d.draft.open[key];WUI.paint();}},
  relReviewEdit:arg=>{const [id,key]=arg.split('|'),d=WUI.ui.dlg(id);if(d&&!d.busy){d.draft.editing||={};d.draft.editing[key]=!d.draft.editing[key];d.draft.open[key]=true;WUI.paint(false);}},relReviewReset:arg=>{const [id,key]=arg.split('|'),d=WUI.ui.dlg(id);if(d&&!d.busy){delete d.draft.edit[key];d.draft.reviewed=false;WUI.paint();}},relReviewMore:id=>{const d=WUI.ui.dlg(id);if(d&&!d.busy){d.draft.limit+=30;WUI.paint();}},spNew:()=>WUIEditor('speech'),spEdit:id=>WUIEditor('speech',id),charEdit:id=>WUIEditor('slot',id),xEdit:id=>WUIEditor('slot',id),
  charNew:async()=>{await WUIInvoke('add','character');WUIEditor('slot',state.v2Editor.slotId);},xNew:async()=>{await WUIInvoke('add','extra');WUIEditor('slot',state.v2Editor.slotId);},
