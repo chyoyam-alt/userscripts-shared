@@ -6706,49 +6706,69 @@ const WishImportPeople=(()=>{
     });
   }
 
-  const CURRENT_STATE_SECTION_RULE = '━━━━━━━━━━━━━━━━━━━━';
+  // Sections are written as "## 1. 제목" (exactly two #). The older rule/title/rule form is still read, so saved and pasted text keeps working.
+  const CURRENT_STATE_HEADING_RE = /^[\s\u200b\ufeff]*##(?!#)[ \t]*(\d+)\s*[.)．]\s*(.+?)\s*$/;
 
   function isCurrentStateSeparator(line) {
     return /^[\s\u200b\ufeff]*[━─═]{5,}[\s\u200b\ufeff]*$/.test(String(line || ''));
   }
 
+  // Returns {number,title,size,form} when a section heading starts at lines[i]; size is how many lines the heading uses.
+  function currentStateHeadingAt(lines, i) {
+    const heading = String(lines[i] || '').match(CURRENT_STATE_HEADING_RE);
+    if (heading) return { number:Number(heading[1]), title:String(heading[2] || '').trim(), size:1, form:'hash' };
+    // 사람이 붙여넣은 ━━━ / ─── / ═══ 구분선을 길이 차이와 공백에 상관없이 허용합니다.
+    if (!isCurrentStateSeparator(lines[i]) || !isCurrentStateSeparator(lines[i + 2])) return null;
+    const title = String(lines[i + 1] || '').trim().match(/^(\d+)\s*[.)．]\s*(.+?)\s*$/);
+    return title ? { number:Number(title[1]), title:String(title[2] || '').trim(), size:3, form:'rule' } : null;
+  }
+
+  // The one place that decides which lines are section headings. Text that does not open with a heading has no sections.
+  // In text that opens with the older rule form, a "## n." line is a heading only after a blank line and when the numbering
+  // continues, so a markdown subheading inside an old section body does not become a new section.
+  function currentStateHeadings(lines) {
+    const heads = [];
+    let i = 0;
+    while (i < lines.length && !String(lines[i] || '').trim()) i++;
+    const first = i < lines.length ? currentStateHeadingAt(lines, i) : null;
+    if (!first) return heads;
+    const oldForm = first.form === 'rule';
+    while (i < lines.length) {
+      const h = currentStateHeadingAt(lines, i);
+      const accepted = h && (!oldForm || h.form === 'rule' || ((i === 0 || !String(lines[i - 1] || '').trim()) && (h.number === heads.length + 1 || h.number === (heads.at(-1)?.number ?? 0) + 1)));
+      if (!accepted) { i++; continue; }
+      heads.push({ line:i, number:h.number, title:h.title, size:h.size });
+      i += h.size;
+    }
+    return heads;
+  }
+
   function parseCurrentStateSections(text) {
     const src = cleanedPastedText(normalizeLineBreaks(String(text || '')));
     if (!src) return [];
-    const lines = src.split('\n');
-    const sections = [];
-    let i = 0;
-    const titleOf = line => String(line || '').trim().match(/^(\d+)\s*[.)．]\s*(.+?)\s*$/);
-    while (i < lines.length) {
-      while (i < lines.length && !String(lines[i] || '').trim()) i++;
-      if (i >= lines.length) break;
-      // 사람이 붙여넣은 ━━━ / ─── / ═══ 구분선을 길이 차이와 공백에 상관없이 허용합니다.
-      if (!isCurrentStateSeparator(lines[i])) return [];
-      const titleMatch = titleOf(lines[i + 1]);
-      if (!titleMatch || !isCurrentStateSeparator(lines[i + 2])) return [];
-      const bodyStartLine = i + 3;
-      let j = bodyStartLine;
-      while (j < lines.length) {
-        if (isCurrentStateSeparator(lines[j]) && titleOf(lines[j + 1]) && isCurrentStateSeparator(lines[j + 2])) break;
-        j++;
-      }
-      sections.push({
-        number: Number(titleMatch[1]),
-        title: String(titleMatch[2] || '').trim(),
-        body: lines.slice(bodyStartLine, j).join('\n').trim(),
-        index: sections.length,
-      });
-      i = j;
-    }
-    return sections;
+    const lines = src.split('\n'), heads = currentStateHeadings(lines);
+    return heads.map((h, index) => ({
+      number: h.number,
+      title: h.title,
+      body: lines.slice(h.line + h.size, index + 1 < heads.length ? heads[index + 1].line : lines.length).join('\n').trim(),
+      index,
+    }));
+  }
+
+  // Writes one section as "## n. 제목\n본문". A line break in the title becomes a space, and a body line shaped like a
+  // section heading loses its leading # marks, so reading the text back (which drops zero-width marks) yields the same sections.
+  function formatCurrentStateSection(number, title, body) {
+    const invisible = /[\u200B-\u200D\u2060\uFEFF]/g;
+    const head = String(title || '').replace(invisible, '').replace(/\s*[\r\n]+\s*/g, ' ').trim() || `섹션 ${number}`;
+    const text = String(body || '').replace(/\r\n?/g, '\n').trim().split('\n').map(line => {
+      const bare = line.replace(invisible, '');
+      return CURRENT_STATE_HEADING_RE.test(bare) ? bare.replace(/^(\s*)##[ \t]*/, '$1') : line;
+    }).join('\n');
+    return `## ${number}. ${head}${text ? `\n${text}` : ''}`;
   }
 
   function buildCurrentStateText(sections) {
-    return (sections || []).map((section, index) => {
-      const title = String(section?.title || `섹션 ${index + 1}`).trim();
-      const body = String(section?.body || '').trim();
-      return `${CURRENT_STATE_SECTION_RULE}\n${index + 1}. ${title}\n${CURRENT_STATE_SECTION_RULE}${body ? `\n${body}` : ''}`;
-    }).join('\n\n').trim();
+    return (sections || []).map((section, index) => formatCurrentStateSection(index + 1, section?.title, section?.body)).join('\n\n').trim();
   }
 
   // 최신 로그는 저장소에서 뒤에 붙은 순서가 아니라 확정된 실제 날짜를 우선해 고릅니다.
@@ -7812,7 +7832,7 @@ function remapUnknownLogSelectionKeys(room,oldBlocks,newBlocks){
     const existing=parseCurrentStateSections(old);if(old.trim()&&!existing.length)throw Error('현재 방 현재상태의 섹션 형식을 읽지 못했습니다. 자동으로 재작성하지 않았습니다.');
     const seen=new Map(existing.map(s=>[roomCopyCanonical(s.title),s])),add=[];let conflicts=0;
     for(const r of rows){const prior=seen.get(roomCopyCanonical(r.data.title));if(prior){if(prior.body!==r.data.body)conflicts++;continue;}add.push(r.data);seen.set(roomCopyCanonical(r.data.title),r.data);}
-    if(add.length){const extra=add.map((s,i)=>`${CURRENT_STATE_SECTION_RULE}\n${existing.length+i+1}. ${s.title}\n${CURRENT_STATE_SECTION_RULE}\n${s.body}`).join('\n\n');slot.content=[old.trimEnd(),extra].filter(Boolean).join('\n\n');}
+    if(add.length){const extra=add.map((s,i)=>formatCurrentStateSection(existing.length+i+1,s.title,s.body)).join('\n\n');slot.content=[old.trimEnd(),extra].filter(Boolean).join('\n\n');}
     return {changed:old!==slot.content,added:add.length,conflicts};
   }
   function roomCopyBuildPlan(session,draft,targetRaw,targetCogRaw){
@@ -8317,10 +8337,10 @@ function remapUnknownLogSelectionKeys(room,oldBlocks,newBlocks){
     function stateSpans(src){
       const parsed=parseCurrentStateSections(src);if(!parsed.length)return [];
       const lines=src.split('\n'),offsets=[];let off=0;for(const l of lines){offsets.push(off);off+=l.length+1;}offsets.push(src.length);
-      const title=l=>text(l).trim().match(/^(\d+)\s*[.)．]\s*(.+?)\s*$/),heads=[];
-      for(let i=0;i<lines.length-2;i++)if(isCurrentStateSeparator(lines[i])&&title(lines[i+1])&&isCurrentStateSeparator(lines[i+2])){heads.push({line:i,title:title(lines[i+1])[2].trim()});i+=2;}
+      // Same heading rule as parseCurrentStateSections, so the span count matches the parsed section count.
+      const heads=currentStateHeadings(lines);
       if(heads.length!==parsed.length)return [];
-      const spans=heads.map((h,i)=>({...trimSpan(src,offsets[h.line+3]??src.length,i+1<heads.length?offsets[heads[i+1].line]:src.length),title:h.title,index:i}));
+      const spans=heads.map((h,i)=>({...trimSpan(src,offsets[h.line+h.size]??src.length,i+1<heads.length?offsets[heads[i+1].line]:src.length),title:h.title,index:i}));
       return spans.every((s,i)=>s.title===parsed[i].title&&normalizeLineBreaks(s.source)===parsed[i].body)?spans:[];
     }
     function protectedLiterals(src,names=[],extra=[]){
@@ -8445,7 +8465,7 @@ function remapUnknownLogSelectionKeys(room,oldBlocks,newBlocks){
           const numeric=numberDiagnostics(row.source,next,guardLiterals);issues.push(...numeric.issues);warnings.push(...numeric.warnings,...contentWarnings(row.source,next));
           if(unsafeBody(next)&&!unsafeBody(row.source))issues.push('새 제어문·서식이 포함되어 있습니다.');
           if(row.category==='logs'&&row.field==='body'&&parseDatedLogBlocks(row.title+'\n'+next).length!==1)issues.push('날짜로그 안에 새 사건 제목 형식이 생겼습니다.');
-          if(row.category==='state'&&/(?:^|\n)[\s\u200b\ufeff]*[━─═]{5,}[\s\u200b\ufeff]*\n\s*\d+\s*[.)．]/.test(next))issues.push('본문 안에 새 섹션 구조가 생겼습니다.');
+          if(row.category==='state'&&(/(?:^|\n)[\s\u200b\ufeff]*[━─═]{5,}[\s\u200b\ufeff]*\n\s*\d+\s*[.)．]/.test(next)||next.split('\n').some(line=>CURRENT_STATE_HEADING_RE.test(line))))issues.push('본문 안에 새 섹션 구조가 생겼습니다.');
         }
         const shorter=next.length+(job.notationId===CONTEXT_NOTATION.id&&![row.source,next].some(src=>text(src).includes(CONTEXT_NOTATION.start)||text(src).includes(CONTEXT_NOTATION.end))?CONTEXT_NOTATION.start.length+CONTEXT_NOTATION.end.length+4:0)<row.source.length,changed=result.action==='compress'&&next!==row.source;
         return {...row,action:result.action,next,changed,issues:[...new Set(issues)],warnings:[...new Set(warnings)],proseRemaining:result.action==='compress'?proseCount(next,guardLiterals):0,selectable:changed&&shorter&&!issues.length,status:issues.length?'검사 차단 · 적용 불가':!changed?(row.mode==='editable'?'원문 유지 제안':'보호 원문 유지'):!shorter?'짧아지지 않아 원문 유지':warnings.length?'주의 사항 비교 후 선택':'비교 후 선택 가능'};
@@ -8992,7 +9012,9 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     let raw=String(item.content||'').trim();
     if(kind==='relationship'&&raw.startsWith(WISH_RELATIONSHIP_LEGACY_HEAD))raw=raw.slice(WISH_RELATIONSHIP_LEGACY_HEAD.length);
     const content=safeForHtmlComment(raw);
-    if(['currentState','speech','cognition'].includes(kind))return content;
+    // Stored section headings "## n." go one level below the group heading "## 현재상태".
+    if(kind==='currentState')return content.replace(/^([ \t]*)##(?=[ \t]*\d+[ \t]*[.)．])/gm,'$1###');
+    if(['speech','cognition'].includes(kind))return content;
     if(kind==='log'&&(item.autoType==='whole-log'||/^\[[^\]\n]+\](?:\n|$)/.test(content)))return content;
     let heading=String(item.title||item.slotId||'메모').trim();
     if(kind==='lore')heading=heading.replace(/^자료집 · /,'');
@@ -14798,6 +14820,7 @@ html.rpcm-mobile-keyboard-open #wish-rp-root{top:var(--rpcm-vv-top,0px);bottom:a
 .m3-fld textarea{min-height:130px;resize:vertical;line-height:1.8}
 .m3-fld input:focus,.m3-fld textarea:focus,.m3-fld select:focus,.m3-select:focus{border-color:var(--m3-accent-line);background:var(--m3-card);box-shadow:0 0 0 3.5px var(--m3-accent-soft)}
 .m3-fld small{display:block;font-size:11.5px;color:var(--m3-muted);margin-top:6px;line-height:1.65}
+.wp-raw-warn{color:var(--m3-warn)}
 .m3-select{width:auto;padding:6px 10px;font-size:12.5px;background:var(--m3-card)}
 .m3-select.mini{padding:3px 7px;font-size:11.5px}
 .m3-grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
@@ -15709,7 +15732,7 @@ function createWishUI(AD) {
   function mState() {
     const secs = V.state.sections, raw=String(V.state.raw||''), chars = raw.length || secs.reduce((n, s) => n + (s.size || 0), 0);
     return `<div class="m3-toolbar"><span class="m3-muted m3-grow">${secs.length}섹션 · ${fmt(chars)}자</span><div class="m3-actions">${btn('원문 편집', 'raw', { arg: 'state', cls: 'mini', icon: 'edit' })}${chip('주입', 'state.inject', V.state.inject)}</div></div>
-    ${secs.map((s, i) => card('st-' + s.id, `${i + 1}. ${esc(s.title)}`, `${fmt(s.size)}자`, `<p>${esc(s.body)}</p>`, btn('편집', 'stEdit', { arg: s.id, cls: 'mini', icon: 'edit' }) + btn('삭제', 'stDel', { arg: s.id, cls: 'danger mini' }), '', COL.state)).join('') || (raw.trim() ? card('st-raw', '현재상태 원문', '섹션 구분 없이 저장된 내용 · 원문 편집으로 수정', `<div style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(raw)}</div>`, '', '', COL.state) : empty('현재상태가 비어 있습니다. 지금 갱신이나 원문 편집으로 채울 수 있어요.'))}`;
+    ${secs.map((s, i) => card('st-' + s.id, `${i + 1}. ${esc(s.title)}`, `${fmt(s.size)}자`, `<p>${esc(s.body)}</p>`, btn('편집', 'stEdit', { arg: s.id, cls: 'mini', icon: 'edit' }) + btn('삭제', 'stDel', { arg: s.id, cls: 'danger mini' }), '', COL.state)).join('') || (raw.trim() ? card('st-raw', '현재상태 원문', '섹션 구분 없이 저장된 내용 · 첫 줄부터 "## 1. 제목" 꼴로 쓰면 섹션으로 나뉩니다 · 원문 편집으로 수정', `<div style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(raw)}</div>`, '', '', COL.state) : empty('현재상태가 비어 있습니다. 지금 갱신이나 원문 편집으로 채울 수 있어요.'))}`;
   }
   // 주입 제외 이유 표시 (기존 offReason 문장을 분류만 함 · 계산 로직 변경 없음)
   const WHY_LABEL={in:['주입 중','ok'],cand:['주입 후보','ok'],limit:['한도 초과로 빠짐','warn'],pick:['AI 선별에서 빠짐','accent'],guard:['설정·분기 보호로 제외','danger'],me:['직접 제외',''],stale:['다음 갱신 때 다시 계산',''],off:['주입 설정에서 꺼짐',''],none:['현재 후보에 없음',''],logoff:['날짜로그 주입 꺼짐',''],idle:['주입 대기','']};
@@ -16753,6 +16776,15 @@ diff:`<div class="m3-shell">
     if(!byBundle.has(d.bundle))byBundle.set(d.bundle,esc(JSON.stringify(d.bundle==='memory'?j.draft.room.slots.filter(s=>['currentState','logSummary'].includes(s.id)):d.bundle==='people'?{people:j.draft.cog.actors,facts:j.draft.cog.facts,knowledge:j.draft.cog.state.knowledge,concealments:j.draft.cog.state.concealments,speech:j.draft.room.speechRelations,relationships:j.draft.room.relationships}:j.draft.packs.find(p=>p.scopeId===autoLorePackId(d.wishRoom))?.entries,null,2)));
     return byBundle.get(d.bundle);
   }
+  // Live note under the raw current-state editor. Repaints reuse the last count, so the text is parsed once per change.
+  let rawStateHintMemo=null;
+  function rawStateHint(content){
+    const text=String(content||'');
+    if(!text.trim())return '비운 채 저장하면 현재상태가 지워집니다.';
+    if(rawStateHintMemo?.text!==text)rawStateHintMemo={text,count:parseCurrentStateSections(text).length};
+    if(rawStateHintMemo.count)return `저장하면 ${rawStateHintMemo.count}섹션으로 나뉩니다.`;
+    return '<span class="wp-raw-warn">첫 줄이 "## 1. 제목" 꼴의 섹션 제목이 아니어서 섹션으로 나뉘지 않습니다. 이대로 저장하면 섹션 없이 한 덩어리로 들어갑니다.</span>';
+  }
   const DLG = {
     personDossier:personDossierSheet,
     usageLedger:vUsageLedger,logCalendar:vLogCalendar,relationMap:vRelationMap,memoryDiff:vMemoryDiff,
@@ -17041,7 +17073,7 @@ nativeBundle(d) {
     eSlot(d) {
       const x = d.draft, timed = d.kind === 'char' || d.kind === 'extra', raw = !timed;
       const title = raw ? (d.kind === 'stateRaw' ? '현재상태 원문 편집' : '날짜로그 원문 편집') : d.isNew ? (d.kind === 'char' ? '캐릭터 추가' : '기타·OOC 추가') : `${esc(x.title)} 편집`;
-      return sheet(d, { title, desc: raw ? '원문을 통째로 고칩니다 · 저장하면 섹션·블록을 다시 나눕니다' : '', wide: raw, body: `${timed ? field('이름', inp(D(d, 'title'), x.title || '')) : ''}${d.kind === 'char' ? field('별칭 · 쉼표로 구분', inp(D(d, 'aliases'), x.aliases || ''), '대화에 이 이름이 나오면 자동으로 켭니다.') : ''}${field('내용', ta(D(d, 'content'), x.content || '', '', raw ? '380' : '200'), raw ? esc(d.hint || '') : '')}`, foot: `${timed && !d.isNew ? delBtn(d) : ''}${SP}${closeBtn(d, '취소')}${saveBtn(d)}` });
+      return sheet(d, { title, desc: d.kind === 'stateRaw' ? '원문을 통째로 고칩니다' : raw ? '원문을 통째로 고칩니다 · 저장하면 섹션·블록을 다시 나눕니다' : '', wide: raw, body: `${timed ? field('이름', inp(D(d, 'title'), x.title || '')) : ''}${d.kind === 'char' ? field('별칭 · 쉼표로 구분', inp(D(d, 'aliases'), x.aliases || ''), '대화에 이 이름이 나오면 자동으로 켭니다.') : ''}${field('내용', ta(D(d, 'content'), x.content || '', '', raw ? '380' : '200'), d.kind === 'stateRaw' ? rawStateHint(x.content) : raw ? esc(d.hint || '') : '')}`, foot: `${timed && !d.isNew ? delBtn(d) : ''}${SP}${closeBtn(d, '취소')}${saveBtn(d)}` });
     },
     /* props: { ref, draft:{title,body} } */
     eState(d) { const x = d.draft; return sheet(d, { title: '현재상태 섹션 편집', desc: '이 섹션만 고칩니다', body: `${field('제목', inp(D(d, 'title'), x.title || ''))}${field('본문', ta(D(d, 'body'), x.body || '', '', '200'))}`, foot: `${d.canDelete === false ? '' : delBtn(d)}${SP}${closeBtn(d, '취소')}${saveBtn(d)}` }); },
