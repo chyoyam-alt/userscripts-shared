@@ -2996,14 +2996,14 @@ const ExternalReplay=(()=>{
     }catch{return '';}
   }
   function safeMemoryItems(room,items) {
-    return room.memoryBranchBlocked?items.filter(i=>!['currentState','logSummary'].includes(i.sourceSlotId||i.slotId)&&i.group!=='log-auto'):items;
+    return room.memoryBranchBlocked?items.filter(i=>!['currentState','logSummary','__threads'].includes(i.sourceSlotId||i.slotId)&&i.group!=='log-auto'):items;
   }
 
   function memoryBasis(room) {
     return JSON.stringify({
       slots:(room?.slots || []).map(s=>[s.id,s.content,s.enabled,s.retentionTurns]),
       speechRelations:normalizeSpeechRelations(room?.speechRelations||[]).map(r=>[r.speaker,r.target,r.address,r.register,r.note,r.revision]),
-      speechEnabled:room?.speechConfig?.enabled!==false, relationships:room.relationships,relationshipConfig:room.relationshipConfig,relationshipBaseline:room.relationshipBaseline,
+      speechEnabled:room?.speechConfig?.enabled!==false, relationships:room.relationships,relationshipConfig:room.relationshipConfig,relationshipBaseline:room.relationshipBaseline,threads:room?.threads,
       autoMemoryEnabled:room?.autoMemory?.enabled!==false,
       memorySchedule:room?.memorySchedule||null,
     });
@@ -3817,8 +3817,39 @@ function open(id){const room=state.currentRoom,old=normalize(room.relationships)
       const line=changed?'남은 일 '+[opened?'+'+opened+' 열림':'',updated?updated+' 갱신':'',words.length?words.length+' 닫힘('+[...new Set(words)].join('·')+')':'',suggested?'닫기 제안 '+suggested+'건':''].filter(Boolean).join(' · '):'';
       return {changed,threads:changed?normalizeLoose(prune(list)):stored,notices,left,line};
     }
+
+    // The per-turn short list: one line per open item that is switched on, kinds in KINDS order and stored order within a kind.
+    // It reads only the stored list and the memory clock, so the text stays the same between memory commits. Over `cap`, the
+    // longest untouched one-line items drop to their titles first, then the longest untouched items leave the list and one
+    // count line says how many. The tab reads the same rows (default cap), so its badges and the injected list always agree.
+    function injection(room,{cap=INJECT_CHARS}={}){
+      const now=clock(room),flat=v=>String(v??'').replace(/\s+/g,' ').trim(),cut=(v,n)=>v.length>n?v.slice(0,n-1).trimEnd()+'…':v;
+      const rows=normalizeLoose(room?.threads).filter(t=>t.status!=='closed'&&t.enabled!==false&&flat(t.title)).map((t,i)=>{
+        const head='- '+kindLabel(t.kind)+': '+cut(flat(t.title),TITLE_CHARS),touched=t.updatedTurn||t.opened.turn;
+        let full=head;
+        if(FULL_KINDS.has(t.kind)){
+          const who=t.who.map(flat).filter(Boolean),people=t.kind==='promise'&&who.length>1?who[0]+'→'+who.slice(1).join('·'):who.join('·');
+          const detail=flat(t.detail),mark=detail.match(/^.*(?:지금|현재)[ ]?[:：]/),status=(mark&&detail.slice(mark[0].length).trim())||detail,due=flat(t.due);
+          full=head+(people?' ('+people+')':'')+(due?' · '+due:'')+(status?' · '+cut(status,STATUS_CHARS):'');
+        }
+        const mode=now>0&&touched>0&&now-touched>=STALE_TURNS?'stale':FULL_KINDS.has(t.kind)?'line':'title';
+        return {id:t.id,k:KINDS.indexOf(t.kind),i,touched,head,full,mode};
+      }).sort((a,b)=>a.k-b.k||a.i-b.i);
+      if(!rows.length)return {text:'',rows:[],summary:''};
+      const lineOf=r=>r.mode==='line'?r.full:r.head,more=n=>'- 그 밖에 남은 일 '+n+'개';
+      let total=rows.reduce((n,r)=>n+lineOf(r).length,0),kept=rows.length;
+      const size=()=>{const out=rows.length-kept;return total+Math.max(0,kept-1)+(out?more(out).length+(kept?1:0):0);};
+      // Least recently touched first; on a tie the later row in the list goes first.
+      const oldest=pick=>{let best=null;for(const r of rows)if(pick(r)&&(!best||r.touched<=best.touched))best=r;return best;};
+      for(let r;size()>cap&&(r=oldest(x=>x.mode==='line'&&x.full!==x.head));){total-=r.full.length-r.head.length;r.mode='budget';}
+      for(let r;size()>cap&&kept&&(r=oldest(x=>x.mode!=='out'));){total-=lineOf(r).length;r.mode='out';kept--;}
+      const out=rows.length-kept,short=rows.filter(r=>r.mode==='stale'||r.mode==='budget').length;
+      let text=[...rows.filter(r=>r.mode!=='out').map(lineOf),...(out?[more(out)]:[])].join('\n');
+      if(text.length>cap)text=cap>1?text.slice(0,cap-1).trimEnd()+'…':'';
+      return {text,rows:rows.map(r=>({id:r.id,mode:r.mode})),summary:['열림 '+rows.length+'개',short?'제목만 '+short+'개':'',out?'빠짐 '+out+'개':''].filter(Boolean).join(' · ')};
+    }
     return {KINDS,KIND_LABEL,FULL_KINDS,CLOSE_TYPES,DATE_KINDS,UNKNOWN_DATE,KIND_ALIAS,CLOSE_ALIAS,STATUS_ALIAS,INJECT_CHARS,SHRINK_CAPS,STALE_TURNS,STATUS_CHARS,TITLE_CHARS,CLOSED_INDEX_MAX,OPEN_MAX,CLOSED_KEEP,RULES,DELTA_SCHEMA,TXT_ROW_SCHEMA,
-      list,kindLabel,closeWord,canon,key,userCount,clock,normalizeLoose,validateStored,prune,assign,carry,guide,requestInput,applyDelta};
+      list,kindLabel,closeWord,canon,key,userCount,clock,normalizeLoose,validateStored,prune,assign,carry,guide,requestInput,applyDelta,injection};
   })();
 
   // 2.7.2: request-local metadata only; persisted room/event schemas stay unchanged.
@@ -6494,6 +6525,7 @@ const WishImportPeople=(()=>{
   async function refreshPendingAfterAutomaticMemory(room) {
     if (!room?.pending) return;
     replaceCurrentStatePendingItem(room);
+    replaceThreadsPendingItem(room);
     replacePendingLogItems(room);
     await syncCognitionIntoPending(room, false);
     await syncPendingCarrier(room, 'auto-memory-batch');
@@ -8938,6 +8970,8 @@ function remapUnknownLogSelectionKeys(room,oldBlocks,newBlocks){
     out.push(...WishRelationships.items(room,ctx));
     const speech=currentSpeechPendingItem(room);
     if(speech){const stateIndex=out.findIndex(item=>item.slotId==='currentState');out.splice(stateIndex>=0?stateIndex+1:0,0,speech);}
+    const threads=threadsPendingItem(room);
+    if(threads){const at=out.findIndex(item=>item.slotId==='__speech'),stateIndex=out.findIndex(item=>item.slotId==='currentState');out.splice(at>=0?at+1:stateIndex>=0?stateIndex+1:0,0,threads);}
     if (cognitionSnapshot?.text) {
       out.push({
         slotId:'__cognition', title:'인물별 인지 상태', group:'cognition',
@@ -9033,7 +9067,14 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
   let size=options.totalLength||((xs)=>measure.totalLength(xs));
   const total=exactSize(items);if(size(items)!==total)size=exactSize;
   if(total<=limit)return {items,method:'all-fit',total,fullTotal:total,omitted:0,error:'',limit};
-  const required=items.filter(allFitRequired),optional=items.filter(i=>!allFitRequired(i));
+  let required=items.filter(allFitRequired),optional=items.filter(i=>!allFitRequired(i));
+  // 남은 일 never stops the injection: over the limit it shrinks (1,000→600→300→150자), then sits out this turn.
+  const isThreads=i=>injectionCadenceKind(i)==='threads';
+  if(size(required)>limit&&required.some(isThreads)){
+    const core=required.filter(i=>!isThreads(i)),old=required.find(isThreads);let fit=null;
+    for(const cap of WishThreads.SHRINK_CAPS){const it=threadsPendingItem(room,cap);if(it&&size([...core,{...old,content:it.content,reason:it.reason}])<=limit){fit={...old,content:it.content,reason:it.reason};break;}}
+    items=items.map(i=>isThreads(i)?fit:i).filter(Boolean);required=items.filter(allFitRequired);optional=items.filter(i=>!allFitRequired(i));
+  }
   if(size(required)>limit)throw Error('현재상태·인지·호칭·켜진 캐릭터/OOC·고정 자료와 AI 원문만으로 '+limit.toLocaleString()+'자를 넘습니다. 고정 항목 또는 이번 세션 포함 선택을 줄여 주세요. 원문과 저장 기억은 삭제하지 않았습니다.');
   // 수동 서버 복구는 같은 AI 장애를 다시 기다리지 않고 결정적인 로컬 순서로 재구성한다.
   const cfg=total<=APP.carrierSafeChars?{semantic:false,selector:false}:recallSelectionSettings(room),settings=loadAiSettings();
@@ -9107,6 +9148,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     if (item.slotId === 'currentState') return 'currentState';
     if (item.slotId === '__cognition' || item.group === 'cognition') return 'cognition';
     if (item.slotId === '__speech' || item.sourceSlotId === '__speech' || item.group === 'speech') return 'speech';
+    if (item.slotId === '__threads' || item.group === 'threads') return 'threads';
     if (item.sourceSlotId === 'logSummary' || item.slotId === 'logSummary' || item.group === 'log-auto') return 'log';
     if (item.sourceSlotId === '__lore' || item.group === 'lore-auto') return 'lore';
     if (item.group === 'character') return 'character';
@@ -9121,6 +9163,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     if (kind === 'cognition') return room.injectionPolicy.cognitionEvery;
     if (kind === 'relationship') return room.relationshipConfig?.enabled===false?0:1;
     if (kind === 'speech') return room.speechConfig?.enabled===false?0:1;
+    if (kind === 'threads') return room.injectionPolicy.threadsEvery===0?0:1;
     if (kind === 'log') return room.injectionPolicy.logEvery;
     if (kind === 'lore') return room.injectionPolicy.loreEvery;
     if (kind === 'character') return room.injectionPolicy.characterEvery;
@@ -9243,7 +9286,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
 
   let wishContextBuildCache=null;
   const WISH_CONTEXT_GUIDE = "[RP 연속성 참고]\n아래는 RP의 진행 지시·설정·기억을 모은 관리 자료다. 지시와 참고 내용을 구분해 적용한다. 블록·안내문 자체는 출력하거나 극중 정보로 취급하지 않으며, 기록된 내용은 인물별 경험·인지 범위에서 활용한다.\n사실·시점: 사용자의 직접 지시·정정(OOC)과 RP에서 확정된 최신 변화가 저장 기록보다 우선한다. 저장값이 충돌하면 현재 장면 시점에 유효한 최신 확정값을 우선하고, 선후가 불명확하면 해당 정보의 전용 칸을 기준으로 한다. 발언·주장·생각의 존재와 그 내용의 진위는 별개다. 과거 장면은 당시 인지 범위를 따르며, 옛 값의 재현·언급은 현재값의 변경이 아니다.\n사용: 기록은 필요할 때 참고하며, 실렸다는 이유로 모두 드러내거나 기록된 반응을 매번 재현할 필요는 없고, 아직 결말이 나지 않은 남은 일도 장면이 그 일로 이어질 때 자연스럽게 반영할 뿐 억지로 꺼내거나 해결하지 않는다. 기록에 없는 과거를 없던 일로 단정하거나 임의로 채우지 않는다. 응답은 저장 기록체가 아닌 해당 RP의 언어·문체·출력 지시를 따른다.\n표기: 기호는 각 기록의 작성 규약을 따르고, 규약이 드러나지 않으면 문맥으로 읽는다. 뜻이 분명하지 않은 기호로 방향·선후·인과를 단정하지 않는다. 인용·약속어·암호·사용자 작성문의 기호는 원래 뜻을 유지한다.\n\n";
-  const WISH_CONTEXT_GROUPS = Object.freeze([["extra","진행 규칙 · 기타(OOC)","사용자가 직접 적은 진행·문체·출력 관련 지시와 메모다."],["character","캐릭터 설정","사용자가 직접 적은 인물 설정이다. 이후 RP에서 확정된 변화가 아직 반영되지 않았을 수 있다."],["lore","자료집","세계관·장소·조직·물건·복장·대사 등을 모은 참고 자료다. 카드에 따라 현재값과 과거 정보, 확정 설정과 소문·주장, 실제 발언과 예시가 함께 있을 수 있다. 과거 대사는 회상하거나 되받을 때 쓰는 자료이며 그대로 되풀이하지 않는다."],["misc","기타 참고","다른 분류에 속하지 않는 참고 자료다."],["log","날짜로그","지난 RP 사건의 날짜별 기록이며, 전체가 아닌 선별된 일부일 수 있다."],["relationship","관계·감정선","인물 사이의 관계·감정·태도를 방향별로 기록한 것으로, '현재'는 최근 저장 시점의 값이고 '핵심 전환'은 지난 경위다. A → B는 A가 B를 보는 관계·감정·태도이며, 반대 방향이나 상대의 인지 여부와는 별개다."],["cognition","인지 경계","인물별로 알고 있는 정보·아직 모르는 정보·인지 여부가 확인되지 않은 정보를 정리한 것이다."],["speech","현재 호칭·말투 · 화자 → 상대","최근 저장 시점에 유효한 호칭과 말투다. 예로 적힌 말버릇은 말투를 보여 주는 것이며 매 답장 되풀이하지 않는다."],["currentState","현재상태","최근 저장 시점까지 이어지고 있는 상황·약속·제약이다. 습관·모티프는 자연스러운 계기에만 쓰고 매 답장 되풀이하지 않는다. 사용자 캐릭터의 습관은 상대가 알아보는 단서로만 쓰고, 그 행동·대사를 대신 쓰지 않는다."]].map(row=>Object.freeze(row)));
+  const WISH_CONTEXT_GROUPS = Object.freeze([["extra","진행 규칙 · 기타(OOC)","사용자가 직접 적은 진행·문체·출력 관련 지시와 메모다."],["character","캐릭터 설정","사용자가 직접 적은 인물 설정이다. 이후 RP에서 확정된 변화가 아직 반영되지 않았을 수 있다."],["lore","자료집","세계관·장소·조직·물건·복장·대사 등을 모은 참고 자료다. 카드에 따라 현재값과 과거 정보, 확정 설정과 소문·주장, 실제 발언과 예시가 함께 있을 수 있다. 과거 대사는 회상하거나 되받을 때 쓰는 자료이며 그대로 되풀이하지 않는다."],["misc","기타 참고","다른 분류에 속하지 않는 참고 자료다."],["log","날짜로그","지난 RP 사건의 날짜별 기록이며, 전체가 아닌 선별된 일부일 수 있다."],["relationship","관계·감정선","인물 사이의 관계·감정·태도를 방향별로 기록한 것으로, '현재'는 최근 저장 시점의 값이고 '핵심 전환'은 지난 경위다. A → B는 A가 B를 보는 관계·감정·태도이며, 반대 방향이나 상대의 인지 여부와는 별개다."],["cognition","인지 경계","인물별로 알고 있는 정보·아직 모르는 정보·인지 여부가 확인되지 않은 정보를 정리한 것이다."],["speech","현재 호칭·말투 · 화자 → 상대","최근 저장 시점에 유효한 호칭과 말투다. 예로 적힌 말버릇은 말투를 보여 주는 것이며 매 답장 되풀이하지 않는다."],["threads","남은 일","약속의 A→B는 A가 B에게 한 약속이다. 제목과 인물 뒤의 내용은 기한과 최근 저장 시점까지의 진행이다. 사용자 캐릭터의 약속·목표는 그 이행을 대신 쓰지 않는다."],["currentState","현재상태","최근 저장 시점까지 이어지고 있는 상황·약속·제약이다. 습관·모티프는 자연스러운 계기에만 쓰고 매 답장 되풀이하지 않는다. 사용자 캐릭터의 습관은 상대가 알아보는 단서로만 쓰고, 그 행동·대사를 대신 쓰지 않는다."]].map(row=>Object.freeze(row)));
   const WISH_CONTEXT_GROUP_MAP = new Map(WISH_CONTEXT_GROUPS.map(row=>[row[0],row]));
   const WISH_CONTEXT_FIELDS = Object.freeze(['slotId','sourceSlotId','sourceKey','title','group','content','logIndex','autoType','packId','entryId','compressionLevel']);
   const WISH_RELATIONSHIP_LEGACY_HEAD = "[방향별 관계 기억 · 타인에게 자동 공유되는 지식 아님 · 과거 전환은 현재 감정 아님 · 매 장면 같은 반응을 강제하지 않음 · 이후 직접 RP의 명시적 변화 우선]\n";
@@ -9262,7 +9305,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     const content=safeForHtmlComment(raw);
     // Stored section headings "## n." go one level below the group heading "## 현재상태".
     if(kind==='currentState')return content.replace(/^([ \t]*)##(?=[ \t]*\d+[ \t]*[.)．])/gm,'$1###');
-    if(['speech','cognition'].includes(kind))return content;
+    if(['speech','cognition','threads'].includes(kind))return content;
     if(kind==='log'&&(item.autoType==='whole-log'||/^\[[^\]\n]+\](?:\n|$)/.test(content)))return content;
     let heading=String(item.title||item.slotId||'메모').trim();
     if(kind==='lore')heading=heading.replace(/^자료집 · /,'');
@@ -9496,6 +9539,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     if (item.slotId === '__cognition' || item.group === 'cognition') return '인지';
     if (item.group === 'relationship') return '관계·감정선';
     if (item.slotId === '__speech' || item.group === 'speech') return '호칭·말투';
+    if (item.slotId === '__threads' || item.group === 'threads') return '남은 일';
     if (item.slotId === 'currentState') return '현재상태';
     if (item.autoType === 'pinned-log') return '고정로그';
     if (item.autoType === 'manual-log') return '직접로그';
@@ -10873,6 +10917,21 @@ ${AI_JSON_TEXT_RULE}
     return 0;
   }
 
+  // 남은 일 short list as one always-included item. Its identity never depends on the text, so a session exclusion keeps
+  // applying after edits; a switched-off area still gets the item and the area filter removes it (same as 인지).
+  function threadsPendingItem(room,cap){
+    const view=WishThreads.injection(room,{cap});if(!view.text)return null;
+    return {slotId:'__threads',sourceSlotId:'__threads',sourceKey:'open-threads',title:'남은 일',group:'threads',content:view.text,
+      totalTurns:0,usedTurns:0,autoType:'threads',recallReason:'열린 남은 일 · 매턴',reason:cap?'자리 부족 · '+cap.toLocaleString()+'자로 줄임 · '+view.summary:view.summary};
+  }
+  function replaceThreadsPendingItem(room){
+    if(!room?.pending)return 0;
+    const items=(Array.isArray(room.pending.items)?room.pending.items:[]).filter(i=>injectionCadenceKind(i)!=='threads'),item=threadsPendingItem(room);
+    if(item){item.turnStartUserId=String(room.pending.latestUserId||room.pending.turnStartUserId||'');
+      const at=items.findIndex(i=>injectionCadenceKind(i)==='speech');items.splice(at>=0?at+1:0,0,item);}
+    room.pending.items=items;return item?1:0;
+  }
+
   async function syncSpeechMutation(room, reason='speech-relation-change') {
     if(!room?.pending)return '';
     try{replaceSpeechPendingItem(room);await syncPendingCarrier(room,reason);return '';}
@@ -11226,7 +11285,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
   }
 
   function assertRequiredRecallBudget(room,items,original){
-    const required=(items||[]).filter(allFitRequired),limit=allFitLimit(room);
+    const required=(items||[]).filter(i=>allFitRequired(i)&&injectionCadenceKind(i)!=='threads'),limit=allFitLimit(room);
     const total=buildInjectedMessage(original,buildContextBlockFromItems(required,room)).length;
     if(total>limit)throw Error('현재상태·인지·호칭·켜진 캐릭터/OOC·고정 자료와 AI 원문만으로 '+limit.toLocaleString()+'자를 넘습니다. 고정 항목 또는 이번 세션 포함 선택을 줄여 주세요. 원문과 저장 기억은 삭제하지 않았습니다.');
     const anchors=required.filter(item=>item.autoType==='pinned-lore');
@@ -12886,6 +12945,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     control?.assertActive?.();
     p.baselineAssistantId=latestId;p.latestUserId=frame.latestUserId;
     replaceSpeechPendingItem(room);
+    replaceThreadsPendingItem(room);
     ensureDirectReleasePendingItems(room,p);
     let allFitCarrierRead=null;
     if(reason==='start'||reason==='before-send'||reason==='before-reroll'||carrierChanged||p.recallNeedsRefresh){
@@ -12977,6 +13037,9 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     }
     const verification=raw===injected?{verified:true,serverChars:raw.length}:patchVerification;
     if(!verification.verified)throw new Error('이전 AI 주입을 서버에서 확인하지 못했습니다. 복구 정보는 보존했습니다.');
+    // A 남은 일 list shortened to fit is what the carrier holds: keep that copy so the panel reads the sent text.
+    const sentThreads=active.find(i=>injectionCadenceKind(i)==='threads');
+    if(sentThreads)next.items=next.items.map(i=>injectionCadenceKind(i)==='threads'&&i.content!==sentThreads.content?{...i,content:sentThreads.content,reason:sentThreads.reason}:i);
     next.verified=true;next.verifiedAt=Date.now();next.serverChars=verification.serverChars;delete next.lastSyncError;delete next.lastSyncErrorCode;delete next.lastSyncErrorAt;room.pending=next;
     // 새 carrier가 이미 검증됐으므로 이후 이전 carrier 정리가 실패해도 매턴 주입은 유지됩니다.
     const cleanupCarrier=previousCarrier||next.previousCarrierCleanup,cleanupIds=Array.isArray(next.cleanupCarrierMessageIds)?next.cleanupCarrierMessageIds:[];
@@ -15793,8 +15856,8 @@ function createWishUI(AD) {
   let UID = 0; const uid = p => 'w' + p + (++UID);
 
   /* ───────── 2. 분류 색 · 라벨 (V.labels로 덮어쓸 수 있음) ───────── */
-  const COL = { relationship:'#c58eab', state: '#7f9fd8', speech: '#6fb0c2', cog: '#7ab7a4', char: '#d394b1', extra: '#b992c0', lore: '#929ad0', log: '#d5a86a', misc: '#a99caa', guide: '#9aa3b4', format:'#697488', orig: '#7e8796' };
-  const KLABEL = { state: '현재상태', relationship:'관계·감정선', speech: '호칭·말투', cog: '인지', char: '캐릭터', extra: '기타·OOC', lore: '자료집', log: '날짜로그', misc: '기타 기억', guide: '공통 안내', format:'제목·구분 서식', orig: '기존 AI 답변' };
+  const COL = { relationship:'#c58eab', state: '#7f9fd8', threads:'#d8897a', speech: '#6fb0c2', cog: '#7ab7a4', char: '#d394b1', extra: '#b992c0', lore: '#929ad0', log: '#d5a86a', misc: '#a99caa', guide: '#9aa3b4', format:'#697488', orig: '#7e8796' };
+  const KLABEL = { state: '현재상태', threads:'남은 일', relationship:'관계·감정선', speech: '호칭·말투', cog: '인지', char: '캐릭터', extra: '기타·OOC', lore: '자료집', log: '날짜로그', misc: '기타 기억', guide: '공통 안내', format:'제목·구분 서식', orig: '기존 AI 답변' };
   const L = { reg: { honorific: '존댓말', banmal: '반말', mixed: '상황별 혼용', other: '기타' },
     lore: { world: '세계관', item: '아이템', outfit: '복장', key_quote: '핵심 대사', ability: '능력', speech: '호칭·말투', place: '장소', organization: '조직', faction: '세력', rule: '규칙', character: '인물', event: '사건', other: '기타' },
     fact: { identity: '정체', plan: '계획', event: '사건', relationship: '관계', location: '장소', object: '물건', secret: '비밀', other: '기타' },
@@ -15823,7 +15886,7 @@ function createWishUI(AD) {
     lore: { enabled: false, sem: false, max: 4, dens: 'balanced', lastSel: null, auto: { enabled: false, interval: 5, read: 8, pending: 0, last: '' }, packs: [] },
 
     ai: { providerLabel: '', model: '', manual: false, ready: true, job: null },
-    pol: { state: true, log: true, lore: true, char: true, extra: true, cog: 'smart' },
+    pol: { state: true, threads: true, log: true, lore: true, char: true, extra: true, cog: 'smart' },
     autoChar: false,
     quickCog: []
   };
@@ -15916,7 +15979,7 @@ function createWishUI(AD) {
   const SP = '<span class="m3-sp"></span>';
 
   /* ───────── 6. 화면: 확인 ───────── */
-  const GKEYS = ['state', 'relationship', 'speech', 'cog', 'char', 'extra', 'lore', 'log', 'misc', 'guide', 'format', 'orig'];
+  const GKEYS = ['state', 'threads', 'relationship', 'speech', 'cog', 'char', 'extra', 'lore', 'log', 'misc', 'guide', 'format', 'orig'];
   function capMeter() {
   const g=V.inj.groups,max=Math.max(V.inj.max||40000,V.inj.total||0,1);
   let used=0;const marks=[],stops=[],areas=[];
@@ -16264,7 +16327,7 @@ vExternalRebuild(run||ExternalBundles.busy())+
   function vSettings(){const u=V.unified||{},q=V.recall||{},apiOnly=h=>V.ai.manual?h.replace('<input ','<input disabled '):h,manualOff='외부 AI 복붙 모드에서는 쓰지 않음 · API 연결로 돌아가면 저장된 설정대로 적용';
     const mode=q.semantic?(q.selector?'both':'semantic'):(q.selector?'priority':'local');
     const autoHelp=helpSections([['모든 방 공통',('바꾸는 즉시 ')+'기억·인물 묶음의 켜짐과 주기가 기존 방과 새 방에 함께 적용됩니다. 인물 주기는 최소 2턴이며 기억 주기는 항상 두 배입니다. 기본값은 인물 5턴·기억 10턴입니다. 확인 화면의 일시정지·시작, 정리한 위치와 기억 내용은 방마다 유지합니다.'],['턴 계산','1턴은 USER 메시지와 AI 답변 한 쌍입니다. 리롤은 같은 턴이며 최신 1턴은 다음 답변 뒤 확정됩니다.'],['함께 처리','두 묶음의 주기가 겹치면 같은 AI 요청으로 처리합니다. 주입 후보 선별은 별도로 설정합니다.']]);
-    const recallHelp=helpSections([['기본 회수','최근 날짜와 키워드·에리 의미검색으로 찾은 관련 날짜/자료만 먼저 고릅니다. 전체 저장 기억은 삭제되지 않습니다.'],['보조 AI 재검토','AI 선별이 중간에 실패하면 이미 받은 앞부분 점수로 상위 후보의 순서만 조정합니다. 예산 경계가 그 구간 안에 있을 때만 결과가 달라지며, 항상 더 낫다고 보장하지 않습니다. 비용은 줄지 않습니다. 후보가 40,000자를 넘으면 USER 전송 직전에 AI 선별을 최대 60초 기다립니다.'],['보호할 기억','현재상태·인지·호칭·켜진 캐릭터/OOC·고정 자료를 보호하고 일반 사건·자료는 카드 단위로 고릅니다.'],['안전선','40,000자 안전선과 서버 500 시 36,000자 1회 축소 규칙은 그대로 유지합니다.']]);
+    const recallHelp=helpSections([['기본 회수','최근 날짜와 키워드·에리 의미검색으로 찾은 관련 날짜/자료만 먼저 고릅니다. 전체 저장 기억은 삭제되지 않습니다.'],['보조 AI 재검토','AI 선별이 중간에 실패하면 이미 받은 앞부분 점수로 상위 후보의 순서만 조정합니다. 예산 경계가 그 구간 안에 있을 때만 결과가 달라지며, 항상 더 낫다고 보장하지 않습니다. 비용은 줄지 않습니다. 후보가 40,000자를 넘으면 USER 전송 직전에 AI 선별을 최대 60초 기다립니다.'],['보호할 기억','현재상태·남은 일·인지·호칭·켜진 캐릭터/OOC·고정 자료를 보호하고 일반 사건·자료는 카드 단위로 고릅니다.'],['안전선','40,000자 안전선과 서버 500 시 36,000자 1회 축소 규칙은 그대로 유지합니다.']]);
     const advanced=`<section class="m3-panel" data-key="error-log-settings"><div class="m3-panel-head"><b class="m3-title-help">실패·주의 기록</b>${btn('실패 기록 보기','errorLogs',{cls:'mini',icon:'doc'})}</div><p class="m3-muted">최근 작업 오류와 주의 사항을 확인합니다. API 키는 숨깁니다. 항목명이나 서버 오류 문구가 포함될 수 있으니 공유 전 확인해 주세요.</p></section><section class="m3-panel" data-key="automation-baseline"><div class="m3-panel-head"><b class="m3-title-help">자동 시작점 ${help('아직 정리하지 않은 과거 대화를 건너뛰고 이후 새 대화부터 셉니다. 저장된 기억·인지·자료는 유지합니다. 과거 내용을 다시 읽으려면 전체 재구축을 사용하세요.')}</b>${btn('지금으로 맞추기','memoryBase',{cls:'mini',icon:'clock'})}</div><p class="m3-muted">이 방의 미처리 대화를 건너뛰고 지금부터 새 대화를 셉니다. 저장된 기억·인지·자료는 유지합니다.</p></section>`;
     return pageHead('설정')+
       `<section class="m3-panel" data-key="ai-settings"><div class="m3-panel-head"><b class="m3-title-help">보조 AI 연결 ${help('기억·인물 정리, 날짜로그, 선택된 주입 후보 재검토에 같은 연결을 사용합니다. 에리 임베딩 의미검색은 Gemini API Key가 준비된 경우 사용합니다.')}</b>${btn('연결 · 모델','api',{cls:'mini'})}</div><p class="m3-muted">${esc([V.ai.providerLabel,V.ai.model].filter(Boolean).join(' · '))}</p></section>`+
@@ -18081,7 +18144,7 @@ function WUIInjectionView(room, candidates) {
  const projection=SecondaryRebuild.projector(room);
  const pending=room.pending, active=safeMemoryItems(room,candidates).map(projection.item).filter(i=>String(i.content||'').trim());
  const groups={}, keys=new Set(active.map(pendingItemIdentity));
- const kindOf=i=>({currentState:'state',cognition:'cog',speech:'speech',relationship:'relationship',log:'log',lore:'lore',character:'char',extra:'extra'})[injectionCadenceKind(i)] || (i.sourceSlotId==='currentState'?'state':i.slotId==='__lore'?'lore':'misc');
+ const kindOf=i=>({currentState:'state',threads:'threads',cognition:'cog',speech:'speech',relationship:'relationship',log:'log',lore:'lore',character:'char',extra:'extra'})[injectionCadenceKind(i)] || (i.sourceSlotId==='currentState'?'state':i.slotId==='__lore'?'lore':'misc');
  const row=(i,n,off=false,isActive=true)=>({key:pendingItemIdentity(i)||String(n),rowKey:String(n),kind:kindOf(i),sourceKey:i.sourceKey||'',title:i.title||itemCategory(i),why:i.reason||remainingLabelForItem(i),size:safeForHtmlComment(String(i.content||'').trim()).length,content:i.content||'',off,offReason:off?injectionExclusionReason(room,i,isActive):''});
  // Count every emitted occurrence; the quick-edit map intentionally deduplicates identities.
  const plan=active.map((i,n)=>row(i,n));
@@ -18140,7 +18203,7 @@ function model(r){
  logs:logView.rows,
  speechOn:r.speechConfig?.enabled!==false,speech:resolvedSpeechRelations(r).map(x=>({...x,reg:x.register,src:x.sourcePackId?'lore':'room',pack:x.sourcePackName||'',note:x.note||''})),chars:chars('character'),extras:chars('extra'),
  memory:{enabled:m.enabled,...WUITurnCount(r),running:!!automaticMemoryJob,dirty:Number(m.dirtyScore||0),mode:sched.effectiveMode==='fixed'?'fixed':'adaptive',min:sched.minimum,max:sched.maximum,fixed:sched.fixed,target:sched.target,last:dateLabel(m.lastRunAt),status:m.lastError||m.lastStatus||''},
- cog:{auto:cfg.auto!==false,every:cs.autoEvery||1,budget:cfg.budget||1000,scope:cfg.initialScope||'recent',initial:cfg.initialTurns||12,extra:cfg.promptExtra||''},pol:{state:Number(p.currentStateEvery)>0&&!!slot('currentState')?.enabled,cog:Number(p.cognitionEvery)>0?'all':'off',log:Number(p.logEvery)>0&&!!slot('logSummary')?.enabled,lore:Number(p.loreEvery)>0&&lc.enabled!==false,char:Number(p.characterEvery)>0,extra:Number(p.extraEvery)>0},autoChar:r.autoCharacterDetection,
+ cog:{auto:cfg.auto!==false,every:cs.autoEvery||1,budget:cfg.budget||1000,scope:cfg.initialScope||'recent',initial:cfg.initialTurns||12,extra:cfg.promptExtra||''},pol:{state:Number(p.currentStateEvery)>0&&!!slot('currentState')?.enabled,cog:Number(p.cognitionEvery)>0?'all':'off',log:Number(p.logEvery)>0&&!!slot('logSummary')?.enabled,lore:Number(p.loreEvery)>0&&lc.enabled!==false,char:Number(p.characterEvery)>0,extra:Number(p.extraEvery)>0,threads:Number(p.threadsEvery??1)>0},autoChar:r.autoCharacterDetection,
  actors:(cg.actors||[]).filter(a=>!a.archived).map(a=>({...a,aliases:a.aliases||[],pc:a.isPlayer,present:(cg.state?.present||[]).includes(a.id)})),
  facts:WUIReadFactRows(cg,r.pending),
  reviews:(cg.reviews||[]).slice().reverse().map(rv=>({id:rv.id,kind:v2ReviewLabel(rv),desc:v2ReviewDescription(rv,cg),quote:v2EvidenceQuote(rv),accept:v2ReviewNeedsInspect(rv,cg)?'':'이대로 반영',original:rv})),
@@ -18409,6 +18472,16 @@ for(const [path,kind,slotId] of [['state.inject','currentState','currentState'],
  if(value)clearQuickExclusions(room,i=>injectionCadenceKind(i)===kind);
  const draft=WUICache.settings.get(String(apiChatIdOf(room)));for(const key of [path,'pol.'+(kind==='currentState'?'state':kind),kind==='currentState'?'state.inject':kind==='log'?'logs.inject':'lore.enabled'])if(draft)delete draft[key];
  if(room.pending)try{await syncPendingCarrier(room,'injection-policy-change');}catch(e){notify('설정은 저장됨 · 주입 재적용 대기: '+e.message,'warn',6000,{error:e});}
+};
+// 남은 일 area switch has its own bind: the shared loop above turns 자료집 on/off for areas without a slot, and a failed save
+// must not leave a threadsEvery key in a room that never had one.
+WUI_ADAPTER.bind['pol.threads']=async value=>{
+ const room=state.currentRoom,had=room.injectionPolicy.threadsEvery!==undefined,before=room.injectionPolicy.threadsEvery;
+ room.injectionPolicy.threadsEvery=value?1:0;
+ try{await saveRoom(room);}catch(e){if(had)room.injectionPolicy.threadsEvery=before;else delete room.injectionPolicy.threadsEvery;throw e;}
+ if(value)clearQuickExclusions(room,i=>injectionCadenceKind(i)==='threads');
+ const draft=WUISettingsDraft();delete draft['pol.threads'];
+ if(room.pending)try{await syncPendingCarrier(room,'category-injection-change');}catch(e){notify('설정은 저장됨 · 주입 재적용 대기: '+e.message,'warn',4000,{error:e});}
 };
 for(const path of ['chars.autoDetect','autoChar'])WUI_ADAPTER.bind[path]=async v=>{state.currentRoom.autoCharacterDetection=!!v;await saveRoom(state.currentRoom);};
 WUI_ADAPTER.bind['quick.item']=(v,key)=>{if(!state.currentRoom?.pending){notify('주입을 먼저 시작해 주세요.','warn');return;}queueQuickItemToggle(key,v);};WUI_ADAPTER.bind['quick.cog']=(v,id)=>queueQuickCognitionToggle(id,v);
