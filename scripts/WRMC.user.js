@@ -2979,9 +2979,12 @@ const ExternalReplay=(()=>{
       room.aiAppliedContent={currentState:aiHashTiny(cs?.content||''),logSummary:aiHashTiny(log?.content||'')};
       for(const [id,text] of manual){room.slots.find(s=>s.id===id).content=text;delete room.aiSourceManifests[id];delete room.aiUpdateCursors[id];delete room.aiAppliedContent[id];}
       // 남은 일: AI rows return to the checkpoint; manual rows stay as they are now. A checkpoint without the key predates the
-      // feature, so it had no AI rows. A row edited into manual after the checkpoint replaces its own earlier AI row.
-      const keepThreads=WishThreads.normalizeLoose(room.threads).filter(t=>t.origin==='manual'),keepIds=new Set(keepThreads.map(t=>t.id)),keepKeys=new Set(keepThreads.map(WishThreads.key));
-      WishThreads.assign(room,WishThreads.normalizeLoose([...WishThreads.normalizeLoose(checkpoint.threads).filter(t=>t.origin!=='manual'&&!keepIds.has(t.id)&&!keepKeys.has(WishThreads.key(t))),...keepThreads]));
+      // feature, so it had no AI rows. A row edited into manual after the checkpoint replaces its own earlier AI row. A close
+      // suggestion made in the dropped turns goes, and the 매 턴 switch is the user's choice, so an AI row keeps the current one.
+      const restoredTurn=WishThreads.userCount([checkpoint.sourceManifests?.logSummary,checkpoint.sourceManifests?.currentState].find(Array.isArray)||[]),nowThreads=WishThreads.normalizeLoose(room.threads);
+      const keepThreads=nowThreads.filter(t=>t.origin==='manual').map(t=>{if(!(t.suggestClose?.turn>restoredTurn))return t;const v={...t};delete v.suggestClose;return v;});
+      const keepIds=new Set(keepThreads.map(t=>t.id)),keepKeys=new Set(keepThreads.map(WishThreads.key)),switches=new Map(nowThreads.filter(t=>t.origin!=='manual').map(t=>[t.id,t.enabled]));
+      WishThreads.assign(room,WishThreads.normalizeLoose([...WishThreads.normalizeLoose(checkpoint.threads).filter(t=>t.origin!=='manual'&&!keepIds.has(t.id)&&!keepKeys.has(WishThreads.key(t))).map(t=>switches.has(t.id)?{...t,enabled:switches.get(t.id)}:t),...keepThreads]));
       room.autoMemory.lastProcessedMessageId=String(room.aiUpdateCursors.logSummary?.messageId||'');room.autoMemory.committedTurns=0;room.autoMemory.dirtyScore=0;
       room.memoryBranchBlocked=false;room.autoMemory.lastError='대화 분기 변경으로 이전 확정 기억을 복원했습니다.';
       WLOG.fail('기억 분기 확인',Error(room.autoMemory.lastError),{level:'warn',stage:reason});
@@ -3640,6 +3643,9 @@ function open(id){const room=state.currentRoom,old=normalize(room.relationships)
     const CLOSE_ALIAS={지킴:'done',이행:'done',이룸:'done',달성:'done',풀림:'done',해결:'done',회수:'done',완료:'done',kept:'done',fulfilled:'done',resolved:'done',깨짐:'broken',실패:'broken',어김:'broken',파기:'broken',현실화:'broken',failed:'broken',취소:'cancelled',철회:'cancelled',무산:'cancelled',무효:'cancelled',withdrawn:'cancelled',canceled:'cancelled'};
     const STATUS_ALIAS={열림:'open',진행중:'open',미해결:'open',ongoing:'open',active:'open',닫힘:'closed',끝남:'closed',완료:'closed',해결:'closed',done:'closed',resolved:'closed'};
     const DONE_WORD={promise:'지킴',schedule:'치름',goal:'이룸',mystery:'풀림',danger:'지나감',foreshadow:'회수',other:'끝남'};
+    // broken is a promise broken, a goal failed or a danger come true; the other kinds end done or cancelled.
+    const BREAKS=new Set(['promise','goal','danger']),closeTypes=kind=>CLOSE_TYPES.filter(t=>t!=='broken'||BREAKS.has(kind));
+    const MISSING='AI 답에 남은 일(memory.threads)이 없어 남은 일은 바꾸지 않았습니다.';
     const RULES=`남은 일은 이야기 안에서 누군가 하기로 했거나, 답이 나와야 하거나, 결과가 아직 드러나지 않아 결말을 기다리는 일이다. "이 일은 언젠가 끝나는가?"로 가른다. 끝나는 때가 있으면 남은 일이고, 끝없이 이어지는 약속·습관은 현재상태다. 부상·임신·신분·거처처럼 지금 이어지는 상태는 언젠가 바뀌더라도 현재상태가 맡는다. 지나간 장면의 경위는 날짜별 사건, 관계에 남은 쟁점은 관계·감정선, 누가 무엇을 아는지는 인지가 맡는다.
 
 [종류]
@@ -3721,16 +3727,21 @@ function open(id){const room=state.currentRoom,old=normalize(room.relationships)
     // A room that never had threads gets no key for an empty result, so stamps taken before this feature still match.
     function assign(room,rows){if(rows.length||room.threads!==undefined)room.threads=rows;return room;}
     // Rebuilds: an AI row that matches an earlier AI row (same kind and title) keeps its id, on/off switch and opening turn;
-    // the change turn stays too when the content did not change. Manual rows pass through as they are.
+    // the change turn stays too when the content did not change. A row pairs with an earlier row of the same status first (a
+    // kept promise and the same promise made again are two rows), and only then with one of the other status. Manual rows pass
+    // through as they are.
     function carry(previous,next){
       const pool=new Map(),content=t=>JSON.stringify([t.detail,t.who,t.due,t.status,t.closed?.type||'',t.closed?.how||'']);
       for(const t of normalizeLoose(previous))if(t.origin!=='manual'){const k=key(t);if(!pool.has(k))pool.set(k,[]);pool.get(k).push(t);}
-      const rows=normalizeLoose(next).map(t=>{
-        if(t.origin==='manual')return t;
-        const old=pool.get(key(t))?.shift();if(!old)return t;
-        return {...t,id:old.id,enabled:old.enabled,opened:{...t.opened,messageId:t.opened.messageId||old.opened.messageId,turn:old.opened.turn>0?old.opened.turn:t.opened.turn},updatedTurn:content(t)===content(old)?old.updatedTurn:t.updatedTurn};
+      const rows=normalizeLoose(next),match=rows.map(()=>null);
+      for(const same of [true,false])rows.forEach((t,i)=>{
+        const olds=t.origin==='manual'||match[i]?null:pool.get(key(t));if(!olds?.length)return;
+        const at=same?olds.findIndex(o=>o.status===t.status):0;if(at>=0)match[i]=olds.splice(at,1)[0];
       });
-      return normalizeLoose(prune(rows));
+      return normalizeLoose(prune(rows.map((t,i)=>{
+        const old=match[i];if(!old)return t;
+        return {...t,id:old.id,enabled:old.enabled,opened:{...t.opened,messageId:t.opened.messageId||old.opened.messageId,turn:old.opened.turn>0?old.opened.turn:t.opened.turn},updatedTurn:content(t)===content(old)?old.updatedTurn:t.updatedTurn};
+      })));
     }
     // Answer shapes. The live delta goes to provider schemas (R31 sends it to Gemini), so it has no empty-string enum; the TXT
     // row's empty close type stays in the TXT schema only.
@@ -3868,25 +3879,43 @@ function open(id){const room=state.currentRoom,old=normalize(room.relationships)
     // earlier AI row keeps its id, switch and opening turn (carry). `turn` is the clock at import, so the per-turn list counts
     // "about 300 turns unchanged" from now.
     function fromSnapshot(rows,{previous,turn=0}={}){
-      const kept=(keepForRebuild(previous)||[]).map(t=>({...t})),mine=new Map(kept.map(t=>[key(t),t])),seen=new Set(),out=[],notices=[],now=turnOf(turn);
-      let open=kept.filter(t=>t.status!=='closed').length;
+      const kept=(keepForRebuild(previous)||[]).map(t=>({...t})),mine=new Map(),seen=new Set(),out=[],notices=[],now=turnOf(turn);
+      for(const t of kept){const k=key(t);if(!mine.has(k)||mine.get(k).status==='closed')mine.set(k,t);} // an open user row takes the suggestion
+      let open=kept.filter(t=>t.status!=='closed').length,untitled=0;
       for(const row of Array.isArray(rows)?rows:[]){
-        const title=isObj(row)?text(row.title):'';if(!title)continue;
+        const title=isObj(row)?text(row.title):'';if(!title){untitled++;continue;}
         const kind=KINDS.includes(row.kind)?row.kind:'other',k=key({kind,title});
-        if(seen.has(k)){notices.push('같은 kind·제목의 남은 일이 두 번 있어 앞의 것만 가져왔습니다: '+title);continue;}
-        seen.add(k);
         const end=isObj(row.closed)?row.closed:{},ending={type:text(end.type),how:text(end.how),date:dateOf(end.date),evidence:text(end.evidence)};
-        const complete=CLOSE_TYPES.includes(ending.type)&&!!ending.how&&!!ending.evidence,own=mine.get(k);
-        let closed=text(row.status)==='closed';
-        if(own){if(closed&&complete&&own.status!=='closed'){own.suggestClose={...ending,turn:now};notices.push('직접 관리하는 남은 일이라 닫지 않고 닫기 제안으로 남겼습니다: '+own.title);}continue;}
-        if(closed&&!complete){closed=false;notices.push('닫힌 내용·근거가 비어 있어 열린 남은 일로 가져왔습니다: '+title);}
+        const complete=CLOSE_TYPES.includes(ending.type)&&!!ending.how&&!!ending.evidence,asked=text(row.status)==='closed',closed=asked&&complete;
+        // A closed and an open row of the same item are its history (kept, then made again), as the live list allows; only a
+        // second row with the same status repeats one.
+        const sk=k+'|'+(closed?'closed':'open');
+        if(seen.has(sk)){notices.push('같은 kind·제목의 남은 일이 두 번 있어 앞의 것만 가져왔습니다: '+title);continue;}
+        seen.add(sk);
+        const own=mine.get(k);
+        if(own){if(closed&&own.status!=='closed'){own.suggestClose={...ending,turn:now};notices.push('직접 관리하는 남은 일이라 닫지 않고 닫기 제안으로 남겼습니다: '+own.title);}continue;}
+        if(asked&&!complete)notices.push('닫힌 내용·근거가 비어 있어 열린 남은 일로 가져왔습니다: '+title);
         if(!closed&&open>=OPEN_MAX){notices.push('열린 남은 일이 '+OPEN_MAX+'개라 새 남은 일을 열지 않았습니다: '+title);continue;}
         if(!closed)open++;
         const opened=isObj(row.opened)?row.opened:{};
         out.push({id:'th_'+crypto.randomUUID(),kind,title,detail:text(row.detail),who:namesOf(row.who),due:text(row.due),status:closed?'closed':'open',origin:'auto',enabled:true,
           opened:{date:dateOf(opened.date),evidence:text(opened.evidence),messageId:'',turn:0},closed:closed?{...ending,messageId:'',turn:0}:null,updatedTurn:now});
       }
+      if(untitled)notices.push('제목이 빈 남은 일 '+untitled+'개는 가져오지 않았습니다.');
       return {threads:carry(previous,[...out,...kept]),notices};
+    }
+    // Rebuild jobs (R31, the memory bundle) at apply: the rows the segments built, carried over the stored list. A job read
+    // before its seed kept only the user's rows, and one whose answers never had memory.threads, did not handle 남은 일: the
+    // stored list stays, and one line for the whole job replaces the per-answer notice about the missing list. As in a TXT
+    // import, a user's row stands for its item: an AI row the segments made with the same kind and title (the user closed it,
+    // the log never ends it) is not stored beside it.
+    function settleRebuild(job,stored,notices=[]){
+      const omitted=Number(job?.draft?.threadsOmitted)||0,rest=notices.filter(n=>n!==MISSING);
+      if(!job?.threadsSeeded)return {keep:true,notices:normalizeLoose(stored).length?[...notices,'이 재구축은 업데이트 전에 읽은 대화라 남은 일은 바꾸지 않았습니다. 대화를 다시 읽으면 남은 일도 함께 정리합니다.']:notices};
+      if(omitted&&omitted>=(job.segments?.length||0))return {keep:true,notices:[...rest,'재구축 답에 남은 일이 없어 지금 남은 일은 그대로 두었습니다.']};
+      const built=normalizeLoose(job.draft?.room?.threads),mine=new Set(built.filter(t=>t.origin==='manual').map(key)),own=t=>t.origin!=='manual'&&mine.has(key(t));
+      const absorbed=built.filter(t=>own(t)&&t.status!=='closed').map(t=>'직접 관리하는 남은 일과 같은 일이라 재구축 결과에 따로 넣지 않았습니다: '+t.title);
+      return {keep:false,threads:carry(stored,built.filter(t=>!own(t))),notices:[...(omitted?rest:notices),...absorbed,...(omitted?['일부 구간의 답에 남은 일이 없어 그 구간에서 열리거나 닫힌 남은 일은 반영하지 못했습니다.']:[])]};
     }
 
     // The per-turn short list: one line per open item that is switched on, kinds in KINDS order and stored order within a kind.
@@ -3894,13 +3923,16 @@ function open(id){const room=state.currentRoom,old=normalize(room.relationships)
     // longest untouched one-line items drop to their titles first, then the longest untouched items leave the list and one
     // count line says how many. The tab reads the same rows (default cap), so its badges and the injected list always agree.
     function injection(room,{cap=INJECT_CHARS}={}){
-      const now=clock(room),flat=v=>String(v??'').replace(/\s+/g,' ').trim(),cut=(v,n)=>v.length>n?v.slice(0,n-1).trimEnd()+'…':v;
-      const rows=normalizeLoose(room?.threads).filter(t=>t.status!=='closed'&&t.enabled!==false&&flat(t.title)).map((t,i)=>{
+      const now=clock(room),flat=v=>String(v??'').replace(/\s+/g,' ').trim();
+      // A cut never splits a surrogate pair: the carrier PATCH is accepted only when the server echoes the exact text.
+      const cut=(v,n)=>{if(v.length<=n)return v;let s=v.slice(0,n-1);if(/[\ud800-\udbff]$/.test(s))s=s.slice(0,-1);return s.trimEnd()+'…';};
+      const live=normalizeLoose(room?.threads).filter(t=>t.status!=='closed'&&flat(t.title)),off=live.filter(t=>t.enabled===false).length;
+      const rows=live.filter(t=>t.enabled!==false).map((t,i)=>{
         const head='- '+kindLabel(t.kind)+': '+cut(flat(t.title),TITLE_CHARS),touched=t.updatedTurn||t.opened.turn;
         let full=head;
         if(FULL_KINDS.has(t.kind)){
           const who=t.who.map(flat).filter(Boolean),people=t.kind==='promise'&&who.length>1?who[0]+'→'+who.slice(1).join('·'):who.join('·');
-          const detail=flat(t.detail),mark=detail.match(/^.*(?:지금|현재)[ ]?[:：]/),status=(mark&&detail.slice(mark[0].length).trim())||detail,due=flat(t.due);
+          const detail=flat(t.detail),mark=detail.match(/^.*지금[ ]?[:：]/)||detail.match(/^.*현재[ ]?[:：]/),status=(mark&&detail.slice(mark[0].length).trim())||detail,due=flat(t.due);
           full=head+(people?' ('+people+')':'')+(due?' · '+due:'')+(status?' · '+cut(status,STATUS_CHARS):'');
         }
         const mode=now>0&&touched>0&&now-touched>=STALE_TURNS?'stale':FULL_KINDS.has(t.kind)?'line':'title';
@@ -3916,8 +3948,8 @@ function open(id){const room=state.currentRoom,old=normalize(room.relationships)
       for(let r;size()>cap&&kept&&(r=oldest(x=>x.mode!=='out'));){total-=lineOf(r).length;r.mode='out';kept--;}
       const out=rows.length-kept,short=rows.filter(r=>r.mode==='stale'||r.mode==='budget').length;
       let text=[...rows.filter(r=>r.mode!=='out').map(lineOf),...(out?[more(out)]:[])].join('\n');
-      if(text.length>cap)text=cap>1?text.slice(0,cap-1).trimEnd()+'…':'';
-      return {text,rows:rows.map(r=>({id:r.id,mode:r.mode})),summary:['열림 '+rows.length+'개',short?'제목만 '+short+'개':'',out?'빠짐 '+out+'개':''].filter(Boolean).join(' · ')};
+      if(text.length>cap)text=cap>1?cut(text,cap):'';
+      return {text,rows:rows.map(r=>({id:r.id,mode:r.mode})),summary:['열림 '+(rows.length+off)+'개',off?'꺼짐 '+off+'개':'',short?'제목만 '+short+'개':'',out?'빠짐 '+out+'개':''].filter(Boolean).join(' · ')};
     }
 
     // Tab view: each row carries the per-turn mode from injection(), so the badges and the injected list never disagree.
@@ -3956,7 +3988,7 @@ function open(id){const room=state.currentRoom,old=normalize(room.relationships)
       const room=state.currentRoom;if(!room)return false;
       return mutate(room,(rows,now)=>{const i=rows.findIndex(t=>t.id===id);if(i<0)throw Error(GONE);const v=change(rows[i],now);if(v)rows[i]=v;else rows.splice(i,1);return rows;});
     }
-    const reopen=id=>edit(id,(t,now)=>({...t,status:'open',closed:null,updatedTurn:now}));
+    const reopen=id=>edit(id,(t,now)=>({...t,status:'open',origin:'manual',closed:null,updatedTurn:now}));
     const toggle=id=>edit(id,t=>({...t,enabled:t.enabled===false}));
     const dismiss=id=>edit(id,t=>{const v={...t};delete v.suggestClose;return v;});
     const remove=id=>edit(id,()=>null);
@@ -3968,14 +4000,17 @@ function open(id){const room=state.currentRoom,old=normalize(room.relationships)
     }
     function openClose(id,{fromSuggestion=false}={}){
       const t=live(id),s=fromSuggestion?t?.suggestClose:null;if(!t||t.status==='closed'||(fromSuggestion&&!s))throw Error(GONE);
-      return WUI.openSheet('eThreadClose',{ref:id,kind:t.kind,threadTitle:t.title,chatId:String(state.currentRoom?.chatId||''),record:structuredClone(t),suggestion:s?structuredClone(s):null,
+      // A draft editor like 편집: the record and suggestion are its baseline. `group` keeps the plain close and the close from a
+      // suggestion as separate drafts.
+      return WUI.openSheet('eThreadClose',{ref:id,kind:t.kind,group:s?'suggestion':'',threadTitle:t.title,chatId:String(state.currentRoom?.chatId||''),baseline:{record:structuredClone(t),suggestion:s?structuredClone(s):null},
         draft:{type:s?.type||'done',how:s?.how||'',date:s&&s.date.display!==UNKNOWN_DATE.display?s.date.display:''}});
     }
-    // Sheet save. A content change on an AI item makes it manual (the AI no longer rewrites or closes it); the 매 턴 switch,
-    // closing and reopening keep the origin. A user close keeps the suggestion's evidence and date when it came from one.
+    // Sheet save. A content change on an AI item makes it manual (the AI no longer rewrites or closes it), and so do closing and
+    // reopening it by hand: a rebuild keeps the user's ending instead of listing the item open again. The 매 턴 switch keeps the
+    // origin. A user close keeps the suggestion's evidence and date when it came from one.
     async function save(d,removing=false){
       const room=state.currentRoom;if(!room||d.chatId!==String(room.chatId||''))throw Error(CHANGED);
-      const x=d.draft||{},record=d.type==='eThreadClose'?d.record:d.baseline?.record;
+      const x=d.draft||{},record=d.baseline?.record;
       const title=text(x.title).replace(/\s+/g,' ');
       if(d.type==='eThread'&&!removing&&!title)throw Error('제목을 입력해 주세요.');
       return mutate(room,(rows,now)=>{
@@ -3983,8 +4018,8 @@ function open(id){const room=state.currentRoom,old=normalize(room.relationships)
         if((d.ref||removing||d.type==='eThreadClose')&&(i<0||JSON.stringify(rows[i])!==JSON.stringify(record)))throw Error(CHANGED);
         if(removing){rows.splice(i,1);return rows;}
         if(d.type==='eThreadClose'){
-          const s=d.suggestion,display=text(x.date),date=!display?{...UNKNOWN_DATE}:s&&s.date.display===display?{...s.date}:{kind:'custom',display};
-          const done={...rows[i],status:'closed',closed:{type:CLOSE_TYPES.includes(x.type)?x.type:'done',how:text(x.how),date,evidence:s?.evidence||'',messageId:'',turn:now},updatedTurn:now};
+          const s=d.baseline?.suggestion,display=text(x.date),date=!display?{...UNKNOWN_DATE}:s&&s.date.display===display?{...s.date}:{kind:'custom',display};
+          const done={...rows[i],status:'closed',origin:'manual',closed:{type:CLOSE_TYPES.includes(x.type)?x.type:'done',how:text(x.how),date,evidence:s?.evidence||'',messageId:'',turn:now},updatedTurn:now};
           delete done.suggestClose;rows[i]=done;return rows;
         }
         const value={kind:KINDS.includes(x.kind)?x.kind:'other',title,detail:text(x.detail),who:namesOf(String(x.who??'').replace(/→/g,',')),due:text(x.due)};
@@ -3994,8 +4029,8 @@ function open(id){const room=state.currentRoom,old=normalize(room.relationships)
       });
     }
     return {KINDS,KIND_LABEL,FULL_KINDS,CLOSE_TYPES,DATE_KINDS,UNKNOWN_DATE,KIND_ALIAS,CLOSE_ALIAS,STATUS_ALIAS,INJECT_CHARS,SHRINK_CAPS,STALE_TURNS,STATUS_CHARS,TITLE_CHARS,CLOSED_INDEX_MAX,OPEN_MAX,CLOSED_KEEP,RULES,DELTA_SCHEMA,TXT_ROW_SCHEMA,
-      list,kindLabel,closeWord,canon,key,userCount,clock,normalizeLoose,validateStored,prune,assign,carry,guide,requestInput,applyDelta,
-      keepForRebuild,keepStored,manualReference,prepareSnapshotRows,isolateSnapshot,fromSnapshot,injection,
+      MISSING,list,kindLabel,closeWord,closeTypes,canon,key,userCount,clock,normalizeLoose,validateStored,prune,assign,carry,guide,requestInput,applyDelta,
+      keepForRebuild,keepStored,manualReference,prepareSnapshotRows,isolateSnapshot,fromSnapshot,settleRebuild,injection,
       view,mutate,open,openClose,save,reopen,toggle,dismiss,remove};
   })();
 
@@ -4927,9 +4962,10 @@ const deltaNotices=[];
     // 남은 일 (both modes; its changes are a delta even in a snapshot job): a left-out memory.threads, upsert or close list is "no
     // change", said once in the notes. Inside a row the AI wrote, due/how '' and who [] mean none, a close row's title is only
     // the anchor checked against its ref, and the date of a stored item's upsert row is not read (the stored opening date stays).
-    // Bodies, kinds, close types, refs and the date of a new item are never filled.
+    // That date and a close row's date read as unknown when left out, blank or incomplete (applyDelta stores any other kind as
+    // unknown too). Bodies, kinds, close types, refs and the date of a new item are never filled.
     const fallback=(rule,key,row,owner,props)=>{
-      if(key==='threads'&&owner==='memory'&&rule.type==='object'){notes.push('AI 답에 남은 일(memory.threads)이 없어 남은 일은 바꾸지 않았습니다.');return {upsert:[],close:[]};}
+      if(key==='threads'&&owner==='memory'&&rule.type==='object'){notes.push(WishThreads.MISSING);return {upsert:[],close:[]};}
       if(owner==='threads'&&(key==='upsert'||key==='close')&&rule.type==='array')return [];
       if(props?.title&&(Object.hasOwn(props,'due')||Object.hasOwn(props,'how'))){
         if(key==='due'||key==='how')return '';
@@ -4958,21 +4994,37 @@ const deltaNotices=[];
         if(typeof v==='string'&&v.trim()&&rule.properties?.kind&&rule.properties?.display){fixed++;return {kind:unknownDate(v)?'unknown':'custom',display:v.trim()};}
         if(!isObj(v))return v;
         const out={},props=rule.properties||{},required=rule.required||[],top=at===path;
-        for(const [k,x] of Object.entries(v)){
+        // A 남은 일 row (live upsert/close or TXT row): an echoed key never contradicts a ref there, since the row has no names
+        // or ids of its own; it is an extra key like any other.
+        const threadRow=!!props.title&&(Object.hasOwn(props,'due')||Object.hasOwn(props,'how'));
+        let src=v;
+        // memory.threads written beside memory instead of inside it: read as memory.threads when that is missing, else a notice.
+        if(top&&props.memory?.properties?.threads&&!Object.hasOwn(props,'threads')&&Object.hasOwn(v,'threads')){
+          const {threads,...rest}=v;src=rest;
+          if(isObj(rest.memory)&&rest.memory.threads===undefined){src={...rest,memory:{...rest.memory,threads}};fixed++;}
+          else notes.push('남은 일 답에서 양식에 없는 항목을 빼고 읽었습니다 · threads: 「'+text(threads)+'」');
+        }
+        for(const [k,x] of Object.entries(src)){
           if(rule.properties&&!Object.hasOwn(props,k)){
             if(k==='id'&&props.ref&&!Object.hasOwn(v,'ref')){out.ref=x;fixed++;continue;}
             // A 남은 일 close row that repeats its input or upsert row: close never reads these keys.
             if(props.ref&&props.how&&props.type&&!props.due&&['kind','detail','who','due','status'].includes(k)){fixed++;continue;}
             // wish_job is the job identity check: never dropped silently.
             // An echoed name or id that disagrees with its ref is a contradiction, not an echo: kept for the validator to refuse.
-            if(rule.additionalProperties===false&&Object.hasOwn(AI_ECHO_REFS,k)&&!blank(x)&&!echoSame(k,x,v)){out[k]=x;continue;}
+            if(rule.additionalProperties===false&&Object.hasOwn(AI_ECHO_REFS,k)&&!threadRow&&!blank(x)&&!echoSame(k,x,v)){out[k]=x;continue;}
             // Left-out text inside memory.threads is a notice, not a drop: a slip there never stops or questions the whole answer.
-            if(rule.additionalProperties===false&&k!=='wish_job'){if(blank(x)||AI_ECHO_KEYS.has(k)||k==='ref'&&!props.ref||Object.hasOwn(AI_ECHO_REFS,k)&&echoSame(k,x,v))fixed++;else if(at.startsWith(path+'.memory.threads'))notes.push('남은 일 답에서 양식에 없는 항목을 빼고 읽었습니다 · '+aiJsonSpot(at+'.'+k)+': 「'+text(x)+'」');else dropped.push(aiJsonSpot(at+'.'+k)+': 「'+text(x)+'」');continue;}
+            // memory.thread_closed_index is an input list: an echo of it holds no answer.
+            if(rule.additionalProperties===false&&k!=='wish_job'){if(blank(x)||AI_ECHO_KEYS.has(k)||k==='thread_closed_index'&&props.threads||k==='ref'&&!props.ref||Object.hasOwn(AI_ECHO_REFS,k)&&echoSame(k,x,v))fixed++;else if(at.startsWith(path+'.memory.threads'))notes.push('남은 일 답에서 양식에 없는 항목을 빼고 읽었습니다 · '+aiJsonSpot(at+'.'+k)+': 「'+text(x)+'」');else dropped.push(aiJsonSpot(at+'.'+k)+': 「'+text(x)+'」');continue;}
           }
           out[k]=x;
         }
         for(const k of new Set([...required,...Object.keys(out)])){
           const sub=props[k];if(!sub)continue;
+          if(threadRow&&k==='date'&&(key==='close'||key==='upsert'&&!String(canonicalNewRef(out.ref??'')).startsWith('NEW_THREAD_'))){
+            const d=out[k],shown=isObj(d)?String(d.display??'').trim():'';
+            if(d==null||typeof d==='string'&&!d.trim()||isObj(d)&&!shown){out[k]={...WishThreads.UNKNOWN_DATE};fixed++;}
+            else if(isObj(d)&&d.kind==null){out[k]={...d,kind:'custom',display:shown};fixed++;}
+          }
           // A bundle with none of its own keys ({} or only unknown ones) is a missing bundle, never one with every list filled in as empty.
           if(top&&(k==='memory'||k==='observe')&&isObj(out[k])&&!Object.keys(out[k]).some(x=>Object.hasOwn(sub.properties||{},x)))out[k]=null;
           // A top-level key the AI left out (a bundle, a rebuild area, the anchor) is never filled in; only its version is.
@@ -5982,7 +6034,7 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
     cg.snapshots={};cg.pending=[];cg.reviews=[];cg.events=[];cg.sourceManifest=[];cg.lastAnalysis='';cg.tip='';
     return {room,cog:cg,packs:ps.map(p=>p.autoManaged&&p.ownerChatId===r.chatId?{...clone(p),entries:p.entries.filter(e=>!e.autoManaged||e.userProtected||e.speechRule)}:clone(p))};
   }
-  function joinStage(previous,staged){const all=new Map(previous.packs.map(p=>[p.scopeId,p]));for(const p of staged.packs)all.set(p.scopeId,p);return {relationshipHeldAdds:WishHeld.uniq('A',[...(previous.relationshipHeldAdds||[]),...(staged.relationshipHeldAdds||[])]),cognitionHeldAdds:WishHeld.uniq('C',[...(previous.cognitionHeldAdds||[]),...(staged.cognitionHeldAdds||[])]),room:staged.room,cog:staged.cog||previous.cog,packs:[...all.values()],notices:[...new Set([...(previous.notices||[]),...(staged.notices||[])])],rejectedQuotes:[...(previous.rejectedQuotes||[]),...(staged.rejectedQuotes||[])],formatFixes:(previous.formatFixes||0)+(staged.formatFixes||0)};}
+  function joinStage(previous,staged){const all=new Map(previous.packs.map(p=>[p.scopeId,p]));for(const p of staged.packs)all.set(p.scopeId,p);return {relationshipHeldAdds:WishHeld.uniq('A',[...(previous.relationshipHeldAdds||[]),...(staged.relationshipHeldAdds||[])]),cognitionHeldAdds:WishHeld.uniq('C',[...(previous.cognitionHeldAdds||[]),...(staged.cognitionHeldAdds||[])]),room:staged.room,cog:staged.cog||previous.cog,packs:[...all.values()],notices:[...new Set([...(previous.notices||[]),...(staged.notices||[])])],rejectedQuotes:[...(previous.rejectedQuotes||[]),...(staged.rejectedQuotes||[])],formatFixes:(previous.formatFixes||0)+(staged.formatFixes||0),...((previous.threadsOmitted||0)+(staged.threadsOmitted||0)?{threadsOmitted:(previous.threadsOmitted||0)+(staged.threadsOmitted||0)}:{})};}
   async function guard(r,fn){if(busy()||generationPending(apiChatIdOf(r)))throw Error('진행 중인 작업이 끝난 뒤 실행해 주세요.');
     const epoch=localRestoreEpoch;control={cancelled:false};aiUpdateRunning=true;const abortCtl=AiAbort.begin();
     const check=()=>{if(control?.cancelled||epoch!==localRestoreEpoch||state.currentRoom!==r)throw Error('작업이 중단되었거나 방·복원 상태가 바뀌었습니다.');};
@@ -6034,6 +6086,7 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
         const data=normalizeApiResult(WLOG.parseJson(reply.text,'전체 재구축',reply.diagnostic),req);
 
         const staged=U3.stage(draft.room,draft.cog,draft.packs,p,req,data);
+        if(req.aiFix?.notes?.includes(WishThreads.MISSING))staged.threadsOmitted=1; // settled at apply (WishThreads.settleRebuild)
         return {staged,repairs:attempt};
       }catch(error){
         if(attempt){error.message='1회 보정 후에도 검증 실패 · '+error.message;throw error;}
@@ -6073,9 +6126,9 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
   async function apply(r){const j=get(r)||await load(r);if(j?.status!=='complete')throw Error('판독을 먼저 완료해 주세요.');
     return guard(r,async check=>{const c=await bridge().snapshotRaw(apiChatIdOf(r));check();const draft=retainRelationshipScope(r,c,clone(j.draft));
       // 남은 일: rows the segments made keep the id, switch and opening turn of the same earlier AI row. A job read before its
-      // seed kept only the user's rows still holds the old list, so it leaves 남은 일 as stored.
-      if(j.threadsSeeded)WishThreads.assign(draft.room,WishThreads.carry(r.threads,draft.room.threads));
-      else{WishThreads.keepStored(draft.room,r.threads);if(WishThreads.list(r).length)(draft.notices||=[]).push('이 재구축은 업데이트 전에 읽은 대화라 남은 일은 바꾸지 않았습니다. 대화를 다시 읽으면 남은 일도 함께 정리합니다.');}
+      // seed kept only the user's rows, or one whose answers never had the list, leaves 남은 일 as stored.
+      const settled=WishThreads.settleRebuild(j,r.threads,draft.notices||[]);draft.notices=settled.notices;
+      if(settled.keep)WishThreads.keepStored(draft.room,r.threads);else WishThreads.assign(draft.room,settled.threads);
       return openRelationshipReview(r,{...j,draft},{apiJob:j,cog:c,packs:packs(r)});});}
   async function clear(r){if(busy())throw Error('먼저 작업을 중단해 주세요.');if(!confirm('임시 구간 목록과 미적용 결과를 비울까요? 현재 기억은 유지됩니다.'+wishHeldJobSuffix(get(r))))return;await deleteRuntimeRecord(id(r));cache.delete(r.chatId);paint();}
   const str={type:'string'},arr=items=>({type:'array',items}),obj=properties=>({type:'object',additionalProperties:false,required:Object.keys(properties),properties}),strings=arr(str);
@@ -8330,11 +8383,12 @@ function remapUnknownLogSelectionKeys(room,oldBlocks,newBlocks){
     if(stats.relationships.added){target.relationships=WishRelationships.normalize(relationshipRows);target.relationshipRevision=(Number(target.relationshipRevision)||0)+1;warnings.push('관계 사본 '+stats.relationships.added+'방향은 수동 보호·개별 주입 OFF입니다. 인물 → 관계·감정선에서 확인 후 켜세요.');}
     if(stats.relationships.skipped)warnings.push('같은 방향의 기존 관계 '+stats.relationships.skipped+'개는 현재 방 값을 유지합니다.');
     // 남은 일 copies are the user's choice, so they are manual (a later rebuild keeps them). Turns and message ids belong to the
-    // source room's chat and start over; the on/off switch comes along as it was.
+    // source room's chat and start over; the on/off switch comes along as it was. An open copy meets only open rows of the
+    // target and a closed copy only closed ones: a closed item and the same item open again are two rows.
     stats.threads={added:0,skipped:0};const threadRows=selected('threads');
     if(threadRows.length){
-      const existing=WishThreads.normalizeLoose(target.threads),threadKeys=new Set(existing.map(WishThreads.key)),added=[];
-      for(const row of threadRows){const t=row.data,k=WishThreads.key(t);if(threadKeys.has(k)){stats.threads.skipped++;continue;}threadKeys.add(k);
+      const sideKey=t=>WishThreads.key(t)+'|'+(t.status==='closed'?'closed':'open'),existing=WishThreads.normalizeLoose(target.threads),threadKeys=new Set(existing.map(sideKey)),added=[];
+      for(const row of threadRows){const t=row.data,k=sideKey(t);if(threadKeys.has(k)){stats.threads.skipped++;continue;}threadKeys.add(k);
         const copy={...structuredClone(t),id:'th_'+crypto.randomUUID(),origin:'manual',opened:{...structuredClone(t.opened),messageId:'',turn:0},closed:t.closed?{...structuredClone(t.closed),messageId:'',turn:0}:null,updatedTurn:0};delete copy.suggestClose;added.push(copy);}
       if(added.length){WishThreads.assign(target,WishThreads.normalizeLoose(WishThreads.prune([...existing,...added])));stats.threads.added=added.length;warnings.push('남은 일 사본 '+added.length+'개를 추가했습니다.');}
       if(stats.threads.skipped)warnings.push('같은 제목의 기존 남은 일 '+stats.threads.skipped+'개는 현재 방 값을 유지합니다.');
@@ -9261,11 +9315,12 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
   if(total<=limit)return {items,method:'all-fit',total,fullTotal:total,omitted:0,error:'',limit};
   let required=items.filter(allFitRequired),optional=items.filter(i=>!allFitRequired(i));
   // 남은 일 never stops the injection: over the limit it shrinks (1,000→600→300→150자), then sits out this turn.
-  const isThreads=i=>injectionCadenceKind(i)==='threads';
+  // A list that sits out is flagged (threadsOut) for the panel; it is not counted in omitted.
+  const isThreads=i=>injectionCadenceKind(i)==='threads';let threadsOut=false;
   if(size(required)>limit&&required.some(isThreads)){
     const core=required.filter(i=>!isThreads(i)),old=required.find(isThreads);let fit=null;
     for(const cap of WishThreads.SHRINK_CAPS){const it=threadsPendingItem(room,cap);if(it&&size([...core,{...old,content:it.content,reason:it.reason}])<=limit){fit={...old,content:it.content,reason:it.reason};break;}}
-    items=items.map(i=>isThreads(i)?fit:i).filter(Boolean);required=items.filter(allFitRequired);optional=items.filter(i=>!allFitRequired(i));
+    items=items.map(i=>isThreads(i)?fit:i).filter(Boolean);required=items.filter(allFitRequired);optional=items.filter(i=>!allFitRequired(i));threadsOut=!fit;
   }
   if(size(required)>limit)throw Error('현재상태·인지·호칭·켜진 캐릭터/OOC·고정 자료와 AI 원문만으로 '+limit.toLocaleString()+'자를 넘습니다. 고정 항목 또는 이번 세션 포함 선택을 줄여 주세요. 원문과 저장 기억은 삭제하지 않았습니다.');
   // 수동 서버 복구는 같은 AI 장애를 다시 기다리지 않고 결정적인 로컬 순서로 재구성한다.
@@ -9324,7 +9379,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
   const fit=length=>{const chosen=[...required];for(const id of rank.ids){const item=optional[id];if(item&&length([...chosen,item])<=limit)chosen.push(item);}const keep=new Set(chosen);return items.filter(item=>keep.has(item));};
   let selected=fit(size),selectedTotal=exactSize(selected);
   if(size(selected)!==selectedTotal||selectedTotal>limit){selected=fit(exactSize);selectedTotal=exactSize(selected);}
-  return {items:selected,method:rank.method,error:rank.error,total:selectedTotal,fullTotal:total,omitted:items.length-selected.length,limit,rankedKeys:rank.ids.map(id=>optional[id]).filter(Boolean).map(pendingItemIdentity)};
+  return {items:selected,method:rank.method,error:rank.error,total:selectedTotal,fullTotal:total,omitted:items.length-selected.length,limit,rankedKeys:rank.ids.map(id=>optional[id]).filter(Boolean).map(pendingItemIdentity),...(threadsOut?{threadsOut:true}:{})};
 
     } finally {finish();}
   }
@@ -9496,7 +9551,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     if(kind==='relationship'&&raw.startsWith(WISH_RELATIONSHIP_LEGACY_HEAD))raw=raw.slice(WISH_RELATIONSHIP_LEGACY_HEAD.length);
     const content=safeForHtmlComment(raw);
     // Stored section headings "## n." go one level below the group heading "## 현재상태".
-    if(kind==='currentState')return content.replace(/^([ \t]*)##(?=[ \t]*\d+[ \t]*[.)．])/gm,'$1###');
+    if(kind==='currentState')return content.replace(/^((?:[^\S\n]|[\u200b\ufeff])*)##(?=[^\S\n]*\d+[^\S\n]*[.)．])/gm,'$1###');
     if(['speech','cognition','threads'].includes(kind))return content;
     if(kind==='log'&&(item.autoType==='whole-log'||/^\[[^\]\n]+\](?:\n|$)/.test(content)))return content;
     let heading=String(item.title||item.slotId||'메모').trim();
@@ -11825,7 +11880,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
     return `# 기억 묶음 정리\n현재상태·날짜별 사건·남은 일만 처리한다. 자료집·인물·호칭·관계 데이터를 출력하지 않는다.\n`+
       guide.slice(begin,end).split('\n').map(line=>line.includes('evidence는')||line.includes('invalidated의 ref는')?
         '- 종료·정정의 evidence에는 이번 RP에서 확인한 이유를 간단히 적는다. 원문 인용 일치는 요구하지 않는다.':line).join('\n')+
-      '\n현재상태는 이번 구간 끝의 완전한 sections/retired를 반환한다. 사건은 updates/additions/invalidated 변경분만 반환한다. 앞 구간의 유효 상태와 사건을 미언급만으로 삭제하지 않는다. 기존 사건 전체를 다시 요약하거나 누적 사건을 한 사건으로 합치지 않는다. 출력 memory에는 events·state·threads만 둔다.';
+      '\n현재상태는 이번 구간 끝의 완전한 sections/retired를 반환한다. 사건은 updates/additions/invalidated 변경분만 반환한다. 앞 구간의 유효 상태와 사건을 미언급만으로 삭제하지 않는다. 기존 사건 전체를 다시 요약하거나 누적 사건을 한 사건으로 합치지 않는다.';
   }
   function nativeBundlePeopleGuide(){
     return [U3.defaultGuides.observe,U3.defaultGuides.speech,WishRelationships.guide].join('\n').split('\n')
@@ -11936,7 +11991,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
     function contract(j){
       const common='\n[묶음 구간 계약]\n이 작업은 '+labels[j.bundle]+' 전용이다. 구간을 과거부터 순서대로 처리한다. 입력의 기존 항목은 앞 구간까지의 임시 결과이며 이번 구간 끝을 최신 시점으로 갱신한다. 기존 항목을 미언급만으로 지우지 않는다. 이전 결과 전체를 다시 출력하지 말고 요청 스키마가 정한 변경분을 출력한다. JSON이 길어도 임의로 항목을 생략하지 않는다. 기존 항목은 입력의 ref를 그대로 쓴다. ';
       const tail={
-        memory:'현재상태 sections만 적용 후 전체 목록을 반환한다. 새 항목 ref는 사건 NEW_EVENT_*, 상태 NEW_STATE_*, 남은 일 NEW_THREAD_*를 쓴다.\n',
+        memory:'출력 memory에는 events·state·threads만 둔다. 현재상태 sections만 적용 후 전체 목록을 반환한다. 새 항목 ref는 사건 NEW_EVENT_*, 상태 NEW_STATE_*, 남은 일 NEW_THREAD_*를 쓴다.\n',
         people:'새 항목 ref는 인물 NEW_PERSON_*, 인지 NEW_FACT_*를 쓴다.\n',
         lore:'continuityReference는 대명사·맥락 해석용 앞 문맥이며 그 내용을 이번 구간의 새 변화로 기록하지 않는다. 자료집 출력에는 evidence 필드가 없으므로 출력하지 않는다. 새 카드 ref는 NEW_REF_*를 쓴다. protected는 식별 색인이다. micro에 없는 내용이 없다고 단정하지 않는다. enabled=false 카드를 포함해 같은 type·title의 새 카드를 만들거나 수정하지 않는다.\n최상위는 schema_version "1"과 upsert뿐이다. upsert의 각 카드에는 ref·type·title·aliases·keywords·full·compact·micro·anchor 9개 키를 모두 쓰고 다른 키는 쓰지 않는다. aliases·keywords는 문자열 배열이고(없으면 [], 각 80개·항목당 160자 이내), ref·type·title·full·compact·micro는 비우지 않는다. 길이는 title 160자·compact 12,000자·micro 4,000자·full 45,000자 이내다(넘으면 이 구간 결과 전체가 거절된다). type은 world·item·outfit·key_quote·place·organization·other 중 소문자 영문 하나, anchor는 따옴표 없는 true/false다. 기존 카드는 existing의 ref를 그대로, 새 카드만 NEW_REF_1처럼 쓴다.\n'
       };
@@ -11987,6 +12042,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
       req.holdContext={bundle:'bundle-'+j.bundle,jobCreatedAt:j.createdAt,segmentIndex:seg.index,segmentCount:j.segments.length};
       const next=U3.stage(j.draft.room,j.draft.cog,j.draft.packs,req.p,req,result);
       if(dry)return next;
+      if(j.bundle==='memory'&&req.aiFix.notes.includes(WishThreads.MISSING))next.threadsOmitted=1; // settled at apply
       // Over an API nobody saw the drops; the 외부 AI 복붙 window already asked about them.
       if(next.drops?.length&&!isManualAiProvider())throw Object.assign(Error('AI 답에 Wish 양식에 없는 내용이 있어 적용하지 않았습니다: '+next.drops.slice(0,5).join(' · ')+(next.drops.length>5?' 외 '+(next.drops.length-5)+'건':'')),{code:'WISH_SCHEMA',diagnostic:{stage:'JSON 구조 확인'}});
       // Never adopt generated lore or an unrelated bundle's cursors/settings.
@@ -12043,8 +12099,8 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
       });
     }
     function stats(j,r,c,ps){
-      // Memory: the two slots and the 남은 일 rows as apply will store them (carried ids, or the stored list for an older job).
-      const threads=j.bundle!=='memory'?[]:j.threadsSeeded?WishThreads.carry(r.threads,j.draft.room.threads):WishThreads.list(r);
+      // Memory: the two slots and the 남은 일 rows as apply will store them (carried ids, or the stored list it keeps).
+      const settled=j.bundle==='memory'?WishThreads.settleRebuild(j,r.threads):null,threads=!settled?[]:settled.keep?WishThreads.list(r):settled.threads;
       const before=j.bundle==='lore'?ps.find(p=>p.scopeId===autoLorePackId(r))?.entries||[]:j.bundle==='people'?[...(c.actors||[]),...(c.facts||[]),...(r.speechRelations||[]),...(r.relationships||[])]:[...r.slots.filter(s=>['currentState','logSummary'].includes(s.id)),...WishThreads.list(r)];
       const after=j.bundle==='lore'?j.draft.packs.find(p=>p.scopeId===autoLorePackId(r))?.entries||[]:j.bundle==='people'?[...(j.draft.cog.actors||[]),...(j.draft.cog.facts||[]),...(j.draft.room.speechRelations||[]),...(j.draft.room.relationships||[])]:[...j.draft.room.slots.filter(s=>['currentState','logSummary'].includes(s.id)),...threads];
       const identity=x=>x.id||[x.speaker,x.target].join('→');
@@ -12082,8 +12138,8 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
             selected.aiSourceManifests={...selected.aiSourceManifests,currentState:manifest,logSummary:manifest};
             selected.aiUpdateCursors={...selected.aiUpdateCursors,currentState:{messageId:j.anchor,updatedAt:nowIso()},logSummary:{messageId:j.anchor,updatedAt:nowIso()}};
             selected.aiAppliedContent=next.room.aiAppliedContent;selected.memoryBranchBlocked=false;
-            if(j.threadsSeeded)WishThreads.assign(selected,WishThreads.carry(r.threads,next.room.threads));
-            else if(WishThreads.list(r).length)(next.notices||=[]).push('이 재구축은 업데이트 전에 읽은 대화라 남은 일은 바꾸지 않았습니다. 대화를 다시 읽으면 남은 일도 함께 정리합니다.');
+            const settled=WishThreads.settleRebuild(j,r.threads,next.notices||[]);next.notices=settled.notices;
+            if(!settled.keep)WishThreads.assign(selected,settled.threads);
           }else{
             for(const field of ['speechRelations','relationships','relationshipRevision','relationshipBaseline'])selected[field]=next.room[field];
             Object.assign(next.cog,{rev:(c.rev||0)+1,lastAnalysis:j.anchor,tip:j.anchor,sourceManifest:manifest,snapshots:{},pending:[],scanJob:null,updated:Date.now()});
@@ -13217,7 +13273,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     let block=buildContextBlockFromItems(active,room),injected=buildInjectedMessage(original,block);
     if(injected.length>allFitLimit(room))throw new Error('이전 AI 원문과 주입 내용이 길이 한도를 넘습니다. 항목을 줄여 주세요.');
     let next={...p,messageId:newId,originalText:original,contextBlock:block,items:p.items,injectedChars:block.length,originalChars:original.length,
-      selection:{method:selection.method==='all-fit'&&prepared.preferredMethod?prepared.preferredMethod:selection.method,limit:selection.limit,fullTotal:p.recallPlan?.fullTotal??selection.fullTotal,omitted:Math.max(0,Number(p.recallPlan?.omitted)||0)+selection.omitted,error:selection.error,keys:active.map(pendingItemIdentity)},carrierChars:injected.length,carrierArmedAt:Date.now(),verified:false,awaitingCarrier:false};
+      selection:{method:selection.method==='all-fit'&&prepared.preferredMethod?prepared.preferredMethod:selection.method,limit:selection.limit,fullTotal:p.recallPlan?.fullTotal??selection.fullTotal,omitted:Math.max(0,Number(p.recallPlan?.omitted)||0)+selection.omitted,error:selection.error,keys:active.map(pendingItemIdentity),...(selection.threadsOut?{threadsOut:true}:{})},carrierChars:injected.length,carrierArmedAt:Date.now(),verified:false,awaitingCarrier:false};
     if(previousCarrier)next.previousCarrierCleanup=previousCarrier;
     else if(p.previousCarrierCleanup?.messageId)next.previousCarrierCleanup=structuredClone(p.previousCarrierCleanup);
     else delete next.previousCarrierCleanup;
@@ -13236,7 +13292,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
         active=selection.items;block=buildContextBlockFromItems(active,room);injected=buildInjectedMessage(original,block);
         if(injected.length>fallbackLimit)throw new Error('서버 재시도용 주입 내용이 안전 한도를 넘습니다. 고정 항목을 줄여 주세요.');
         next={...next,contextBlock:block,injectedChars:block.length,carrierChars:injected.length,carrierArmedAt:Date.now(),
-          selection:{method:`${selection.method}+server-backoff`,limit:selection.limit,fullTotal:selection.fullTotal,omitted:selection.omitted,error:selection.error,keys:active.map(pendingItemIdentity),firstPatchError:String(error?.message||error)}};
+          selection:{method:`${selection.method}+server-backoff`,limit:selection.limit,fullTotal:selection.fullTotal,omitted:selection.omitted,error:selection.error,keys:active.map(pendingItemIdentity),firstPatchError:String(error?.message||error),...(selection.threadsOut?{threadsOut:true}:{})}};
         savePendingBackup(room.chatId,next);room.pending=next;await saveRoom(room);
         patchVerification=await patchMessage(apiChatIdOf(room),newId,injected,raw);
       }
@@ -13670,6 +13726,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     if(!filterItemsByInjectionCadence(room,safeMemoryItems(room,[item]),turn).length)return '주입 설정 또는 분기 보호로 제외';
     const selection=p?.selection;
     if(Array.isArray(selection?.keys)&&!selection.keys.includes(pendingItemIdentity(item))){
+      if(selection.threadsOut&&injectionCadenceKind(item)==='threads')return '자리 부족 · 이번 턴 빠짐';
       if(Number(selection.fullTotal)>Number(selection.limit||allFitLimit(room))&&Number(selection.omitted)>0)return (String(selection.method||'').startsWith('ai')?'AI 후보 선별':'로컬 한도 선별')+'에서 제외 · 선별 전 '+Number(selection.fullTotal).toLocaleString()+'자';
       return '이전 주입 결과 · 다음 갱신 때 다시 계산';
     }
@@ -15340,8 +15397,8 @@ html.rpcm-mobile-keyboard-open #wish-rp-root{top:var(--rpcm-vv-top,0px);bottom:a
 .m3-fld small{display:block;font-size:11.5px;color:var(--m3-muted);margin-top:6px;line-height:1.65}
 .wp-raw-warn{color:var(--m3-warn)}
 .wp-th-view{margin:0 0 10px}
-.wp-th-list.is-closed .m3-card{opacity:.72}
-.wp-th-list.is-closed .m3-card[open]{opacity:1}
+.wp-th-list.is-closed .m3-card:not([open]){border-style:dashed;box-shadow:none}
+.m3-fld small.wp-raw-hint{margin:0 0 6px}
 .wp-th-pre{white-space:pre-wrap;overflow-wrap:anywhere}
 .wp-th-rel{flex-wrap:wrap;gap:6px;margin-top:6px}
 .wp-th-badges{display:inline-flex;align-items:center;gap:6px;flex:none}
@@ -16215,7 +16272,7 @@ function createWishUI(AD) {
     return `<section class="m3-cap" data-key="cap"><div class="m3-cap-top"><div class="m3-cap-lab">${I.verified ? '서버 저장 확인된 주입량' : I.matchesSaved ? '서버 확인 전 주입량' : '갱신 전 후보 예상량'}</div><div class="m3-cap-num"><span data-count="${tot}">${fmt(tot)}</span></div><div class="m3-cap-den">/ ${fmt(max)}자 · ${Math.round(tot / max * 100)}%</div></div>
     ${capMeter()}
     <div class="m3-legend">${GKEYS.filter(k => g[k]).map(k => `<span style="--m3-c:${COL[k]}"><b></b>${KLABEL[k]}${k==='guide'?help('[공통 안내]\nAI가 기억을 참고하는 방법과 인지 경계를 설명하는 안내문입니다.\n\n[제목·구분 서식]\n각 항목의 제목·줄바꿈·숨김 표시입니다. 기억 본문과 별도로 실제 주입 길이에 포함됩니다.'):''}<em>${fmt(g[k])}</em></span>`).join('')}</div>
-    <p class="m3-muted" data-key="selection-threshold">${tot>max?fmt(max)+'자 초과 · 갱신 시 최종 맞춤 필요 · 확정 주입량 아님':!I.matchesSaved?'최근·관련 후보 계산 완료 · 갱신 시 최종 계산':Number(I.selection?.fullTotal)>max?'하이브리드 후보 '+fmt(I.selection.fullTotal)+'자 → '+(I.verified?'확인된 주입 ':'확인 대기 ')+fmt(tot)+'자 · '+(method.includes('server-backoff')?'서버 500 후 36,000자 안전 축소':'로컬 안전선 맞춤')+' · 제외 '+Number(I.selection.omitted||0)+'개':Number(I.selection?.omitted)>0?'저장된 안전선 맞춤 · 제외 '+Number(I.selection.omitted)+'개':'최근·관련 기억 선택 완료 · '+fmt(max)+'자 안전선 이내'}${!I.hasOriginal?' · AI 원문 합산 전 예상':''}</p>
+    <p class="m3-muted" data-key="selection-threshold">${tot>max?fmt(max)+'자 초과 · 갱신 시 최종 맞춤 필요 · 확정 주입량 아님':!I.matchesSaved?'최근·관련 후보 계산 완료 · 갱신 시 최종 계산':Number(I.selection?.fullTotal)>max?'하이브리드 후보 '+fmt(I.selection.fullTotal)+'자 → '+(I.verified?'확인된 주입 ':'확인 대기 ')+fmt(tot)+'자 · '+(method.includes('server-backoff')?'서버 500 후 36,000자 안전 축소':'로컬 안전선 맞춤')+' · 제외 '+Number(I.selection.omitted||0)+'개':Number(I.selection?.omitted)>0?'저장된 안전선 맞춤 · 제외 '+Number(I.selection.omitted)+'개':'최근·관련 기억 선택 완료 · '+fmt(max)+'자 안전선 이내'}${I.matchesSaved&&I.selection?.threadsOut?' · 남은 일은 자리가 모자라 이번 턴 빠짐':''}${!I.hasOriginal?' · AI 원문 합산 전 예상':''}</p>
     ${I.review&&!(I.review.reason==='within-limit')?`<p class="m3-muted" data-key="recall-last-decision">마지막 주입 계산${Number.isFinite(I.review.total)?' '+fmt(I.review.total)+'자 / '+fmt(I.review.limit||max)+'자':''} · ${esc(({'within-limit':'한도 내 전체 포함 — 단어·AI 선별 생략','room-limit':'방 설정 한도에 맞춰 로컬 선별','no-carrier':'원문 확인 전 — 생성형 선별 안 함','disabled':'재검토 꺼짐','too-few-candidates':'추가 평가 대상 부족 — 로컬 사용','no-provider':'AI 연결 없음 — 로컬 사용','prepared-result':'동일 조건의 준비 결과 사용 — 추가 호출 없음','before-send-or-local':'로컬 검색 결과 사용 — 새 AI 요청 없음','previous-failure':'직전 평가 실패 — 재호출 없이 로컬 사용','ai-failure':'AI 평가 실패 — 로컬 사용','over-limit':'한도 초과 — AI 재검토 완료'})[I.review.reason]||'이전 계산 기록')}<br>입력 중 검색 호출 없음 · AI 원문·안내문 포함 한도 이내면 전체 사용 · 초과할 때만 선별 · 자동 기억 정리는 별도입니다.</p>`:''}
     </section>`;
   }
@@ -16297,12 +16354,13 @@ function createWishUI(AD) {
   }
   // 남은 일: the card's right side holds the kind and one status, stacked on narrow panels so the title keeps its width; the
   // other statuses go to the end of the meta line, in the same order.
-  const TH_HELP=helpSections([['남은 일','아직 결말이 나지 않은 약속·예정·목표·수수께끼·위험·복선입니다. "이 일은 언젠가 끝나는가?"로 가릅니다. 끝나는 때가 있으면 남은 일, 끝없이 계속 지키는 약속이나 부상·임신처럼 지금 이어지는 상태는 현재상태입니다.'],['매 턴 넣기','열린 항목이 짧은 목록으로 매 턴 들어갑니다(최대 1,500자). 약속·예정·목표는 한 줄 설명까지, 나머지는 제목만 넣습니다. 약 300턴 동안 바뀌지 않았거나 자리가 모자라면 제목만 넣고, 주입을 끈 항목은 넣지 않습니다.'],['닫기','결말 장면이 있을 때 닫습니다. 직접 관리하는 항목은 AI가 닫지 않고 "닫아도 될 것 같아요"라고만 알려 줍니다. 잘못 닫혔으면 닫힘 목록에서 [다시 열기]를 누르세요.']]);
+  const TH_HELP=helpSections([['남은 일','아직 결말이 나지 않은 약속·예정·목표·수수께끼·위험·복선입니다. "이 일은 언젠가 끝나는가?"로 가릅니다. 끝나는 때가 있으면 남은 일, 끝없이 계속 지키는 약속이나 부상·임신처럼 지금 이어지는 상태는 현재상태입니다.'],['매 턴 넣기','열린 항목이 짧은 목록으로 매 턴 들어갑니다(최대 1,500자). 약속·예정·목표는 한 줄 설명까지, 나머지는 제목만 넣습니다. 약 300턴 동안 바뀌지 않았거나 자리가 모자라면 제목만 넣고, 주입을 끈 항목은 넣지 않습니다.'],['닫기','결말 장면이 있을 때 닫습니다. 직접 관리하는 항목은 AI가 닫지 않고 "닫아도 될 것 같아요"라고만 알려 줍니다. 직접 닫거나 다시 연 항목은 직접 관리하는 항목이 되어 재구축해도 그대로 남습니다. 잘못 닫혔으면 닫힘 목록에서 [다시 열기]를 누르세요.']]);
   const TH_MODE={stale:['오래됨 · 매 턴 제목만','warn'],budget:['자리 부족 · 제목만',''],out:['이번 목록에서 빠짐','']};
   const thDate=d=>d?.display&&d.display!=='날짜 미상'?d.display:'';
   function threadStatuses(t){
     if(t.status==='closed')return t.origin==='manual'?[['직접 관리','']]:[];
-    return [t.suggestClose&&['닫기 제안','warn'],t.enabled===false&&['주입 꺼짐',''],TH_MODE[t.mode],t.origin==='manual'&&['직접 관리','']].filter(Boolean);
+    // With the area chip off nothing is sent, so the per-turn list badges (old, short of room, left out) do not apply.
+    return [t.suggestClose&&['닫기 제안','warn'],t.enabled===false&&['주입 꺼짐',''],V.pol.threads&&TH_MODE[t.mode],t.origin==='manual'&&['직접 관리','']].filter(Boolean);
   }
   function threadBody(t){
     const closed=t.status==='closed',s=t.suggestClose,flat=v=>String(v||'').replace(/\s+/g,'');
@@ -16317,15 +16375,16 @@ function createWishUI(AD) {
   }
   function threadCard(t){
     const closed=t.status==='closed',st=threadStatuses(t),key='th-'+t.id;
-    const when=closed?[t.closeWord,thDate(t.closed.date)].filter(Boolean).join(' · '):t.ageTurns==null?t.opened.date?.display||'':t.ageTurns?'열린 지 '+fmt(t.ageTurns)+'턴':'방금 열림';
+    // The slot always says when the item opened (never a deadline): the opening date when the turn is unknown, else nothing.
+    const when=closed?[t.closeWord,thDate(t.closed.date)].filter(Boolean).join(' · '):t.ageTurns==null?(thDate(t.opened.date)?thDate(t.opened.date)+' 열림':''):t.ageTurns?'열린 지 '+fmt(t.ageTurns)+'턴':'방금 열림';
     const meta=[t.who.join(' → '),when,...st.slice(1).map(x=>x[0])].filter(Boolean).map(esc).join(' · ');
     const actions=closed?btn('다시 열기','thReopen',{arg:t.id,cls:'mini',icon:'refresh'})+btn('삭제','thDel',{arg:t.id,cls:'danger mini'})
-      :btn('편집','thEdit',{arg:t.id,cls:'mini',icon:'edit'})+btn('닫기','thClose',{arg:t.id,cls:'mini',icon:'check'})+btn(t.enabled===false?'주입 켜기':'주입 끄기','thInject',{arg:t.id,cls:'quiet mini'})+btn('삭제','thDel',{arg:t.id,cls:'danger mini'});
+      :btn('편집','thEdit',{arg:t.id,cls:'mini',icon:'edit'})+btn('닫힘으로 옮기기','thClose',{arg:t.id,cls:'mini',icon:'check'})+btn(t.enabled===false?'주입 켜기':'주입 끄기','thInject',{arg:t.id,cls:'quiet mini'})+btn('삭제','thDel',{arg:t.id,cls:'danger mini'});
     return card(key,esc(t.title),meta,S.openSet.has(key)?threadBody(t):'',actions,`<span class="wp-th-badges">${kind(t.kindLabel,COL.threads)}${st[0]?tag(st[0][0],st[0][1]):''}</span>`,COL.threads);
   }
   function mThreads() {
     const T=V.threads,view=S.thView==='closed'?'closed':'open',rows=T.rows.filter(t=>(t.status==='closed')===(view==='closed'));
-    return `<div class="m3-toolbar"><span class="m3-muted m3-grow">열림 ${fmt(T.open)} · 닫힘 ${fmt(T.closed)} · 매 턴 목록 ${fmt(T.listChars)} / ${fmt(T.cap)}자 ${help(TH_HELP)}</span><div class="m3-actions">${btn('직접 추가','thNew',{cls:'mini',icon:'plus'})}${chip('주입','pol.threads',V.pol.threads)}</div></div>`
+    return `<div class="m3-toolbar"><span class="m3-muted m3-grow">열림 ${fmt(T.open)} · 닫힘 ${fmt(T.closed)} · ${V.pol.threads?`매 턴 목록 ${fmt(T.listChars)} / ${fmt(T.cap)}자`:'매 턴 목록 꺼짐'} ${help(TH_HELP)}</span><div class="m3-actions">${btn('직접 추가','thNew',{cls:'mini',icon:'plus'})}${chip('주입','pol.threads',V.pol.threads)}</div></div>`
       +`<div class="m3-whychips wp-th-view" role="group" aria-label="남은 일 보기">${[['open','열림'],['closed','닫힘']].map(([k,l])=>`<button type="button" class="m3-whychip" data-act="thView" data-arg="${k}" aria-pressed="${view===k}">${l}</button>`).join('')}</div>`
       +`<div class="wp-th-list${view==='closed'?' is-closed':''}" data-key="th-list-${view}">${rows.map(threadCard).join('')||empty(view==='open'?'열린 남은 일이 없습니다. 함께 정리나 재구축이 약속·예정·목표·수수께끼·위험·복선을 찾으면 여기에 쌓입니다. [직접 추가]로 적을 수도 있습니다.':'닫힌 남은 일이 없습니다.')}</div>`;
   }
@@ -17634,7 +17693,7 @@ nativeBundle(d) {
     eSlot(d) {
       const x = d.draft, timed = d.kind === 'char' || d.kind === 'extra', raw = !timed;
       const title = raw ? (d.kind === 'stateRaw' ? '현재상태 원문 편집' : '날짜로그 원문 편집') : d.isNew ? (d.kind === 'char' ? '캐릭터 추가' : '기타·OOC 추가') : `${esc(x.title)} 편집`;
-      return sheet(d, { title, desc: d.kind === 'stateRaw' ? '원문을 통째로 고칩니다' : raw ? '원문을 통째로 고칩니다 · 저장하면 섹션·블록을 다시 나눕니다' : '', wide: raw, body: `${timed ? field('이름', inp(D(d, 'title'), x.title || '')) : ''}${d.kind === 'char' ? field('별칭 · 쉼표로 구분', inp(D(d, 'aliases'), x.aliases || ''), '대화에 이 이름이 나오면 자동으로 켭니다.') : ''}${field('내용', ta(D(d, 'content'), x.content || '', '', raw ? '380' : '200'), d.kind === 'stateRaw' ? rawStateHint(x.content) : raw ? esc(d.hint || '') : '')}`, foot: `${timed && !d.isNew ? delBtn(d) : ''}${SP}${closeBtn(d, '취소')}${saveBtn(d)}` });
+      return sheet(d, { title, desc: d.kind === 'stateRaw' ? '원문을 통째로 고칩니다' : raw ? '원문을 통째로 고칩니다 · 저장하면 섹션·블록을 다시 나눕니다' : '', wide: raw, body: `${timed ? field('이름', inp(D(d, 'title'), x.title || '')) : ''}${d.kind === 'char' ? field('별칭 · 쉼표로 구분', inp(D(d, 'aliases'), x.aliases || ''), '대화에 이 이름이 나오면 자동으로 켭니다.') : ''}${d.kind === 'stateRaw' ? `<label class="m3-fld"><span>내용</span><small class="wp-raw-hint">${rawStateHint(x.content)}</small>${ta(D(d, 'content'), x.content || '', '', '', ' style="min-height:min(380px,50vh)"')}</label>` : field('내용', ta(D(d, 'content'), x.content || '', '', raw ? '380' : '200'), raw ? esc(d.hint || '') : '')}`, foot: `${timed && !d.isNew ? delBtn(d) : ''}${SP}${closeBtn(d, '취소')}${saveBtn(d)}` });
     },
     /* props: { ref, draft:{title,body} } */
     eState(d) { const x = d.draft; return sheet(d, { title: '현재상태 섹션 편집', desc: '이 섹션만 고칩니다', body: `${field('제목', inp(D(d, 'title'), x.title || ''))}${field('본문', ta(D(d, 'body'), x.body || '', '', '200'))}`, foot: `${d.canDelete === false ? '' : delBtn(d)}${SP}${closeBtn(d, '취소')}${saveBtn(d)}` }); },
@@ -17643,9 +17702,9 @@ nativeBundle(d) {
     /* props: { isNew, ref, draft:{speaker,target,address,reg,note} } */
     eRelationship(d) {const x=d.draft;return sheet(d,{title:d.isNew?'관계·감정선 추가':'관계·감정선 편집',desc:'주체 → 대상 방향의 감정·태도입니다. 역방향은 별도 기록합니다.',body:`<div class="m3-grid2">${field('주체',inp(D(d,'speaker'),x.speaker))}${field('대상',inp(D(d,'target'),x.target))}</div>${field('현재 관계·감정의 깊이 · 700자',ta(D(d,'current'),x.current))}${field('핵심 변화 · 6,000자',ta(D(d,'trajectory'),x.trajectory),'결정적 계기와 관계적 결과만 남기고 초기·이후·현재를 구분합니다. 사건 전문은 반복하지 않습니다.')}${field('남은 쟁점 · 400자',ta(D(d,'unresolved'),x.unresolved))}${tog('이 관계 주입 사용',D(d,'enabled'),x.enabled!==false,'끄면 이 관계만 주입 후보에서 제외합니다. 저장값은 유지됩니다.')}${tog('수동 보호',D(d,'manual'),x.manual,'켜면 AI가 이 방향을 수정하지 않습니다.')}${tog('항상 주입 후보에 포함',D(d,'pinned'),x.pinned,'꺼져 있으면 현재 맥락의 CHAR 이름·별칭으로 선택합니다.')}`,foot:`${!d.isNew?delBtn(d):''}${SP}${closeBtn(d,'취소')}${saveBtn(d)}`});},
     /* props: { isNew, ref, manual, chatId, baseline:{record}, draft:{kind,title,detail,who,due,enabled} } */
-    eThread(d) {const x=d.draft;return sheet(d,{title:d.isNew?'남은 일 직접 추가':'남은 일 편집',desc:d.isNew?'직접 추가한 항목은 AI가 고치거나 닫지 않습니다.':d.manual?'':'고치면 직접 관리하는 항목이 되어 AI가 내용을 바꾸거나 닫지 않습니다.',body:`<div class="m3-grid2">${field('종류',selc(D(d,'kind'),x.kind,WishThreads.KINDS.map(k=>[k,WishThreads.kindLabel(k)])))}${field('기한·계기 · 선택',inp(D(d,'due'),x.due||''))}</div>${field('제목',inp(D(d,'title'),x.title||'','예: 하쿠에게 한 대가 경고'))}${field('내용',ta(D(d,'detail'),x.detail||'','','120'),"끝에 '지금: …'을 쓰면 매 턴 목록에는 그 부분만 들어갑니다.")}${field('누가 → 누구 · 쉼표로 구분',inp(D(d,'who'),x.who||''))}${tog('매 턴 넣기',D(d,'enabled'),x.enabled!==false)}`,foot:`${!d.isNew?delBtn(d):''}${SP}${closeBtn(d,'취소')}${saveBtn(d)}`});},
-    /* props: { ref, kind, threadTitle, chatId, record, suggestion, draft:{type,how,date} } */
-    eThreadClose(d) {const x=d.draft;return sheet(d,{title:'남은 일 닫기',desc:esc(d.threadTitle||''),body:`${field('어떻게 끝났나요',selc(D(d,'type'),x.type,WishThreads.CLOSE_TYPES.map(t=>[t,WishThreads.closeWord(d.kind,t)])))}${field('끝난 내용',ta(D(d,'how'),x.how||'','','90'))}${field('날짜 · 선택',inp(D(d,'date'),x.date||'','예: 8월 29일'))}`,foot:`${SP}${closeBtn(d,'취소')}${saveBtn(d,'닫기')}`});},
+    eThread(d) {const x=d.draft;return sheet(d,{title:d.isNew?'남은 일 직접 추가':'남은 일 편집',desc:d.isNew?'직접 추가한 항목은 AI가 고치거나 닫지 않습니다.':d.manual?'':'고치면 직접 관리하는 항목이 되어 AI가 내용을 바꾸거나 닫지 않습니다.',body:`<div class="m3-grid2">${field('종류',selc(D(d,'kind'),x.kind,WishThreads.KINDS.map(k=>[k,WishThreads.kindLabel(k)])))}${field('기한·계기 · 선택',inp(D(d,'due'),x.due||''))}</div>${field('제목',inp(D(d,'title'),x.title||'','예: 하쿠에게 한 대가 경고'))}${field('내용',ta(D(d,'detail'),x.detail||'','','120'),WishThreads.FULL_KINDS.has(x.kind)?"끝에 '지금: …'을 쓰면 매 턴 목록에는 그 부분만 들어갑니다.":'')}${field('누가 → 누구 · 쉼표로 구분',inp(D(d,'who'),x.who||''))}${tog('매 턴 넣기',D(d,'enabled'),x.enabled!==false)}`,foot:`${!d.isNew?delBtn(d):''}${SP}${closeBtn(d,'취소')}${saveBtn(d)}`});},
+    /* props: { ref, kind, group, threadTitle, chatId, baseline:{record,suggestion}, draft:{type,how,date} } */
+    eThreadClose(d) {const x=d.draft,types=WishThreads.closeTypes(d.kind);if(x.type&&!types.includes(x.type))types.push(x.type);return sheet(d,{title:'남은 일 닫기',desc:esc(d.baseline?.record?.title||d.threadTitle||''),body:`${field('어떻게 끝났나요',selc(D(d,'type'),x.type,types.map(t=>[t,WishThreads.closeWord(d.kind,t)])))}${field('끝난 내용',ta(D(d,'how'),x.how||'','','90'))}${field('날짜 · 선택',inp(D(d,'date'),x.date||'','예: 8월 29일'))}`,foot:`${SP}${closeBtn(d,'취소')}${saveBtn(d,'닫힘으로 저장')}`});},
     eSpeech(d) { const x = d.draft; return sheet(d, { title: d.isNew ? '호칭·말투 추가' : '호칭·말투 편집', desc: '같은 화자→상대 방향은 하나만 유지됩니다', body: `<div class="m3-grid2">${field('화자', inp(D(d, 'speaker'), x.speaker || ''))}${field('상대', inp(D(d, 'target'), x.target || ''))}</div><div class="m3-grid2">${field('부르는 말', inp(D(d, 'address'), x.address || ''), '호칭을 모르면 비워 두고 확인된 말투만 기록할 수 있습니다.')}${field('말투', selc(D(d, 'reg'), x.reg, Object.entries(L.reg)))}</div>${field('메모 · 선택', inp(D(d, 'note'), x.note || ''))}`, foot: `${!d.isNew ? delBtn(d) : ''}${SP}${closeBtn(d, '취소')}${saveBtn(d)}` }); },
     /* props: { isNew, ref, owner, titleMax=20, bodyMax=300, draft:{title,body} } */
 
@@ -17809,7 +17868,7 @@ nativeBundle(d) {
   const findDlg = id => S.dialogs.find(x => x.id === id);
   // Keep editor objects in memory: no per-keystroke disk writes or automatic commits.
   const editorDrafts=new Map();
-  const isDraftEditor=type=>/^e(Slot|State|Log|Speech|Pack|Entry|Actor|Fact|Relationship|Thread|Con)$/.test(type)||['promptGuide','presets','loreConvert'].includes(type);
+  const isDraftEditor=type=>/^e(Slot|State|Log|Speech|Pack|Entry|Actor|Fact|Relationship|Thread|ThreadClose|Con)$/.test(type)||['promptGuide','presets','loreConvert'].includes(type);
   function editorKey(type,p){return JSON.stringify([location.pathname,type,p.ref??'',p.kind??'',p.pack??'',p.group??'',p.parent??'',p.idx??'',p.wishSpeechParent??'']);}
   function openSheet(type, props = {}) {
     // One AI connection sheet at a time: a second, older copy could later save stale values over the new ones.
@@ -18520,8 +18579,16 @@ const WishPromptGuides=(()=>{
   }
   // Read the two small override records only; no timer or RP traversal is added.
   function selectorStamp(){try{return JSON.stringify([raw('apiRecall'),raw('apiIndex')]);}catch(_){return 'storage-unavailable';}}
-  // A text saved against an older default: shown in the editor only.
-  function stale(id){const r=readGuideRecord(id);return !!r&&r.baseVersion!==API_GUIDE_BASE_VERSION&&!['apiRecall','apiIndex','apiLoreConversion','apiDelta','externalSecondary'].includes(id);}
+  // A text saved against an older default: shown in the editor only. Each guide is compared with the version in which its own
+  // default last changed (a saved text without a version counts as oldest); apiIndex, apiLoreConversion and externalSecondary
+  // have kept their defaults since saved texts carry a version.
+  const DEFAULT_CHANGED={apiMemory:'1.8.0',apiThreads:'1.8.0',apiRelationships:'1.8.0',apiDelta:'1.8.0',apiRecall:'1.8.0',apiBundleMemory:'1.8.0',apiBundlePeople:'1.8.0',externalAll:'1.8.0',externalMemory:'1.8.0',externalPeople:'1.8.0',externalRelationships:'1.8.0',
+    apiCommon:'1.7.0',apiObserve:'1.7.0',apiSpeech:'1.7.0',apiDate:'1.7.0',apiLoreBundle:'1.7.0',manualRelay:'1.7.0',loreExternal:'1.7.0',currentState:'1.7.0',logSummary:'1.7.0',loreAuto:'1.7.0'};
+  const versionParts=v=>{const m=String(v||'').match(/^(\d+)\.(\d+)\.(\d+)$/);return m?m.slice(1).map(Number):[0,0,0];};
+  function stale(id){
+    const r=readGuideRecord(id),since=DEFAULT_CHANGED[id];if(!r||!since)return false;
+    const a=versionParts(r.baseVersion),b=versionParts(since),at=a.findIndex((n,i)=>n!==b[i]);return at>=0&&a[at]<b[at];
+  }
   return {catalog,open,select,defaults,save,selectorStamp,stale};
 })();
 
