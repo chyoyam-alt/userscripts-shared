@@ -3204,7 +3204,7 @@ const ExternalReplay=(()=>{
     function same(domain,a,b){return !!a&&!!b&&validSig(a.sig)&&a.sig===b.sig&&keyJson(domain,a)===keyJson(domain,b);}
     function isHeld(domain,rec){return !!rec&&(domain==='A'||domain==='F'||domain==='C'&&typeof rec.sig==='string');}
     function uniq(domain,list){const keys=new Set();return (list||[]).filter(rec=>{const key=keyJson(domain,rec);if(keys.has(key))return false;keys.add(key);return true;});}
-    function restSig(x){return JSON.stringify({...x,rev:undefined,updated:undefined,heldResolved:undefined,reviews:(x?.reviews||[]).filter(r=>!isHeld('C',r))});}
+    function restSig(x){return JSON.stringify({...x,rev:undefined,updated:undefined,heldResolved:undefined,selectMode:undefined,reviews:(x?.reviews||[]).filter(r=>!isHeld('C',r))});}
     function capacityReason(live,adds){
       if(!adds.length)return 'ok';
       const size=JSON.stringify(live).length,extra=JSON.stringify(adds).length;
@@ -4424,7 +4424,7 @@ summary는 사건 하나만 읽어도 누가 무엇을 왜 했고 어떤 결과�
 10. 진행 중인 상황과 책임. 언젠가 끝나는 약속·예정·목표는 남은 일이 맡는다.
 11. 지금 장면에 계속 영향을 주는 위험의 현재 상황. 그 위험이 앞으로 어떻게 될지와 답이 나오지 않은 수수께끼는 남은 일이 맡는다.
 12. 반복적인 연속성 오류를 막는 핵심 최신값
-13. 생활의 결: 지금도 되풀이되는 애정 표현·장난·놀림·단골 푸념, 감각 모티프(늘 나는 향, 부르는 노래, 되풀이되는 말), 기념일과 정해진 일과. 두 번 이상 나왔거나 원문이 '늘·매번'처럼 반복을 밝힌 것만, 누가 누구에게 언제 하는지 짧게 적는다. 부르는 말과 말버릇 자체는 호칭·말투가 맡는다. PC 쪽 습관은 상대가 알아보고 반응하는 단서로 쓴다. 다시 나오지 않았다는 것만으로 습관이 끝났다고 보지 않는다. 새 장면이 끝났음을 보여 주면 여기서 빼고, 오래 쓰이지 않아 자리를 비워야 할 때는 지금도 유효한 습관으로 자료 other 카드에 옮긴다.
+13. 생활의 결: 지금도 되풀이되는 애정 표현·장난·놀림·단골 푸념, 감각 모티프(늘 나는 향, 부르는 노래, 되풀이되는 말), 기념일과 정해진 일과. 두 번 이상 나왔거나 원문이 '늘·매번'처럼 반복을 밝힌 것만, 누가 누구에게 언제 하는지 짧게 적는다. 부르는 말과 말버릇 자체는 호칭·말투가 맡는다. PC 쪽 습관은 상대가 알아보고 반응하는 단서로 쓴다. 새 장면이 그 습관이 끝났음을 보여 줄 때만 여기서 빼고, 오래 쓰이지 않아 자리를 비워야 할 때는 자료 other 카드가 지금도 유효한 습관으로 맡는다.
 14. 끝나는 때 없이 계속 지키는 약속·합의·맹세: 누가 누구에게 무엇을, 지금 지켜지는지·깨졌는지, 조건. 문구가 중요하면 key_quote를 가리키는 말만 쓰고 원문을 여기 다시 쓰지 않는다.
 15. 인물별 지금의 동기·두려움: 인물을 움직이는 바람과 두려움 중 원문에서 밝히거나 행동으로 보여 준 것만. 이루거나 실패하면 끝나는 목표는 남은 일이, 특정 상대에게 바라는 것·두려워하는 것은 관계·감정선이 맡는다. PC는 USER가 직접 밝힌 것만.
 - 13~15는 매 턴 RP에 들어가므로 합계 약 1,000자 안에서 다음 장면에 다시 쓰일 만한 것부터 남긴다. 줄마다 끝에 마지막으로 확인된 시점을 짧게 붙이고(예: '(최근 확인: 5년 후 생일 연회 다음 날)'), 새 RP에서 그 줄의 내용이 다시 나오거나 바뀌면 그 시점으로 고친다.
@@ -4479,7 +4479,7 @@ references는 이후 RP에서 반복해서 다시 불러올 가치가 있는 정
 - key_quote: 이후 관계·약속·판단에 의미가 있는 실제 핵심 발언. content 첫 줄은 화자 → 상대: “연속된 실제 원문”이고 다음 줄은 장면 맥락이다. 의역·합성한 문장을 원문 인용으로 만들지 않는다. 상대 미확정은 미확인으로 쓰되 화자나 원문을 확정할 수 없으면 만들지 않는다. 기존 화자·상대·맥락 변경도 신규 직접 RP 근거가 필요하다. 관계 전환·고백·맹세·약속·사과·결별·정체 공개 장면마다 그 장면의 결정적인 실제 대사를 하나씩 남긴다. 장면이 다르면 비슷한 말이라도 각각 남기고 title에 그 장면을 알아볼 말을 넣으며(예: '등대 아래 첫 맹세'), 같은 장면 안의 비슷한 말만 하나로 한다. PC 대사만 모으지 말고 CHAR·NPC가 한 고백·맹세·사과·서신의 결정적 문장도 모은다. 다음 장면에서 인물이 그 말을 기억하고 되받게 하는 것이 목적이다. 원문 대사를 그대로 두는 곳은 key_quote 하나다. 사건에는 결정적 한 마디만, 관계·현재상태에는 짧은 의역이나 '(key_quote: 등대 아래 첫 맹세)'처럼 가리키는 말만 쓴다. key_quote의 keywords에는 인물 이름처럼 거의 매 턴 나오는 말을 넣지 않고, 그 장면을 떠올리게 하는 고유한 말(물건·장소·사건·약속어)을 넣는다.
 
 [증분/보존 규칙]
-- 자료는 한 번 지나간 장면 기록이 아니라 살아 있는 정사 설명이다. 일회성 행동·순간 분위기는 자료로 만들지 않는다. 같은 행동·말·음식·놀이가 여러 장면에서 되풀이되어 인물들 사이의 의식·암호·놀림·반복 농담이 된 것은 other로 남긴다(누가 누구에게, 어떤 때 쓰는지, 원문 표현 그대로). 지금도 되풀이되어 현재상태의 생활의 결에 적어 둔 습관은 여기에 다시 쓰지 않고, 생활의 결에서 빠질 때 other로 옮긴다.
+- 자료는 한 번 지나간 장면 기록이 아니라 살아 있는 정사 설명이다. 일회성 행동·순간 분위기는 자료로 만들지 않는다. 같은 행동·말·음식·놀이가 여러 장면에서 되풀이되어 인물들 사이의 의식·암호·놀림·반복 농담이 된 것은 other로 남긴다(누가 누구에게, 어떤 때 쓰는지, 원문 표현 그대로). 현재상태의 생활의 결에 적어 둔 습관은 여기에 다시 쓰지 않는다.
 - 단순 재언급으로 새 카드를 만들지 않는다.
 - 기존 카드에 실제 정사 속성·상태·공식명·별칭·소유/위치 등 지속 정보가 추가/변경되면 기존 ref를 갱신한다.
 - 추측·소문·거짓말·오해를 객관 자료 설명으로 승격하지 않는다.
@@ -4524,7 +4524,7 @@ fact는 '누가 알고/모르는지가 이후 대사·행동·비밀 유지·오
 나쁜 예: 매 턴 감정, 외형 묘사, 사소한 행동, 날씨, 단순 분위기, 모든 사건 문장.
 새 fact ref는 NEW_FACT_1처럼 NEW_FACT_ 으로 시작한다.
 기존과 같은 정보면 표현이 달라도 기존 ref를 재사용하고 중복 fact를 만들지 않는다.
-- 별개의 독립 사실과 극중에서 내용이 바뀐 정보(비밀번호 변경·계획 수정·거처 이전 등)는 새 fact로 만들되 기존 knows를 복사하지 않는다. 기존 fact를 다른 사실이나 바뀐 내용으로 고쳐 옛 knows를 새 내용에 붙이지 않는다. 바뀐 정보의 새 fact content에는 바뀐 뒤의 내용을 '…로 바뀌었다'처럼 쓰고, 옛 내용은 기존 fact에만 남겨 옛 내용만 아는 인물의 앎이 그대로 유지되게 한다.
+- 별개의 독립 사실과 극중에서 내용이 바뀐 정보(비밀번호 변경·계획 수정·거처 이전 등)는 새 fact로 만들되 기존 knows를 복사하지 않는다. 기존 fact를 다른 사실이나 바뀐 내용으로 고쳐 옛 knows를 새 내용에 붙이지 않는다. 바뀐 정보의 새 fact는 기존 fact와 제목을 달리하고 content에 바뀐 뒤의 내용을 '…로 바뀌었다'처럼 쓰며, 옛 내용은 기존 fact에만 남겨 옛 내용만 아는 인물의 앎이 그대로 유지되게 한다.
 - 기존 fact가 처음부터 잘못 기록된 경우의 정정·철회는 새 fact 추가만으로 처리하지 않는다. 이 응답에는 fact 폐기 계약이 없으므로 인지 편집에서 옛 사실과 인물별 앎을 함께 확인한다. 모순되는 새 fact를 추가해 오류를 숨기지 않는다.
 - 'B가 범인이라는 소문을 들었다'는 'B가 진짜 범인임을 안다'와 다르다. 소문을 접한 사실 자체가 중요하면 별도 사실로 구분하고, 확인되지 않은 진실 fact의 knows/doesNotKnow를 소문만으로 채우지 않는다. 오해의 상세 경위는 사건 기록과 구분한다.
 
@@ -5457,6 +5457,8 @@ function applyObserve(cog,speech,data,rp,cutoff,relationshipRows=[],relationship
           const cr=WishHeld.resolve(liveCog?.heldResolved||[],c.settled,'auto-matched',Date.now());
           if('heldResolved' in staged.cog||cr.length)staged.cog.heldResolved=cr;
           if((liveCog?.rev||0)!==(cog.rev||0))staged.cog.rev=Math.max(staged.cog.rev||0,(liveCog.rev||0)+1);
+          // 인지 넣는 방식 is a setting the user may switch while the run waits; keep the live choice.
+          if(liveCog&&liveCog.selectMode!==undefined)staged.cog.selectMode=liveCog.selectMode;else delete staged.cog.selectMode;
           heldParts.push(a,c);
           if(a.queued.length||c.queued.length){sidecar.queue.A.push(...a.queued);sidecar.queue.C.push(...c.queued);sidecar.rev=(Number(sidecar.rev)||0)+1;sidecar.updatedAt=nowIso();tx.objectStore(APP.runtimeStoreName).put(sidecar);}
         }
@@ -5855,7 +5857,7 @@ USER가 OOC로 요청해 받은 보고서·요약·시간 건너뛰기·'보지 
 - 현재 유효한 특수 능력·제약·변화
 - 진행 중인 상황과 책임. 언젠가 끝나는 약속·예정·목표는 threads가 맡는다.
 - 지금 장면에 영향을 주는 위험의 현재 상황. 그 위험이 앞으로 어떻게 될지와 답이 나오지 않은 수수께끼는 threads가 맡는다.
-- 생활의 결: 마지막 시점 무렵에도 되풀이되는 애정 표현·장난·놀림·단골 푸념, 감각 모티프(늘 나는 향, 부르는 노래, 되풀이되는 말), 기념일과 정해진 일과. 두 번 이상 나왔거나 원문이 '늘·매번'처럼 반복을 밝힌 것만, 누가 누구에게 언제 하는지 짧게 적는다. 부르는 말과 말버릇 자체는 호칭·말투(speech)가 맡는다. PC 쪽 습관은 상대가 알아보고 반응하는 단서로 쓴다. 마지막 시점 무렵에 다시 나오지 않았다는 것만으로 습관이 끝났다고 보지 않는다. 원문이 끝났음을 보여 주면 여기에 두지 않고, 오래 쓰이지 않아 자리를 비워야 할 때는 지금도 유효한 습관으로 references의 other 카드에 둔다.
+- 생활의 결: 마지막 시점에도 이어지는 애정 표현·장난·놀림·단골 푸념, 감각 모티프(늘 나는 향, 부르는 노래, 되풀이되는 말), 기념일과 정해진 일과. 두 번 이상 나왔거나 원문이 '늘·매번'처럼 반복을 밝힌 것만, 누가 누구에게 언제 하는지 짧게 적는다. 부르는 말과 말버릇 자체는 호칭·말투(speech)가 맡는다. PC 쪽 습관은 상대가 알아보고 반응하는 단서로 쓴다. 원문이 그 습관이 끝났음을 보여 줄 때만 여기에 두지 않고, 오래 쓰이지 않아 자리를 비워야 할 때는 references의 other 카드가 지금도 유효한 습관으로 맡는다.
 - 계속 지키는 약속·합의·맹세: 끝나는 때 없이 이어지는 것만, 누가 누구에게 무엇을, 지금 지켜지는지·깨졌는지, 조건. 문구가 중요하면 key_quote를 가리키는 말만 쓰고 원문을 여기 다시 쓰지 않는다.
 - 인물별 지금의 동기·두려움: 인물을 움직이는 바람과 두려움 중 원문에서 밝히거나 행동으로 보여 준 것만. 이루거나 실패하면 끝나는 목표는 threads가, 특정 상대에게 바라는 것·두려워하는 것은 relationships가 맡는다. PC는 USER가 직접 밝힌 것만.
 생활의 결·계속 지키는 약속·동기 세 항목은 매 턴 RP에 들어가므로 합계 약 1,000자 안에서 다음 장면에 다시 쓰일 만한 것부터 남기고, 줄마다 끝에 마지막으로 확인된 시점을 짧게 붙인다(예: '(최근 확인: 5년 후 생일 연회 다음 날)'). 시간을 크게 건너뛴 보고서나 'N년 후' 장면 뒤에는 이 세 항목과 지속 합의를 다시 확인하고, 새 장면·보고서와 다르면 새 것을 쓴다(예: 예전 합의 '외출 시 호위 동행'이 새 장면에서 '주 1회 변장 호위'로 바뀌었으면 새 것).
@@ -6002,7 +6004,7 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
 - 객관적으로 확정된 최신 속성·기능·소유·위치·상태를 content에 정리한다.
 - 추측·소문·거짓말·오해를 객관 자료로 승격하지 않는다.
 - 캐릭터 설정에 있는 인물의 설정은 references로 옮기지 않는다. 인물 목록과 누가 무엇을 아는지는 people/facts 영역이다.
-- 한 번만 있었던 장면 행동은 references로 만들지 않는다. 같은 행동·말·음식·놀이가 여러 장면에서 되풀이되어 인물들 사이의 의식·암호·놀림·반복 농담이 된 것은 other로 남긴다(누가 누구에게, 어떤 때 쓰는지, 원문 표현 그대로). 마지막 시점에도 되풀이되어 stateSections의 생활의 결에 둔 습관은 여기에 다시 쓰지 않고, 그 무렵에는 더 이상 나오지 않는 습관·모티프는 other로 남긴다.
+- 한 번만 있었던 장면 행동은 references로 만들지 않는다. 같은 행동·말·음식·놀이가 여러 장면에서 되풀이되어 인물들 사이의 의식·암호·놀림·반복 농담이 된 것은 other로 남긴다(누가 누구에게, 어떤 때 쓰는지, 원문 표현 그대로). stateSections의 생활의 결에 둔 습관은 여기에 다시 쓰지 않는다.
 - keywords는 이후 자동 호출에 실제 도움이 되는 명칭·별칭·희귀 핵심어로 구성한다.
 
 ━━━━━━━━━━━━━━━━━━━━
@@ -9939,10 +9941,12 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     const QUOTES={'“':'"','”':'"','„':'"','‟':'"','″':'"','«':'"','»':'"','‘':"'",'’':"'",'‚':"'",'‛':"'",'′':"'"},MAX_HITS=20;
     function project(s){let out='',space=true;const map=[];for(let i=0;i<s.length;i++){const c=s[i];if('*_~`'.includes(c))continue;if(/\s/.test(c)){if(!space){out+=' ';map.push(i);space=true;}continue;}out+=QUOTES[c]||c;map.push(i);space=false;}return {out,map};}
     const needle=quote=>project(String(quote||'').normalize('NFC')).out.trim().replace(/^["'「『]+|["'」』]+$/g,'').trim();
-    // Exact words first; only then a quote with an ellipsis, its pieces in order within the same message (gaps up to 300 characters).
-    function locate(text,q){
-      const v=project(text),at=v.out.indexOf(q);
+    // pass 'exact': the words as they are; 'loose': a quote with an ellipsis, its pieces in order within the same message (gaps up
+    // to 300 characters); omitted: exact, else loose. search() runs the loose pass only when no message has the exact words.
+    function locate(text,q,pass){
+      const v=project(text),at=pass==='loose'?-1:v.out.indexOf(q);
       if(at>=0)return {start:v.map[at],end:v.map[at+q.length-1]+1,loose:false};
+      if(pass==='exact')return null;
       const parts=q.split(/…|\.{3,}/).map(x=>x.trim()).filter(x=>x.length>=2);
       if(parts.length<2||parts.join('').length<4)return null;
       let from=0,first=-1;for(const part of parts){const i=v.out.indexOf(part,from);if(i<0||(first>=0&&i-from>300))return null;if(first<0)first=i;from=i+part.length;}
@@ -9974,12 +9978,18 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
       const label=i=>(list[i].role==='user'?'USER':'AI')+' · '+fmtTurn(turns[i])+' · 메시지 '+shortId(list[i].id);
       // Quick skip: a message whose raw text lacks the quote's longest word (markdown marks removed) cannot match.
       const word=(q.match(/[\p{L}\p{N}]+/gu)||[]).reduce((a,b)=>b.length>a.length?b:a,'');
-      const scan=role=>list.flatMap((m,i)=>{if((role&&m.role!==role)||!m.raw.replace(/[*_~`]/g,'').includes(word))return [];const at=locate(textOf(m),q);return at?[{i,...at}]:[];});
-      // The quote's role is searched first; a line the AI labeled by its speaker (a USER character narrated in an AI reply) is then looked for on both sides.
-      let hits=t.role?scan(t.role):[];if(!hits.length)hits=scan('');
+      const scan=(role,pass)=>list.flatMap((m,i)=>{if((role&&m.role!==role)||!m.raw.replace(/[*_~`]/g,'').includes(word))return [];const at=locate(textOf(m),q,pass);return at?[{i,...at}]:[];});
+      // The exact words anywhere come before a match across the quote's ellipsis. In each pass the quote's role is searched first; a line
+      // the AI labeled by its speaker (a USER character narrated in an AI reply) is then looked for on both sides.
+      let hits=[];for(const pass of ['exact','loose']){hits=t.role?scan(t.role,pass):[];if(!hits.length)hits=scan('',pass);if(hits.length)break;}
       // Nearest the point the item was written: at or before its anchor (newest first), then after it; without an anchor, oldest first.
       const order=anchorAt<0?hits:[...hits.filter(h=>h.i<=anchorAt).reverse(),...hits.filter(h=>h.i>anchorAt)];
-      const view=h=>({id:list[h.i].id,raw:list[h.i].raw,text:textOf(list[h.i]),start:h.start,end:h.end,label:label(h.i)});
+      // Per hit: a thread or relationship is written at its anchor, so a later message cannot be its source; a lore card's anchor is the
+      // quoted message itself.
+      const atAnchor=order.some(h=>h.i===anchorAt),before=order.some(h=>h.i<=anchorAt);
+      const hitNote=h=>anchorAt<0||h.i===anchorAt?'':t.exact?(atAnchor?'카드가 가리키는 원문 메시지가 아니라 같은 문장이 있는 다른 메시지입니다.':'카드가 가리키는 원문 메시지에는 이 문장이 없어 같은 문장이 있는 다른 메시지를 보여 드립니다.')
+        :h.i<anchorAt?'':before?'이 메시지는 이 기록이 만들어진 뒤의 것이라 근거 메시지가 아닙니다.':'이 문장은 이 기록이 만들어진 뒤의 메시지에서만 찾았습니다. 원래 근거 메시지는 고쳐 쓰였거나 바뀌었을 수 있습니다.';
+      const view=h=>({id:list[h.i].id,raw:list[h.i].raw,text:textOf(list[h.i]),start:h.start,end:h.end,label:label(h.i),note:hitNote(h)});
       if(!order.length){
         if(anchorAt<0){ui.toast(t.anchor?'이 기록을 만든 대화가 현재 분기에 없고, 근거 문장도 현재 대화에서 찾지 못했습니다. 재생성·삭제·편집으로 바뀌었을 수 있습니다.':'근거 문장을 현재 대화에서 찾지 못했습니다. 요약하거나 고쳐 쓴 인용이거나 다른 방에서 복사해 온 기록일 수 있습니다.','info',6000);return;}
         const shown=view({i:anchorAt,start:0,end:0});
@@ -9995,11 +10005,19 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     const fmtTurn=n=>n?n.toLocaleString('ko-KR')+'턴째':'시작 메시지';
     const fmtCount=n=>n.toLocaleString('ko-KR');
     function move(arg,ui){const [id,dir]=String(arg).split('|'),d=ui.dlg(id);if(!d?.hits?.length)return;d.pos=(d.pos+Number(dir)+d.hits.length)%d.hits.length;d.text=d.hits[d.pos].text;}
+    // The outline on Crack's message element: the element's own values are kept from the first mark and put back once.
+    const marks=new WeakMap();
+    function mark(el){
+      const st=el.style;let m=marks.get(el);
+      if(m)clearTimeout(m.timer);else{m={outline:st.outline,offset:st.outlineOffset};marks.set(el,m);}
+      st.outline='2px solid #e0a43a';st.outlineOffset='4px';
+      m.timer=setTimeout(()=>{st.outline=m.outline;st.outlineOffset=m.offset;marks.delete(el);},2400);
+    }
     function jump(id,ui){
       const d=ui.dlg(id),h=d?.hits?.[d.pos];if(!h)return;const el=findChatMessageElement(h.id,h.raw);
-      if(!el){ui.toast('이 메시지는 지금 채팅 화면에 불러와 있지 않습니다. 채팅을 위로 올려 그 부분을 불러온 뒤 다시 눌러 주세요.','info',5200);return;}
+      if(!el){ui.toast('채팅 화면에서 이 메시지의 위치를 찾지 못했습니다. 아직 불러오지 않은 부분이면 채팅을 위로 올려 불러온 뒤 다시 눌러 주세요. 아주 짧은 메시지나 같은 내용이 여러 번 나온 메시지는 위치를 정하지 못할 수 있습니다.','info',6000);return;}
       ui.closeSheet(id,true);ui.close();
-      setTimeout(()=>{if(!el.isConnected)return;el.scrollIntoView({block:'center',behavior:'smooth'});const st=el.style,prev=[st.outline,st.outlineOffset];st.outline='2px solid #e0a43a';st.outlineOffset='4px';setTimeout(()=>{st.outline=prev[0];st.outlineOffset=prev[1];},2400);},260);
+      setTimeout(()=>{if(!el.isConnected)return;el.scrollIntoView({block:'center',behavior:'smooth'});mark(el);},260);
     }
     return {find,move,jump,loreQuote,locate,needle};
   })();
@@ -11794,7 +11812,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
     const epoch=()=>localRestoreEpoch;
     const busy=()=>active||aiUpdateRunning||automaticMemoryJob||automaticLoreJob||memoryImportRunning||restored()||R31.busy()||NativeBundles.busy();
     async function snapshot(r){await loadLorePackCache(true);return {c:await bridge().snapshotRaw(apiChatIdOf(r)),ps:visibleLorePacksForRoom(r).filter(p=>(r.activeLorePackIds||[]).includes(p.scopeId))};}
-    function basis(r,c,ps){return JSON.stringify({room:{slots:r.slots,unified:r.unified,autoMemory:r.autoMemory,speech:r.speechRelations,relationships:r.relationships,relationshipBaseline:r.relationshipBaseline,relationshipConfig:r.relationshipConfig,loreAutomation:r.loreAutomation,active:r.activeLorePackIds,pinned:r.autoLogPinnedKeys,excluded:r.autoLogExcludedKeys,selected:r.manualLogSelectedKeys,threads:r.threads?.length?r.threads:undefined,epoch:r._epoch},cog:{actors:c.actors,facts:c.facts,state:c.state,editRev:c.editRev,lastAnalysis:c.lastAnalysis,rev:c.rev},packs:ps.map(p=>[p.scopeId,lorePackStorageFingerprint(p)])});}
+    function basis(r,c,ps){return JSON.stringify({room:{slots:r.slots,unified:r.unified,autoMemory:r.autoMemory,speech:r.speechRelations,relationships:r.relationships,relationshipBaseline:r.relationshipBaseline,relationshipConfig:r.relationshipConfig,loreAutomation:r.loreAutomation,active:r.activeLorePackIds,pinned:r.autoLogPinnedKeys,excluded:r.autoLogExcludedKeys,selected:r.manualLogSelectedKeys,threads:r.threads?.length?r.threads:undefined,epoch:r._epoch},cog:{actors:c.actors,facts:c.facts,state:c.state,editRev:c.editRev,lastAnalysis:c.lastAnalysis,rev:WishHeld.restSig(c)},packs:ps.map(p=>[p.scopeId,lorePackStorageFingerprint(p)])});}
     async function source(r){const s=await prepareBulkSource(r,null,null),rows=R31.units(s);if(!rows.length)throw Error('내보낼 확정 대화가 없습니다.');return {...s,rows,hash:await sha256Hex(new TextEncoder().encode(JSON.stringify(bulkSourceManifest(s.messages))))};}
     // Memory files: version 2 adds the 남은 일 list (the TXT export writes it); version 1 is still read as before. People: version 1.
     const memoryV2=(scope,version)=>scope==='memory'&&version===2,areaKeys=(scope,version)=>memoryV2(scope,version)?[...fields.memory,'threads']:fields[scope];
@@ -13229,6 +13247,8 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     // One turn includes every retry of the same persisted USER. Expire at the next USER.
     return Math.max(0,frame.userIds.length-(index+1)-1+(anticipateUser?1:0));
   }
+  // The recent messages the recall reads between sends, from a newest-first frame (also 인지 골라서's scene outside a send).
+  function recentSceneText(frame){return frame.messages.slice(0,APP.autoScanMessageLimit).map(m=>stripAutomationNoise(messageTextOf(m),true)).reverse().join('\n\n').slice(-12000);}
   async function reconcileStableCarrier(room,reason='update',knownFrame=null,control=null) {
     control?.assertActive?.();
     if(reason==='poll'&&WishDisplayDrain.pending(apiChatIdOf(room)))return {deferred:true};
@@ -13283,9 +13303,11 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     // USER being rerolled and the carrier AI answer, never the answer it discards. Other reasons (poll, update, start) read the
     // recent messages the recall keeps between sends (autoRecallContextText, set below from this same frame).
     const sceneOf=m=>m?recallSceneText(stripOurContextBlock(messageTextOf(m)).text):'';
-    const sendReason=reason==='before-send'||reason==='before-reroll',recentText=sendReason?'':frame.messages.slice(0,APP.autoScanMessageLimit).map(m=>stripAutomationNoise(messageTextOf(m),true)).reverse().join('\n\n').slice(-12000);
+    const sendReason=reason==='before-send'||reason==='before-reroll',recentText=sendReason?'':recentSceneText(frame);
     const cognitionScene=reason==='before-send'?sceneOf(frame.latest):reason==='before-reroll'?[sceneOf(frame.carrier),String(messageTextOf(frame.messages.find(m=>messageRoleOf(m)==='user'&&String(messageIdOf(m)||'')===frame.latestUserId))||'')].filter(x=>x.trim()).join('\n\n'):recentText;
-    const cognition=await bridge?.getStableContext?.(apiChatIdOf(room),frame.stable,{useInput:reason==='before-send'||reason==='before-reroll',overrides:cognitionOverrides,fullFit:true,sceneText:cognitionScene,sticky:p.cognitionSticky||{}});
+    // A reroll writes each fact as the send it replaces did: it reads the sticky map that send read (cognitionStickySend).
+    const cognitionStickyIn=reason==='before-reroll'&&p.cognitionStickySend?p.cognitionStickySend:(p.cognitionSticky||{});
+    const cognition=await bridge?.getStableContext?.(apiChatIdOf(room),frame.stable,{useInput:reason==='before-send'||reason==='before-reroll',overrides:cognitionOverrides,fullFit:true,sceneText:cognitionScene,sticky:cognitionStickyIn});
     if((reason==='before-send'||reason==='before-reroll')&&(cognitionOverrides.include.length||cognitionOverrides.exclude.length))normalizePendingCognitionOverrides(p).usedAt=Date.now();
     if(String((p.items||[]).find(i=>i.group==='cognition'||i.slotId==='__cognition')?.content||'')!==String(cognition?.text||''))p.recallNeedsRefresh=true;
     p.items=(p.items||[]).filter(i=>i.group!=='cognition'&&i.slotId!=='__cognition');
@@ -13295,10 +13317,10 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       // Facts no longer in the context drop out of the sticky map.
       const live=new Set(cognition.includedIds||[]),sticky={};
       for(const [fid,n] of Object.entries(p.cognitionSticky||{})){const left=Number(n)-(reason==='before-send'?1:0);if(live.has(fid)&&left>0)sticky[fid]=left;}
-      if(reason==='before-send')for(const fid of cognition.pick.fresh)sticky[fid]=2;
+      if(reason==='before-send'){for(const fid of cognition.pick.fresh)sticky[fid]=2;p.cognitionStickySend={...(p.cognitionSticky||{})};}
       if(Object.keys(sticky).length)p.cognitionSticky=sticky;else delete p.cognitionSticky;
       p.cognitionPick={full:cognition.pick.full,brief:cognition.pick.brief,reasons:cognition.reasons||{}};
-    }else{delete p.cognitionPick;if(cognition)delete p.cognitionSticky;}
+    }else{delete p.cognitionPick;if(cognition){delete p.cognitionSticky;delete p.cognitionStickySend;}}
     if(cognition?.text)p.items.unshift({slotId:'__cognition',title:'인물별 인지 상태',group:'cognition',content:cognition.text,totalTurns:0,usedTurns:0,autoType:'cognition',turnStartUserId:frame.latestUserId,manualTurnOverride:cognitionOverrides.include.length>0});
     if(reason==='before-send'||reason==='before-reroll'){
       const latestUserText=frame.stable.find(message=>messageRoleOf(message)==='user');
@@ -13439,7 +13461,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     const all=await fetchAllRoomMessages(apiChatIdOf(room)),frame=stableFrame([...all].reverse());
     await validateMemoryBranch(room,frame);
     const text=[...frame.stable].reverse().map(m=>stripAutomationNoise(messageTextOf(m))).join('\n');
-    room.autoRecallContextText=frame.messages.slice(0,APP.autoScanMessageLimit).map(m=>stripAutomationNoise(messageTextOf(m),true)).reverse().join('\n\n').slice(-12000);
+    room.autoRecallContextText=recentSceneText(frame);
     const items=safeMemoryItems(room,snapshotSelectedItems(room,text));
     if(!items.length)throw new Error('아직 주입할 기억이 없습니다. 몇 턴 진행하거나 보조 AI를 연결해 기억을 만든 뒤 시작해 주세요.');
     if(!filterItemsByInjectionCadence(room,items,0).length)throw new Error('현재 주입 설정에서 켜진 항목이 없습니다. 주입 설정 또는 선택 항목을 확인해 주세요.');
@@ -14434,7 +14456,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     if(!present.size)for(const a of actors)if(a.isPlayer)focus.add(a.id);
     return {focus,present,mentioned};
   }
-  // pick (골라서): {sticky:{factId:remainingSends}}. userText is then the scene; a fact with no reason to be in full here and
+  // pick (골라서): {sticky:{factId:remainingSends},draft}. userText is then the scene with the draft; a fact with no reason to be in full here and
   // not kept by sticky gets one line (title, knowledge, concealment boundary). Null keeps the original output.
   function buildContext(room, state, userText, budget = 1000, pendingTurns = 0, contextOverrides = {}, pick = null) {
     const value=room, mode=normalizeCognitionContextMode(value.contextMode),expression=SecondaryRebuild.cognitionProjector(value.id);
@@ -14445,6 +14467,9 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     const name = aid => actors.find(a => a.id === aid)?.name || '';
     const knownIds = new Set(actors.map(a => a.id));
     const {focus,present,mentioned}=cognitionFocusActorIds(actors,state,userText);
+    // 골라서: the scene decides why a fact is in full; who is listed is decided as in 전부 (present, the draft and the PC,
+    // everyone when that is empty), plus the people the scene names.
+    const shown=pick?cognitionFocusActorIds(actors,state,pick.draft||'').focus:focus;
     const recentFacts=cognitionRecentFactIds(value,3), reviewFacts=cognitionReviewFacts(value);
     const header = pendingTurns
       ? `[인지 참고 — 최근 ${pendingTurns}턴 분석 직전 기준]
@@ -14491,7 +14516,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       }else if(!reasons.length){suppressed.push(f.id);continue;}
 
       const displayIds=new Set();
-      if(mode==='all'&&focus.size===0)for(const a of actors)displayIds.add(a.id);else for(const id of focus)displayIds.add(id);
+      if(mode==='all'&&shown.size===0)for(const a of actors)displayIds.add(a.id);else for(const id of new Set([...shown,...focus]))displayIds.add(id);
       for(const c of relevantConceals){displayIds.add(c.holderId);displayIds.add(c.targetId);}
       for(const r of factReviews){for(const id of [r?.payload?.actor_id,r?.payload?.source_actor_id,r?.payload?.holder_id,r?.payload?.target_id])if(id&&knownIds.has(id))displayIds.add(id);}
       if(!displayIds.size&&(query.strong||pinned||recent||factReviews.length)){
@@ -14631,7 +14656,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       if(!safe){scheduleCognitionCatchup(String(rid),800);return null;}
       // 골라서 reads the scene (options.sceneText: the same turn the memory recall uses) with the draft; 전부 keeps the draft alone.
       const draft=options.useInput===false?'':(contextInput.get(String(rid))||''),pick=options.fullFit&&normalizeCognitionSelectMode(value.selectMode)==='pick';
-      const ctx=options.fullFit?buildContext({...value,contextMode:'all'},value.state,pick?[String(options.sceneText||''),draft].filter(x=>x.trim()).join('\n\n'):draft,Number.MAX_SAFE_INTEGER,cognitionPendingCount(value),options.overrides||{},pick?{sticky:options.sticky||{}}:null):cognitionContext(value,options?.useInput===false?'':undefined,options?.overrides||{});return {text:ctx.text,status:'확정 대화 기준 인지',updatedAt:Date.now(),includedIds:ctx.included||[],reasons:ctx.reasons||{},...(ctx.pick?{pick:ctx.pick}:{})};
+      const ctx=options.fullFit?buildContext({...value,contextMode:'all'},value.state,pick?[String(options.sceneText||''),draft].filter(x=>x.trim()).join('\n\n'):draft,Number.MAX_SAFE_INTEGER,cognitionPendingCount(value),options.overrides||{},pick?{sticky:options.sticky||{},draft}:null):cognitionContext(value,options?.useInput===false?'':undefined,options?.overrides||{});return {text:ctx.text,status:'확정 대화 기준 인지',updatedAt:Date.now(),includedIds:ctx.included||[],reasons:ctx.reasons||{},...(ctx.pick?{pick:ctx.pick}:{})};
     },
     async invalidateRuntime(rid){rid=String(rid);contextInput.delete(rid);contextCache.delete(rid);passiveSendKinds.delete(rid);publishContext(rid,'','기록 새 기준 대기');},
     // Cognition runs go through U3 and are not tracked here, so the legacy isBusy() guards never block (unchanged).
@@ -14639,8 +14664,11 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     async snapshotRaw(rid){ return clone(await readRoom(String(rid))); },
     async getView(rid,options={}){
       const value=await readRoom(String(rid)),ctx=cognitionContext(value,options?.useInput===false?'':undefined,options?.overrides||{});
-      // 골라서 without an armed injection: the panel shows which facts would go in full or as one line (no scene, no sticky).
-      const pickCtx=normalizeCognitionSelectMode(value.selectMode)==='pick'&&!ctx.waiting?buildContext({...value,contextMode:'all'},value.state,options?.useInput===false?'':(contextInput.get(String(rid))||''),Number.MAX_SAFE_INTEGER,cognitionPendingCount(value),options?.overrides||{},{sticky:{}}):null;
+      // 골라서 without an armed injection: the panel shows which facts would go in full or as one line (no sticky). Like 'start'
+      // it reads the recent messages as the scene: from the panel's last read of the conversation, else the text the recall kept.
+      const live=String(apiChatIdOf(state.currentRoom)||'')===String(rid)?state.currentRoom:null,frame=live&&WUITurnSnapshots.get(live)?.frame,draft=options?.useInput===false?'':(contextInput.get(String(rid))||'');
+      const scene=options?.sceneText??(frame?recentSceneText(frame):live?.autoRecallContextText??'');
+      const pickCtx=normalizeCognitionSelectMode(value.selectMode)==='pick'&&!ctx.waiting?buildContext({...value,contextMode:'all'},value.state,[String(scene||''),draft].filter(x=>x.trim()).join('\n\n'),Number.MAX_SAFE_INTEGER,cognitionPendingCount(value),options?.overrides||{},{sticky:{},draft}):null;
       return {...roomAt(value),contextMode:normalizeCognitionContextMode(value.contextMode),effectiveAutoEvery:effectiveCognitionAutoEvery(value),contextDiagnostics:{mode:ctx.mode,included:ctx.included.length,includedIds:ctx.included,dropped:ctx.dropped.length,droppedIds:ctx.dropped,compacted:ctx.compacted?.length||0,suppressed:ctx.suppressed?.length||0,suppressedIds:ctx.suppressed||[],selected:ctx.selected?.length||0,reasons:ctx.reasons||{},waiting:!!ctx.waiting,...(pickCtx?{pick:{full:pickCtx.pick.full,brief:pickCtx.pick.brief,reasons:pickCtx.reasons}}:{})}};
     },
     getSettings(){
@@ -15087,7 +15115,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       if(unstartedRooms.has(room))void saveRoom(room).catch(e=>console.warn('[Wish] 첫 전송 방 저장 실패',e));
       return result;
     }
-    const socket=this,currentRoom=state.currentRoom,sendRoute=state.routeEpoch,sendRestore=localRestoreEpoch;let replay=null,sendAttempted=false,overrideUsedAt=null;
+    const socket=this,currentRoom=state.currentRoom,sendRoute=state.routeEpoch,sendRestore=localRestoreEpoch;let replay=null,sendAttempted=false,overrideUsedAt=null,stickyBefore=null;
     const previous=sendPreparationQueues.get(rid)||Promise.resolve();
     const task=previous.catch(()=>{}).then(async()=>{
       const controller=new AbortController(),deadline=setTimeout(()=>controller.abort(),90000);
@@ -15112,6 +15140,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       WishDisplayDrain.cancel(rid);
       if(!replay&&currentRoom?.pending){
         overrideUsedAt=Number(currentRoom.pending.cognitionOverrides?.usedAt||0);
+        {const p=currentRoom.pending;stickyBefore={armedAt:Number(p.armedAt||0),session:Number(p.sessionStartedAt||0),sticky:p.cognitionSticky&&{...p.cognitionSticky},send:p.cognitionStickySend&&{...p.cognitionStickySend}};}
         const notice=createSendPreparationNotice(()=>!controller.signal.aborted&&rid===currentChat()&&sendRoute===state.routeEpoch&&sendRestore===localRestoreEpoch&&currentRoom===state.currentRoom);
         let prepared;
         try{prepared=await waitForWishOperation(withCarrierOperation(currentRoom,()=>{assertActive();return reconcileStableCarrier(currentRoom,parsed.event==='send'?'before-send':'before-reroll',null,{assertActive,onProgress:notice.stage});},{signal:controller.signal}),controller.signal);assertActive();}
@@ -15148,7 +15177,15 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     }).catch(error=>{
   if(replay)ExternalReplay.finish(rid,replay.token,'send-failed');
   const ov=currentRoom?.pending?.cognitionOverrides;
-  if(!sendAttempted&&overrideUsedAt!==null&&ov&&Number(ov.usedAt||0)!==overrideUsedAt){ov.usedAt=overrideUsedAt;void saveRoom(currentRoom).catch(e=>console.warn('[Wish] 인지 수동 선택 사용 표시 복구 저장 실패',e));}
+  let restoreSave=false;
+  if(!sendAttempted&&overrideUsedAt!==null&&ov&&Number(ov.usedAt||0)!==overrideUsedAt){ov.usedAt=overrideUsedAt;restoreSave=true;}
+  // A send that never went out does not count toward 인지 골라서's two full sends. The carrier sync replaces the pending object,
+  // so the same injection is recognized by when it was armed.
+  const sp=currentRoom?.pending;
+  if(!sendAttempted&&stickyBefore&&sp&&Number(sp.armedAt||0)===stickyBefore.armedAt&&Number(sp.sessionStartedAt||0)===stickyBefore.session){
+    for(const [key,value] of [['cognitionSticky',stickyBefore.sticky],['cognitionStickySend',stickyBefore.send]]){if(JSON.stringify(sp[key])===JSON.stringify(value))continue;if(value)sp[key]=value;else delete sp[key];restoreSave=true;}
+  }
+  if(restoreSave)void saveRoom(currentRoom).catch(e=>console.warn('[Wish] 인지 전송 표시 복구 저장 실패',e));
   const draft=parsed.payload?.message??parsed.payload?.content??parsed.payload?.text;
   let kept=false,restored=false;
   if(parsed.event==='send'&&typeof draft==='string'){
@@ -17667,12 +17704,12 @@ diff:`<div class="m3-shell">
       const items = V.inj.items.filter(i => !i.off);
       return sheet(d, { title: V.inj.verified ? '서버 저장 확인된 구성' : '주입 후보 · 확인 대기', desc: `${fmt(V.inj.total)} / ${fmt(V.inj.max)}자 · 카드 ${items.length}개 · 위에서부터 순서대로`, wide: true, body: `${capMeter()}<div class="m3-topgap">${items.map((i, n) => card('pv-' + (i.rowKey??i.key), `<span class="m3-pvn">${String(n + 1).padStart(2, '0')}</span>${esc(i.title)}`, `${fmt(i.size)}자${!i.why||i.why==='켜져 있으면 계속 포함'?'':' · '+esc(i.why)}`, i.content ? `<pre class="m3-block">${esc(i.content)}</pre>` : '<p class="m3-muted">본문 미리보기 없음</p>', '', kind(i.label || KLABEL[i.kind] || '', COL[i.kind] || COL.guide), COL[i.kind] || COL.guide)).join('') || empty('주입할 항목이 없습니다.')}</div>`, foot: `${btn('전체 원문', 'viewer', { cls: 'quiet mini', icon: 'eye' })}${SP}${closeBtn(d)}` });
     },
-    /* props: { title, quote, hits:[{id,raw,text,start,end,label}], total, pos, text, note } — 원문 찾기 결과 */
+    /* props: { title, quote, hits:[{id,raw,text,start,end,label,note}], total, pos, text, note } — 원문 찾기 결과 */
     source(d) {
-      const h = d.hits[d.pos] || d.hits[0], n = d.hits.length, pad = h.end > h.start ? 160 : 320, a = Math.max(0, h.start - pad), b = Math.min(h.text.length, (h.end > h.start ? h.end : 0) + pad);
+      const h = d.hits[d.pos] || d.hits[0], n = d.hits.length, note = [d.note, h.note].filter(Boolean).join(' '), pad = h.end > h.start ? 160 : 320, a = Math.max(0, h.start - pad), b = Math.min(h.text.length, (h.end > h.start ? h.end : 0) + pad);
       const marked = (from, to) => from > h.start || to < h.end || h.end <= h.start ? esc(h.text.slice(from, to)) : esc(h.text.slice(from, h.start)) + `<mark class="m3-src-mark">${esc(h.text.slice(h.start, h.end))}</mark>` + esc(h.text.slice(h.end, to));
       const nav = n > 1 ? `<div class="m3-row m3-sp m3-topgap">${btn('이전', 'srcMove', { arg: d.id + '|-1', cls: 'quiet mini' })}<span class="m3-muted">${d.pos + 1} / ${n}${d.total > n ? ' · 전체 ' + fmt(d.total) + '곳' : ''}</span>${btn('다음', 'srcMove', { arg: d.id + '|1', cls: 'quiet mini' })}</div>` : '';
-      return sheet(d, { title: esc(d.title), desc: esc(h.label), wide: true, body: `${d.note ? `<div class="m3-status m3-bottomgap">${ic('info')}<span>${esc(d.note)}</span></div>` : ''}<p class="m3-muted wp-th-pre">근거 · ${esc(d.quote)}</p>${nav}<p class="wp-th-pre m3-topgap">${a > 0 ? '…' : ''}${marked(a, b)}${b < h.text.length ? '…' : ''}</p>${fold('src-full-' + d.id, '메시지 전체 · ' + fmt(h.text.length) + '자', `<pre class="m3-block">${marked(0, h.text.length)}</pre>`)}`, foot: `${btn('복사', 'copyText', { arg: d.id, cls: 'mini', icon: 'copy' })}${SP}${btn('채팅에서 보기', 'srcJump', { arg: d.id, cls: 'mini', icon: 'eye' })}${closeBtn(d)}` });
+      return sheet(d, { title: esc(d.title), desc: esc(h.label), wide: true, body: `${note ? `<div class="m3-status m3-bottomgap">${ic('info')}<span>${esc(note)}</span></div>` : ''}<p class="m3-muted wp-th-pre">근거 · ${esc(d.quote)}</p>${nav}<p class="wp-th-pre m3-topgap">${a > 0 ? '…' : ''}${marked(a, b)}${b < h.text.length ? '…' : ''}</p>${fold('src-full-' + d.id, '메시지 전체 · ' + fmt(h.text.length) + '자', `<pre class="m3-block">${marked(0, h.text.length)}</pre>`)}`, foot: `${btn('복사', 'copyText', { arg: d.id, cls: 'mini', icon: 'copy' })}${SP}${btn('채팅에서 보기', 'srcJump', { arg: d.id, cls: 'mini', icon: 'eye' })}${closeBtn(d)}` });
     },
     /* props: { text, desc } */
     viewer(d) { return sheet(d, { title: d.title || (d.candidate ? 'Wish 주입 후보 원문' : '이 메시지에 들어간 Wish 주입'), desc: esc(d.desc || `${fmt(String(d.text || '').length)}자`), wide: true, body: `${d.plain?'':`<div class="m3-status m3-ok m3-bottomgap">${ic('check')}<span>${d.candidate?'갱신 전 후보입니다. 한도 선별과 서버 확인 뒤 실제 주입량이 확정됩니다.':'최신 AI 답변은 건드리지 않고, 그 바로 이전 AI 답변 뒤에 숨겨 붙인 내용입니다. 사용자에게는 보이지 않습니다.'}</span></div>`}<pre class="m3-block tall">${esc(d.text || '')}</pre>`, foot: `${btn('복사', 'copyText', { arg: d.id, cls: 'mini', icon: 'copy' })}${SP}${closeBtn(d)}` }); },
@@ -18479,6 +18516,8 @@ async function WUIRefreshTurnCount(room, force=false, knownHead=null) {
    if(ExternalReplay.changed(rid,replayEpoch)||backgroundWorkPending(rid)||state.currentRoom!==room || route!==state.routeEpoch || epoch!==localRestoreEpoch || String(apiChatIdOf(room)||'')!==rid)return;
    snapshot.headKey=headKey||JSON.stringify(sourceManifestOf([...messages].reverse().slice(0,50)));
    snapshot.frame=stableFrame([...messages].reverse());snapshot.epoch=epoch;snapshot.error='';U3.updateCounts(room,snapshot.frame);U3.observeFrame(room,snapshot.frame);
+   // 인지 골라서 without an armed injection previews from this read (getView); show the preview once the read lands.
+   if(!room.pending&&state.v2Cognition?.selectMode==='pick'&&String(state.v2Cognition?.id||'')===rid)try{const seq=++v2CognitionViewSequence,cog=await cogBridge()?.getView?.(rid);if(seq===v2CognitionViewSequence&&state.currentRoom===room&&route===state.routeEpoch&&epoch===localRestoreEpoch&&String(cog?.id||'')===rid){state.v2Cognition=cog;state.v2CognitionRev=Number(cog.rev||0);}}catch{}
   } catch(e) { if(isWishHistoryStale(e)||state.currentRoom!==room||route!==state.routeEpoch)return; WLOG.fail('턴 수 조회',e,{stage:'완료 턴 확인'});snapshot.error='턴 수 조회 실패 · 설정의 실패·주의 기록에서 원인과 조치를 확인하세요.'; }
   finally { if(state.currentRoom===room)renderModalIfIdle(); }
  })();
