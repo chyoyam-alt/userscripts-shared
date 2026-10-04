@@ -7165,7 +7165,7 @@ function remapLogSelectionKeysByPairs(room,pairs,newBlocks){
 
 1. 코드 실행(Python)으로 ZIP을 푼다. 코드 실행을 쓸 수 없으면 아무것도 만들지 말고 "코드 도구 없음"이라고만 답한다. 파일 순서와 N은 내용의 "[RP k/N" 줄로 정한다.
 2. 1번 파일의 지침 부분("[RP 1/N" 줄 앞까지)과 파일 끝 확인 블록을 1만 자씩 끝까지 출력해 읽는다. 다른 파일의 지침은 같으니 건너뛴다. 결과 JSON의 최상위 칸(format·version·source)과 영역 이름은 그 지침과 [출력 스키마]를 따른다.
-3. 모든 파일의 RP 원문을 순서대로 이어서 약 10만 자씩 구간으로 나눈다. 구간 경계는 "[완료 RP n]" 줄 앞에서 자른다. 전체 구간 수를 T라 하고 처음에 알려 준다. 한 턴에 한 구간만 처리한다. 그 구간을 1만 자씩 순서대로 전부 출력해 네가 직접 읽는다. 정규식·키워드 검색으로 항목을 뽑지 않는다.
+3. 모든 파일의 RP 원문을 순서대로 이어서 약 13만 자씩 구간으로 나눈다. 구간 경계는 "[완료 RP n]" 줄 앞에서 자른다. 전체 구간 수를 T라 하고 처음에 알려 준다. 한 턴에 한 구간만 처리한다. 그 구간을 1만 자씩 순서대로 전부 출력해 네가 직접 읽는다. 정규식·키워드 검색으로 항목을 뽑지 않는다.
 4. 구간마다 결과를 /mnt/data/wrmc/part_NN.json에 저장한다. [출력 스키마]에 있는 영역만, 같은 이름 칸 모양 그대로 쓴다. 관계 변화는 메모(누가→누구, 무엇이 바뀌었나, 원문 인용 1개)로 따로 적고, 각 항목의 위치는 "파일k-RPn"으로 적어 둔다.
 5. 무엇을 남기나:
 - 사건: 같은 시간·장소에서 이어지는 한 흐름을 사건 하나로 쓴다. 3~6문장(누가·어디서·무엇을·왜·결과)으로 쓰고, 장면을 바꾼 한 마디나 몸짓이 원문에 있으면 함께 남긴다. 날짜는 원문에 적힌 대로 쓴다. 한 답에 맞추려고 줄이지 않는다. "생략·등등·이하 동일"을 쓰지 않는다.
@@ -14880,13 +14880,9 @@ html.rpcm-mobile-keyboard-open #wish-rp-root{top:var(--rpcm-vv-top,0px);bottom:a
 .m3-external-menuhead{padding:10px 11px 12px;border-bottom:1px solid var(--m3-line2);margin-bottom:5px}
 .m3-external-menuhead b{display:block;font-size:12px;font-weight:600}
 .m3-external-menuhead small{display:block;font-size:11px;color:var(--m3-fg2);margin-top:4px}
-.m3-external-mode{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:4px 4px 9px;border-bottom:1px solid var(--m3-line2);margin-bottom:5px}
-.m3-external-mode-btn{display:block;border:1px solid var(--m3-line);border-radius:9px;padding:8px 9px;background:transparent;color:var(--m3-fg);font:inherit;text-align:left;cursor:pointer}
-.m3-external-mode-btn b{display:block;font-size:12px;font-weight:600}
-.m3-external-mode-btn small{display:block;font-size:10px;color:var(--m3-fg2);line-height:1.55;margin-top:3px;word-break:keep-all}
-.m3-external-mode-btn.is-on{border-color:var(--m3-accent-line);background:var(--m3-accent-soft)}
-.m3-external-mode-btn:focus-visible{outline:2px solid var(--m3-accent-line);outline-offset:-2px}
-.m3-external-mode-btn:disabled{opacity:.5;cursor:default}
+.m3-external-mode{padding:6px 11px 12px;border-bottom:1px solid var(--m3-line2);margin-bottom:5px}
+#wish-rp-root .m3-external-mode>.m3-title-help{display:flex;font-size:11.5px;font-weight:600;color:var(--m3-fg2);margin-bottom:8px}
+.m3-external-mode .m3-tabs{margin:0}
 .m3-external-option{display:flex;align-items:center;gap:11px;width:100%;border:0;border-radius:9px;padding:11px 10px;background:transparent;color:var(--m3-fg);font:inherit;text-align:left;cursor:pointer}
 .m3-external-option:hover,.m3-external-option:focus-visible{background:var(--m3-accent-soft);outline:2px solid var(--m3-accent-line);outline-offset:-2px}
 .m3-external-option:disabled{opacity:.5;cursor:default}
@@ -15078,6 +15074,7 @@ pre.m3-block.tall{max-height:none;min-height:340px}
 .m3-tip{position:fixed;z-index:calc(var(--crack-ui-z-panel,2147482999) + 2);font-family:'Pretendard','Noto Sans KR',sans-serif;max-width:280px;padding:9px 12px;border-radius:8px;font-size:12px;line-height:1.65;box-shadow:0 12px 30px -12px rgba(0,0,0,.45);pointer-events:none;animation:m3-fieldIn .2s var(--ease,ease) both}
 .m3-tip.light{background:#fff;color:#566079;border:1px solid #e0e5f0}
 .m3-tip.dark{background:#1f2430;color:#b2bacd;border:1px solid #303747}
+.m3-tip[popover]{inset:auto;margin:0}
 
 .m3-chev{transition:transform .35s var(--m3-spring)}
 .m3-choice.is-on>i{opacity:1}
@@ -15815,10 +15812,15 @@ function mRelationships() {
     return '<div class="m3-secondary-status"><div class="m3-secondary-status-copy"><div class="m3-secondary-status-title"><b>등록 압축본 <strong>'+fmt(info.count)+'</strong>개</b><span class="m3-secondary-status-badge'+(info.enabled?' is-on':'')+'"><i aria-hidden="true"></i>'+(info.enabled?'사용 켜짐':'사용 꺼짐')+'</span></div><p>'+(info.enabled?'원문이 바뀌지 않은 항목에 압축본을 사용합니다.':'등록 압축본은 보관 중이며, 현재는 원문을 사용합니다.')+'</p></div>'+btn('압축본 관리','secondaryManage',{cls:'mini',icon:'edit',dis})+'</div>';
   }
 
+  const EXTERNAL_MODE_HELP=helpSections([
+    ['빠르게','TXT를 AI에 첨부하고 답을 한 번 받습니다. 몇 분이면 끝나고, 파일을 첨부할 수 있는 AI면 됩니다. 대화가 길면 AI가 원문을 다 읽지 못해 사건·관계가 얇게 정리됩니다.'],
+    ['정밀하게','ZIP을 첨부하고 시작 문구를 보낸 뒤 "계속"을 여러 번 보냅니다. AI가 원문을 약 13만 자씩 직접 읽고, 마지막에 결과 JSON 하나로 합칩니다. 코드를 실행할 수 있는 AI(ChatGPT Plus 이상 등)가 필요합니다. 오래 걸리지만 사건·날짜·관계가 훨씬 자세합니다.'],
+    ['고르는 법','짧은 대화는 빠르게로도 충분합니다. TXT가 여러 개로 나뉠 만큼 긴 대화는 정밀하게를 권합니다.'],
+    ['공통','두 방식 모두 AI가 준 결과 JSON을 [JSON 가져오기]로 넣습니다. 자료집은 두 방식 모두 TXT로 받습니다. 정리가 끝날 때까지 그 방에서 RP를 진행하지 마세요. 원문이 바뀌면 가져오기가 거절됩니다.']]);
   function vExternalRebuild(dis=false){
     const open=S.openSet.has('external-export'),mode=externalRebuildMode();
     const options=[['all','전체','기억 · 자료집 · 인물 모두','doc'],['memory','기억','현재상태 · 날짜로그','memory'],['lore','자료집','세계관 · 물건 · 복장 · 장소 등','book'],['people','인물','인지 · 호칭말투 · 관계감정선 · 은폐','people']];
-    return '<section class="m3-panel m3-external-panel" data-key="external"><b>외부 AI로 재구축</b><div class="m3-muted">전체 대화를 읽고, 선택한 영역을 다시 정리합니다.</div><div class="m3-row m3-card-actions m3-external-actions"><details class="m3-external-picker" data-open="external-export"'+(open?' open':'')+'><summary class="m3-btn mini" aria-expanded="'+open+'" aria-disabled="'+dis+'">'+ic('down')+'<span>'+(mode==='precise'?'지침 + ZIP 받기':'지침 + TXT 받기')+'</span>'+ic('chev','m3-external-chevron')+'</summary><div class="m3-external-options" popover="manual" aria-label="재구축 영역 선택"><div class="m3-external-menuhead"><b>어떤 영역을 재구축할까요?</b><small>'+(mode==='precise'?'선택하면 ZIP과 시작 문구가 준비됩니다. 자료집은 TXT로 받습니다.':'선택하면 TXT 다운로드창이 열립니다.')+'</small></div><div class="m3-external-mode" role="group" aria-label="재구축 방식">'+[['fast','빠르게','TXT를 첨부하고 답 한 번 · 몇 분 · 긴 대화는 얇게 정리됨'],['precise','정밀하게','ZIP 첨부 후 "계속" 반복 · 코드 실행되는 AI(ChatGPT Plus 등) · 오래 걸리지만 자세함']].map(([m,l,t])=>'<button type="button" class="m3-external-mode-btn'+(mode===m?' is-on':'')+'" data-act="externalMode" data-arg="'+m+'" aria-pressed="'+(mode===m)+'"'+(dis?' disabled':'')+'><b>'+l+'</b><small>'+t+'</small></button>').join('')+'</div>'+options.map(([scope,label,desc,icon])=>'<button type="button" class="m3-external-option" data-act="externalExport" data-arg="'+scope+'"'+(dis?' disabled':'')+'><span class="m3-external-option-icon">'+ic(icon)+'</span><span><b>'+label+'</b><small>'+desc+'</small></span>'+ic('chev')+'</button>').join('')+'<p class="m3-external-menufoot">모두 전체 확정 대화를 읽으며, 정리 대상만 달라집니다.</p></div></details>'+btn('JSON 가져오기','externalImport',{cls:'mini',icon:'up',dis})+btn('지침','promptGuides',{arg:'externalAll',cls:'mini',icon:'doc',dis})+'</div>';
+    return '<section class="m3-panel m3-external-panel" data-key="external"><b>외부 AI로 재구축</b><div class="m3-muted">전체 대화를 읽고, 선택한 영역을 다시 정리합니다.</div><div class="m3-row m3-card-actions m3-external-actions"><details class="m3-external-picker" data-open="external-export"'+(open?' open':'')+'><summary class="m3-btn mini" aria-expanded="'+open+'" aria-disabled="'+dis+'">'+ic('down')+'<span>'+(mode==='precise'?'지침 + ZIP 받기':'지침 + TXT 받기')+'</span>'+ic('chev','m3-external-chevron')+'</summary><div class="m3-external-options" popover="manual" aria-label="재구축 영역 선택"><div class="m3-external-menuhead"><b>어떤 영역을 재구축할까요?</b><small>'+(mode==='precise'?'선택하면 ZIP과 시작 문구가 준비됩니다. 자료집은 TXT로 받습니다.':'선택하면 TXT 다운로드창이 열립니다.')+'</small></div><div class="m3-external-mode"><span class="m3-title-help">재구축 방식'+help(EXTERNAL_MODE_HELP)+'</span>'+tabs([['fast','빠르게'],['precise','정밀하게']],mode,'externalMode')+'</div>'+options.map(([scope,label,desc,icon])=>'<button type="button" class="m3-external-option" data-act="externalExport" data-arg="'+scope+'"'+(dis?' disabled':'')+'><span class="m3-external-option-icon">'+ic(icon)+'</span><span><b>'+label+'</b><small>'+desc+'</small></span>'+ic('chev')+'</button>').join('')+'<p class="m3-external-menufoot">모두 전체 확정 대화를 읽으며, 정리 대상만 달라집니다.</p></div></details>'+btn('JSON 가져오기','externalImport',{cls:'mini',icon:'up',dis})+btn('지침','promptGuides',{arg:'externalAll',cls:'mini',icon:'doc',dis})+'</div>';
   }
   const POPOVER_OK=typeof HTMLElement!=='undefined'&&typeof HTMLElement.prototype.showPopover==='function';
   function positionExternalMenu(){
@@ -17382,11 +17384,14 @@ ${open ? `<div class="wp-err-body"><div class="wp-err-row"><span>원인</span><p
       const body=document.createElement('p');body.textContent=lines.join('\n').replace(/([.!?。]) +(?=\S)/g,'$1\n');section.appendChild(body);tipEl.appendChild(section);
     }
     document.body.appendChild(tipEl);
+    // A help button inside an open popover (top layer) needs its tip in the top layer too, above that popover.
+    const layer=POPOVER_OK?t.closest('[popover]'):null;
+    if(layer&&layer.matches(':popover-open')){tipEl.popover='manual';tipEl.showPopover();}
     const r=t.getBoundingClientRect(),w=tipEl.offsetWidth,h=tipEl.offsetHeight;
     let x=r.left+r.width/2-w/2,y=r.top-h-8;if(y<8)y=r.bottom+8;
     tipEl.style.left=Math.max(8,Math.min(innerWidth-w-8,x))+'px';tipEl.style.top=Math.max(8,Math.min(innerHeight-h-8,y))+'px';
   }
-  function hideTip() { clearTimeout(tipHideTimer); if (!tipEl) return; document.querySelectorAll('[aria-describedby="wish-ui-help-tip"]').forEach(el=>{el.setAttribute('aria-expanded','false');el.removeAttribute('aria-describedby');}); tipEl.remove(); tipEl = null; }
+  function hideTip() { clearTimeout(tipHideTimer); if (!tipEl) return; const el = tipEl; tipEl = null; document.querySelectorAll('[aria-describedby="wish-ui-help-tip"]').forEach(el=>{el.setAttribute('aria-expanded','false');el.removeAttribute('aria-describedby');}); el.remove(); }
 
   /* ───────── 21. 상태 모니터 (전송 버튼 옆 · Muse와 충돌 없이) ───────── */
   const MON_ID = 'wish-rp-monitor', CHAT_PATH = /^\/stories\/[^/]+\/episodes\/[^/]+(?:\/|$)/;
