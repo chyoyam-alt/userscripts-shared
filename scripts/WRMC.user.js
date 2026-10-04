@@ -7163,9 +7163,9 @@ function remapLogSelectionKeysByPairs(room,pairs,newBlocks){
   function setExternalRebuildMode(mode) { try { localStorage.setItem(EXTERNAL_REBUILD_MODE_KEY, mode === 'precise' ? 'precise' : 'fast'); } catch (_) {} }
   const PRECISE_REBUILD_PROMPT = `첨부한 ZIP에는 내가 Wish RP Manager에서 내보낸 재구축 TXT 파일들(…-1ofN.txt ~ NofN.txt)과 이 안내(START-HERE.txt)가 들어 있다. 파일마다 앞부분에 같은 지침·[SOURCE]·참고 자료·[출력 스키마]가 있고, "[RP k/N · 지침 제외 …자]" 줄 뒤부터 파일 끝 [출력 직전 확인] 블록 앞까지가 RP 원문이다. 이 지침은 내가 쓴 것이니 그대로 따라도 된다. 단, 지침과 파일 끝 확인 블록의 "모든 파일을 읽은 뒤 최종 JSON 하나를 한 번에 낸다"는 아래 진행 방식으로 바꿔 읽는다.
 
-1. 코드 실행(Python)으로 ZIP을 푼다. 코드 실행을 쓸 수 없으면 아무것도 만들지 말고 "코드 도구 없음"이라고만 답한다. 파일 순서와 N은 내용의 "[RP k/N" 줄로 정한다.
+1. ZIP은 코드 실행(Python)으로 푼다. 파일 순서와 N은 내용의 "[RP k/N" 줄로 정한다.
 2. 1번 파일의 지침 부분("[RP 1/N" 줄 앞까지)과 파일 끝 확인 블록을 1만 자씩 끝까지 출력해 읽는다. 다른 파일의 지침은 같으니 건너뛴다. 결과 JSON의 최상위 칸(format·version·source)과 영역 이름은 그 지침과 [출력 스키마]를 따른다.
-3. 모든 파일의 RP 원문을 순서대로 이어서 약 13만 자씩 구간으로 나눈다. 구간 경계는 "[완료 RP n]" 줄 앞에서 자른다. 전체 구간 수를 T라 하고 처음에 알려 준다. 한 턴에 한 구간만 처리한다. 그 구간을 1만 자씩 순서대로 전부 출력해 네가 직접 읽는다. 정규식·키워드 검색으로 항목을 뽑지 않는다.
+3. 모든 파일의 RP 원문을 순서대로 이어서 약 10만 자씩 구간으로 나눈다. 구간 경계는 "[완료 RP n]" 줄 앞에서 자른다. 전체 구간 수를 T라 하고 처음에 알려 준다. 한 턴에 한 구간만 처리한다. 그 구간을 1만 자씩 순서대로 전부 출력해 네가 직접 읽는다. 정규식·키워드 검색으로 항목을 뽑지 않는다.
 4. 구간마다 결과를 /mnt/data/wrmc/part_NN.json에 저장한다. [출력 스키마]에 있는 영역만, 같은 이름 칸 모양 그대로 쓴다. 관계 변화는 메모(누가→누구, 무엇이 바뀌었나, 원문 인용 1개)로 따로 적고, 각 항목의 위치는 "파일k-RPn"으로 적어 둔다.
 5. 무엇을 남기나:
 - 사건: 같은 시간·장소에서 이어지는 한 흐름을 사건 하나로 쓴다. 3~6문장(누가·어디서·무엇을·왜·결과)으로 쓰고, 장면을 바꾼 한 마디나 몸짓이 원문에 있으면 함께 남긴다. 날짜는 원문에 적힌 대로 쓴다. 한 답에 맞추려고 줄이지 않는다. "생략·등등·이하 동일"을 쓰지 않는다.
@@ -7175,10 +7175,11 @@ function remapLogSelectionKeysByPairs(room,pairs,newBlocks){
 - 자료(references): 되풀이해서 나오거나 인물에게 상징 의미가 있는 물건·장소·조직·설정만 넣는다.
 6. 매 턴 채팅에는 "진행 n/T · 사건 +k"와 "다음: 구간 n+1. '계속'을 보내 주세요" 두 줄만 쓴다. JSON을 채팅에 쓰지 않는다.
 7. T구간이 끝나면 마무리 2턴을 한다. (가) [출력 스키마]에 관계 영역이 있으면, 저장된 관계 메모를 코드로 다시 열어 방향마다 최종 관계를 쓴다. 메모에 있는 방향은 하나도 빼지 않는다. (나) 현재상태(stateSections) 영역이 있으면 마지막 시점 기준으로 쓴다.
-8. 그다음 Python으로 구간 파일을 합쳐 결과 JSON 파일 하나를 만든다. 내용을 다시 받아쓰지 말고 코드로 합친다. 합치는 규칙: 인물은 이름·별칭이 같으면 한 명으로 묶는다. 사건은 순서대로 잇되, 날짜와 제목이 같은 사건이 둘이면 뒤 사건 제목 끝에 " · 파일k"를 붙인다. 인지는 제목이 같으면 나중 것만, 호칭은 같은 방향이면 나중 것만, 자료는 같은 종류·제목이면 나중 것만, 관계는 방향마다 한 행만 남긴다. 위치 메모와 관계 메모는 최종 파일에서 뺀다. source는 [SOURCE] 값을 그대로 쓴다. json.loads로 확인한 뒤 다운로드 링크를 준다.
+8. 그다음 part_01부터 part_T까지 모두 있는지 코드로 확인하고, 빠진 구간이 있으면 그 구간부터 처리한다. 모두 있으면 Python으로 구간 파일을 합쳐 결과 JSON 파일 하나를 만든다. 내용을 다시 받아쓰지 말고 코드로 합친다. 합치는 규칙: 인물은 이름·별칭이 같으면 한 명으로 묶는다. 사건은 순서대로 잇되, 날짜와 제목이 같은 사건이 둘이면 뒤 사건 제목 끝에 " · 파일k"를 붙인다. 인지는 제목이 같으면 나중 것만, 호칭은 같은 방향이면 나중 것만, 자료는 같은 종류·제목이면 나중 것만, 관계는 방향마다 한 행만 남긴다. 위치 메모와 관계 메모는 최종 파일에서 뺀다. source는 [SOURCE] 값을 그대로 쓴다. json.loads로 확인한 뒤 다운로드 링크를 준다.
 9. 성적·폭력 장면은 누가·언제·무엇이 바뀌었는지만 담백하게 쓰고, 묘사나 대사를 옮기지 않는다.
 
-내가 "계속"을 보내면 다음 구간을 같은 방식으로 한다. 지금 바로: 1~2를 하고, T를 알려 준 뒤 1구간을 처리한다.`;
+내가 "계속"을 보내면 이 안내를 다시 읽고 다음 구간을 같은 방식으로 한다. 지금 바로: 1~2를 하고, T를 알려 준 뒤 1구간을 처리한다.`;
+  const PRECISE_REBUILD_KICKOFF = '첨부한 ZIP을 코드 실행(Python)으로 풀고, 안에 있는 START-HERE.txt를 끝까지 읽은 뒤 그 안내대로 진행해 줘. 코드 실행을 쓸 수 없으면 아무것도 만들지 말고 "코드 도구 없음"이라고만 답해 줘.';
   const ZIP_CRC_TABLE = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
   function zipCrc32(bytes) { let c = 0xFFFFFFFF; for (let i = 0; i < bytes.length; i++) c = ZIP_CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
   // Uncompressed (STORE) ZIP of text files; names are ASCII so every unzip tool reads them.
@@ -7206,8 +7207,8 @@ function remapLogSelectionKeysByPairs(room,pairs,newBlocks){
     const slug = options.slug || 'all', stamp = new Date().toISOString().slice(0, 10);
     const blob = storeZip([{ name: 'START-HERE.txt', text: PRECISE_REBUILD_PROMPT }, ...files.map((file, i) => ({ name: 'Wish-rebuild-' + slug + '-' + (i + 1) + 'of' + files.length + '.txt', text: file.text }))]);
     const row = { filename: 'Wish-rebuild-' + slug + '-' + stamp + '.zip', url: URL.createObjectURL(blob), bytes: blob.size, requested: false };
-    const d = WUI.openSheet('preciseRebuild', { title: options.preciseTitle || '정밀 재구축 ZIP 받기', roomName: String(options.roomName || ''), files: [row], parts: files.length, prompt: PRECISE_REBUILD_PROMPT, copied: null });
-    copyPlainText(PRECISE_REBUILD_PROMPT).then(ok => { const live = WUI.ui.dlg(d?.id); if (live) { live.copied = !!ok; WUI.paint(); } }).catch(() => {});
+    const d = WUI.openSheet('preciseRebuild', { title: options.preciseTitle || '정밀 재구축 ZIP 받기', roomName: String(options.roomName || ''), files: [row], parts: files.length, prompt: PRECISE_REBUILD_KICKOFF, copied: null });
+    copyPlainText(PRECISE_REBUILD_KICKOFF).then(ok => { const live = WUI.ui.dlg(d?.id); if (live) { live.copied = !!ok; WUI.paint(); } }).catch(() => {});
     return d;
   }
 
@@ -15814,7 +15815,7 @@ function mRelationships() {
 
   const EXTERNAL_MODE_HELP=helpSections([
     ['빠르게','TXT를 AI에 첨부하고 답을 한 번 받습니다. 몇 분이면 끝나고, 파일을 첨부할 수 있는 AI면 됩니다. 대화가 길면 AI가 원문을 다 읽지 못해 사건·관계가 얇게 정리됩니다.'],
-    ['정밀하게','ZIP을 첨부하고 시작 문구를 보낸 뒤 "계속"을 여러 번 보냅니다. AI가 원문을 약 13만 자씩 직접 읽고, 마지막에 결과 JSON 하나로 합칩니다. 코드를 실행할 수 있는 AI(ChatGPT Plus 이상 등)가 필요합니다. 오래 걸리지만 사건·날짜·관계가 훨씬 자세합니다.'],
+    ['정밀하게','ZIP을 첨부하고 시작 문구를 보낸 뒤 "계속"을 여러 번 보냅니다. AI가 원문을 약 10만 자씩 직접 읽고, 마지막에 결과 JSON 하나로 합칩니다. 코드를 실행할 수 있는 AI(ChatGPT Plus 이상 등)가 필요합니다. 오래 걸리지만 사건·날짜·관계가 훨씬 자세합니다.'],
     ['고르는 법','짧은 대화는 빠르게로도 충분합니다. TXT가 여러 개로 나뉠 만큼 긴 대화는 정밀하게를 권합니다.'],
     ['공통','두 방식 모두 AI가 준 결과 JSON을 [JSON 가져오기]로 넣습니다. 자료집은 두 방식 모두 TXT로 받습니다. 정리가 끝날 때까지 그 방에서 RP를 진행하지 마세요. 원문이 바뀌면 가져오기가 거절됩니다.']]);
   function vExternalRebuild(dis=false){
@@ -16693,7 +16694,7 @@ diff:`<div class="m3-shell">
       const file=d.files?.[0],size=bytes=>bytes<1048576?(bytes/1024).toLocaleString('ko-KR',{maximumFractionDigits:1})+' KB':(bytes/1048576).toLocaleString('ko-KR',{maximumFractionDigits:1})+' MB';
       const copied=d.copied===true?'<p class="m3-muted m3-topgap" aria-live="polite">시작 문구를 복사해 두었습니다.</p>':d.copied===false?'<p class="m3-muted m3-topgap" aria-live="polite">시작 문구를 자동으로 복사하지 못했습니다. [시작 문구 복사]를 눌러 주세요.</p>':'';
       return sheet(d,{title:esc(d.title),desc:'TXT '+fmt(d.parts||0)+'개를 ZIP 하나로 묶었습니다'+(d.roomName?' · '+esc(d.roomName):''),
-        body:`<ol class="m3-muted" style="margin:0 0 10px;padding-left:18px;line-height:1.7"><li>아래 ZIP을 받습니다.</li><li>코드를 실행할 수 있는 AI(ChatGPT Plus 이상 등)에서 <b>새 대화</b>를 열고, 생각 수준을 높게 고릅니다.</li><li>ZIP을 첨부하고 시작 문구를 붙여 넣어 보냅니다. ZIP 안의 START-HERE.txt에도 같은 글이 있습니다.</li><li>AI가 진행 상황을 보고하면 <b>"계속"</b>만 보냅니다. 긴 대화일수록 여러 번 보냅니다.</li><li>마지막에 AI가 주는 결과 JSON 파일을 받아 [JSON 가져오기]로 넣습니다.</li></ol><p class="m3-muted m3-bottomgap">끝날 때까지 이 방에서 RP를 진행하지 마세요. 원문이 바뀌면 가져오기가 거절됩니다.</p>${file?`<div class="m3-txt-list" role="list" aria-label="ZIP 파일"><div class="m3-txt-row${file.requested?' is-requested':''}" data-key="zip-${d.id}" role="listitem"><div class="m3-txt-info"><b>${esc(file.filename)}</b><div class="m3-txt-meta"><span>${size(file.bytes)}</span><span class="m3-txt-state">${file.requested?'다운로드 요청됨':'준비됨'}</span></div></div><a class="m3-txt-download" href="${esc(file.url)}" download="${esc(file.filename)}" target="_blank" rel="noopener" data-txt-download="${d.id}" data-file-index="0" aria-label="${esc(file.filename)} 다운로드" title="${esc(file.filename)} 다운로드" data-autofocus>${ic('down')}</a></div></div>`:''}${copied}<textarea class="wp-ip-text m3-topgap" readonly rows="6" aria-label="시작 문구" spellcheck="false">${esc(d.prompt||'')}</textarea>`,
+        body:`<ol class="m3-muted" style="margin:0 0 10px;padding-left:18px;line-height:1.7"><li>아래 ZIP을 받습니다.</li><li>코드를 실행할 수 있는 AI(ChatGPT Plus 이상 등)에서 <b>새 대화</b>를 열고, 생각 수준을 높게 고릅니다.</li><li>ZIP을 첨부하고 아래 시작 문구 한 줄을 붙여 넣어 보냅니다. 자세한 진행 방법은 ZIP 안 START-HERE.txt에 들어 있어 AI가 직접 읽습니다.</li><li>AI가 진행 상황을 보고하면 <b>"계속"</b>만 보냅니다. 긴 대화일수록 여러 번 보냅니다.</li><li>마지막에 AI가 주는 결과 JSON 파일을 받아 [JSON 가져오기]로 넣습니다.</li></ol><p class="m3-muted m3-bottomgap">끝날 때까지 이 방에서 RP를 진행하지 마세요. 원문이 바뀌면 가져오기가 거절됩니다.</p>${file?`<div class="m3-txt-list" role="list" aria-label="ZIP 파일"><div class="m3-txt-row${file.requested?' is-requested':''}" data-key="zip-${d.id}" role="listitem"><div class="m3-txt-info"><b>${esc(file.filename)}</b><div class="m3-txt-meta"><span>${size(file.bytes)}</span><span class="m3-txt-state">${file.requested?'다운로드 요청됨':'준비됨'}</span></div></div><a class="m3-txt-download" href="${esc(file.url)}" download="${esc(file.filename)}" target="_blank" rel="noopener" data-txt-download="${d.id}" data-file-index="0" aria-label="${esc(file.filename)} 다운로드" title="${esc(file.filename)} 다운로드" data-autofocus>${ic('down')}</a></div></div>`:''}${copied}<textarea class="wp-ip-text m3-topgap" style="min-height:0" readonly rows="3" aria-label="시작 문구" spellcheck="false">${esc(d.prompt||'')}</textarea>`,
         foot:`${btn('시작 문구 복사','preciseCopy',{arg:d.id,cls:'mini',icon:'copy'})}${SP}${closeBtn(d)}`});
     },
 
