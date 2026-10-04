@@ -326,8 +326,8 @@
 
 [답이 길어 끊길 때]
 - 출력 한도 때문에 끊기면 사용자가 "이어서"라고 보냅니다. 그러면 끊긴 바로 다음 글자부터 이어서 출력합니다. 앞부분을 반복하거나 처음부터 다시 쓰지 않습니다. 이어지는 부분은 새 \`\`\`json 코드 블록에 넣어도 됩니다.`;
-  const GUIDE_DEFAULTS = Object.freeze({get apiCommon(){return U3.defaultGuides.common;},get apiMemory(){return U3.defaultGuides.memory;},get apiObserve(){return U3.defaultGuides.observe;},get apiSpeech(){return U3.defaultGuides.speech;},get apiRelationships(){return WishRelationships.guide;},get apiDate(){return WISH_DATE_GUIDE_242;},get apiDelta(){return U3.defaultGuides.delta;},get apiRecall(){return RECALL_233_GUIDE;},get apiIndex(){return WishEconomy.GUIDE;},get apiBundleMemory(){return nativeBundleMemoryGuide();},get apiBundlePeople(){return nativeBundlePeopleGuide();},get apiLoreBundle(){return LORE_API_GUIDE;},get apiLoreConversion(){return LORE_CONVERSION_GUIDE;},get externalMemory(){return externalPartialGuide('memory');},get externalPeople(){return externalPartialGuide('people');},get externalAll(){return R31.externalGuideDefault();},get externalRelationships(){return R31.relationshipOnlyGuideDefault();},get externalSecondary(){return SecondaryRebuild.GUIDE;},get manualRelay(){return MANUAL_AI_RELAY_GUIDE;}, /* retired: kept only so backups list the same guide IDs */ currentState:'retired', logSummary:'retired', loreAuto:'retired', ...LORE_GUIDE_DEFAULTS });
-  const API_GUIDE_STORAGE_KEYS = Object.freeze({externalMemory:'Wish-RP-Manager-Core-external-memory-guide-v1',externalPeople:'Wish-RP-Manager-Core-external-people-guide-v1',apiBundleMemory:'Wish-RP-Manager-Core-native-memory-guide-v1',apiBundlePeople:'Wish-RP-Manager-Core-native-people-guide-v1',apiLoreBundle:'wish-rp-core-prompt-apiLoreBundle-v1',apiCommon:'wish-rp-core-prompt-v1-apiCommon',apiMemory:'wish-rp-core-prompt-v1-apiMemory',apiObserve:'wish-rp-core-prompt-v1-apiObserve',apiSpeech:'wish-rp-core-prompt-v1-apiSpeech',apiRelationships:'wish-rp-core-prompt-v1-apiRelationships',apiDate:'wish-rp-core-prompt-v1-apiDate',apiDelta:'wish-rp-core-prompt-v1-apiDelta',apiRecall:'wish-rp-core-prompt-v1-apiRecall',apiIndex:'wish-rp-core-prompt-v1-apiIndex',apiLoreConversion:'wish-rp-core-prompt-v1-apiLoreConversion',externalAll:'wish-rp-core-prompt-v1-externalAll',externalRelationships:'wish-rp-core-prompt-v1-externalRelationships',externalSecondary:'wish-rp-core-prompt-v1-externalSecondary',manualRelay:'wish-rp-core-prompt-v1-manualRelay',
+  const GUIDE_DEFAULTS = Object.freeze({get apiCommon(){return U3.defaultGuides.common;},get apiMemory(){return U3.defaultGuides.memory;},get apiThreads(){return WishThreads.RULES;},get apiObserve(){return U3.defaultGuides.observe;},get apiSpeech(){return U3.defaultGuides.speech;},get apiRelationships(){return WishRelationships.guide;},get apiDate(){return WISH_DATE_GUIDE_242;},get apiDelta(){return U3.defaultGuides.delta;},get apiRecall(){return RECALL_233_GUIDE;},get apiIndex(){return WishEconomy.GUIDE;},get apiBundleMemory(){return nativeBundleMemoryGuide();},get apiBundlePeople(){return nativeBundlePeopleGuide();},get apiLoreBundle(){return LORE_API_GUIDE;},get apiLoreConversion(){return LORE_CONVERSION_GUIDE;},get externalMemory(){return externalPartialGuide('memory');},get externalPeople(){return externalPartialGuide('people');},get externalAll(){return R31.externalGuideDefault();},get externalRelationships(){return R31.relationshipOnlyGuideDefault();},get externalSecondary(){return SecondaryRebuild.GUIDE;},get manualRelay(){return MANUAL_AI_RELAY_GUIDE;}, /* retired: kept only so backups list the same guide IDs */ currentState:'retired', logSummary:'retired', loreAuto:'retired', ...LORE_GUIDE_DEFAULTS });
+  const API_GUIDE_STORAGE_KEYS = Object.freeze({externalMemory:'Wish-RP-Manager-Core-external-memory-guide-v1',externalPeople:'Wish-RP-Manager-Core-external-people-guide-v1',apiBundleMemory:'Wish-RP-Manager-Core-native-memory-guide-v1',apiBundlePeople:'Wish-RP-Manager-Core-native-people-guide-v1',apiLoreBundle:'wish-rp-core-prompt-apiLoreBundle-v1',apiCommon:'wish-rp-core-prompt-v1-apiCommon',apiMemory:'wish-rp-core-prompt-v1-apiMemory',apiThreads:'wish-rp-core-prompt-v1-apiThreads',apiObserve:'wish-rp-core-prompt-v1-apiObserve',apiSpeech:'wish-rp-core-prompt-v1-apiSpeech',apiRelationships:'wish-rp-core-prompt-v1-apiRelationships',apiDate:'wish-rp-core-prompt-v1-apiDate',apiDelta:'wish-rp-core-prompt-v1-apiDelta',apiRecall:'wish-rp-core-prompt-v1-apiRecall',apiIndex:'wish-rp-core-prompt-v1-apiIndex',apiLoreConversion:'wish-rp-core-prompt-v1-apiLoreConversion',externalAll:'wish-rp-core-prompt-v1-externalAll',externalRelationships:'wish-rp-core-prompt-v1-externalRelationships',externalSecondary:'wish-rp-core-prompt-v1-externalSecondary',manualRelay:'wish-rp-core-prompt-v1-manualRelay',
     currentState: 'WISH_RP_api_guide_currentState_v1',
     logSummary: 'WISH_RP_api_guide_logSummary_v1',
 
@@ -1069,6 +1069,8 @@
     room.injectionPolicy.loreEvery = normalizeInjectionEvery(room.injectionPolicy.loreEvery, 1);
     room.injectionPolicy.characterEvery = normalizeInjectionEvery(room.injectionPolicy.characterEvery, 1);
     room.injectionPolicy.extraEvery = normalizeInjectionEvery(room.injectionPolicy.extraEvery, 1);
+    // Only when present: stamps hash injectionPolicy, so a room that never set it must not gain the key on read.
+    if (room.injectionPolicy.threadsEvery !== undefined) room.injectionPolicy.threadsEvery = normalizeInjectionEvery(room.injectionPolicy.threadsEvery, 1);
 
     room.autoCharacterDetection = !!room.autoCharacterDetection;
     room.autoCharacterLibraryId = String(room.autoCharacterLibraryId || '');
@@ -1094,6 +1096,7 @@
     room.activeLorePackIds = Array.isArray(room.activeLorePackIds) ? [...new Set(room.activeLorePackIds.map(String).filter(Boolean))] : [];
     room.speechRelations = normalizeSpeechRelations(room.speechRelations);
     room.relationships = WishRelationships.normalize(room.relationships);
+    if (room.threads !== undefined) room.threads = WishThreads.normalizeLoose(room.threads);
     room.speechConfig = room.speechConfig && typeof room.speechConfig === 'object' ? room.speechConfig : {};
     room.speechConfig.version = 1;
     room.speechConfig.enabled = room.speechConfig.enabled !== false;
@@ -3615,6 +3618,116 @@ function open(id){const room=state.currentRoom,old=normalize(room.relationships)
     }
     function diff(before,after,covered=[]){const old=new Map(normalize(before).map(r=>[key(r.speaker,r.target),r])),seen=new Set(covered);return normalize(after).map(r=>{const k=key(r.speaker,r.target),prior=old.get(k);return {id:r.id,title:r.speaker+' → '+r.target,before:prior?displayBody(prior):'',after:displayBody(r),status:!prior?'추가':r.manual?'수동 보호 유지':!seen.has(k)?'미출력 · 기존 유지':semantic(prior)!==semantic(r)?'변경':'유지'};});}
     return {heldRow,heldResolved,settleHeld,mergeHeld,normalizeHeld,openHeld,schema,fullSchema,commonGuide,guide,fullGuide,key,semantic,normalize,apply,rebuild,body,displayBody,messages,checkedEvidence,bind,items,contextRows,updateRange,continuityText,replacePending,mutate,open,save,diff};
+  })();
+
+  // 남은 일 (room.threads): promises, plans, open questions and dangers in the story that still wait for an ending.
+  // The rule text the AI reads is the editable guide 'apiThreads' (default RULES below); kinds, record shape and caps stay in code.
+  const WishThreads=(()=>{
+    const KINDS=['promise','schedule','goal','mystery','danger','foreshadow','other'];
+    const KIND_LABEL={promise:'약속',schedule:'예정',goal:'목표',mystery:'수수께끼',danger:'위험',foreshadow:'복선',other:'기타'};
+    const FULL_KINDS=new Set(['promise','schedule','goal']); // per-turn list keeps the one-line detail for these
+    const CLOSE_TYPES=['done','broken','cancelled'],DATE_KINDS=['exact','month_day','year','era','custom','unknown'];
+    const INJECT_CHARS=1500,SHRINK_CAPS=[1000,600,300,150],STALE_TURNS=300,STATUS_CHARS=120,TITLE_CHARS=80,CLOSED_INDEX_MAX=20,OPEN_MAX=200,CLOSED_KEEP=300;
+    const UNKNOWN_DATE=Object.freeze({kind:'unknown',display:'날짜 미상'});
+    // Folded AI spellings → values. Unknown values are not mapped (the row is left out instead of guessed).
+    const KIND_ALIAS={약속:'promise',맹세:'promise',예정:'schedule',일정:'schedule',목표:'goal',수수께끼:'mystery',의문:'mystery',미스터리:'mystery',위험:'danger',위협:'danger',threat:'danger',복선:'foreshadow',기타:'other'};
+    const CLOSE_ALIAS={지킴:'done',이행:'done',이룸:'done',달성:'done',풀림:'done',해결:'done',회수:'done',완료:'done',kept:'done',fulfilled:'done',resolved:'done',깨짐:'broken',실패:'broken',어김:'broken',파기:'broken',현실화:'broken',failed:'broken',취소:'cancelled',철회:'cancelled',무산:'cancelled',무효:'cancelled',withdrawn:'cancelled',canceled:'cancelled'};
+    const STATUS_ALIAS={열림:'open',진행중:'open',미해결:'open',ongoing:'open',active:'open',닫힘:'closed',끝남:'closed',완료:'closed',해결:'closed',done:'closed',resolved:'closed'};
+    const DONE_WORD={promise:'지킴',schedule:'치름',goal:'이룸',mystery:'풀림',danger:'지나감',foreshadow:'회수',other:'끝남'};
+    const RULES=`남은 일은 이야기 안에서 누군가 하기로 했거나, 답이 나와야 하거나, 결과가 아직 드러나지 않아 결말을 기다리는 일이다. "이 일은 언젠가 끝나는가?"로 가른다. 끝나는 때가 있으면 남은 일이고, 끝없이 이어지는 약속·습관은 현재상태다. 부상·임신·신분·거처처럼 지금 이어지는 상태는 언젠가 바뀌더라도 현재상태가 맡는다. 지나간 장면의 경위는 날짜별 사건, 관계에 남은 쟁점은 관계·감정선, 누가 무엇을 아는지는 인지가 맡는다.
+
+[종류]
+- promise 약속: 누가 누구에게 앞으로 하겠다고 한 말·맹세·대가 경고 가운데 아직 이행되지 않은 것
+- schedule 예정: 날짜나 계기가 정해진 일정·행사·만남
+- goal 목표: 인물이 밝히거나 추진하는, 아직 이루지 못한 일
+- mystery 수수께끼: 원문에서 아직 답이 나오지 않은 정체·원인·배후·행방, 미뤄 둔 대답
+- danger 위험: 조짐은 있지만 아직 일어나지 않았거나 끝나지 않은 위협
+- foreshadow 복선: 나중에 의미가 드러날 것으로 보이는 단서
+- other 기타: 위 종류에 맞지 않지만 누군가의 행동이나 답으로 결말이 날 일
+
+[열기]
+- 원문이 아직 끝나지 않았음을 보여 줄 때만 연다. 인물이 약속·예고·계획·질문·경고를 했거나, 서술이 풀리지 않았다고 밝힌 경우다.
+- 해결되어야 마땅해 보이는 일, 인물들이 문제 삼지 않고 넘어간 일, 성격이나 분위기에서 오는 막연한 긴장, 농담과 애정 섞인 놀림, 같은 장면에서 곧바로 이어질 행동은 열지 않는다.
+- 복선은 거듭 강조되었거나 인물이나 USER가 반응한 단서만 연다. '훗날', '불길한' 같은 예고 서술이 한 번 지나간 것으로는 열지 않는다.
+- PC의 약속·목표는 USER가 직접 쓴 것만 연다. CHAR의 기대나 보고서 문장으로 PC의 목표를 만들지 않는다.
+- 이미 열린 일을 다시 말한 것은 새 일이 아니다. 닫힌 일은 같은 약속을 다시 맺은 것처럼 새로 시작되었을 때만 새로 연다.
+
+[진행과 닫기]
+- 일부 이행, 새 단서, 기한 확정, 조건 변경이 있을 때만 고친다.
+- 결말 장면이 원문에 있을 때만 닫는다. '끝났다'는 말이 없어도 그 일이 실제로 이뤄졌거나 이뤄질 수 없게 된 장면이 분명하면 그 장면으로 닫는다. 일부만 이뤄졌으면 열어 둔다.
+- 닫는 방식(type): done은 지킴·이룸·풀림·회수, 또는 위험이 일어나지 않고 지나간 것이다. broken은 약속이 깨졌거나 목표가 실패했거나 위험이 현실이 된 것이다. cancelled는 철회되었거나 더 이상 성립하지 않게 된 것이다.
+
+[칸]
+- title: 나중에 찾기 쉬운 구체적인 이름
+- detail: 무엇이 남았고 어떤 조건이 걸려 있는지를 최신 상태로 한두 문장 쓴다. 진행된 부분이 있으면 끝에 '지금: …'으로 어디까지 왔는지 쓴다. 인물이 모르는 사실이 들어가면 누가 모르는지 밝히고, 결말을 예측하거나 풀릴 방법을 지어내지 않는다.
+- who: 관련 인물의 이름. 인물 목록이 있으면 그 이름을 글자 그대로, 없으면 원문의 이름을 님·씨 같은 호칭 없이 쓴다. 약속은 약속한 사람을 맨 앞에 둔다.
+- due: 원문에 적힌 기한이나 계기
+- how: 어떻게 끝났는지 한두 문장
+- 날짜(date)는 [날짜·시점] 규칙을 따른다.
+`;
+    const CANON=new WeakSet(),isObj=v=>!!v&&typeof v==='object'&&!Array.isArray(v),text=v=>String(v??'').trim();
+    const turnOf=v=>{const n=Number(v);return Number.isSafeInteger(n)&&n>0?n:0;};
+    const dateOf=v=>{const kind=text(v?.kind);return {kind:DATE_KINDS.includes(kind)?kind:'unknown',display:text(v?.display)||UNKNOWN_DATE.display};};
+    const namesOf=v=>[...new Set((Array.isArray(v)?v:typeof v==='string'?v.split(/[,;|、\n]/):[]).map(text).filter(Boolean))];
+    const endOf=(v,withMessage)=>({type:text(v.type),how:text(v.how),date:dateOf(v.date),evidence:text(v.evidence),...(withMessage?{messageId:text(v.messageId)}:{}),turn:turnOf(v.turn)});
+    const list=room=>Array.isArray(room?.threads)?room.threads:[];
+    const kindLabel=kind=>KIND_LABEL[kind]||KIND_LABEL.other;
+    const closeWord=(kind,type)=>type==='done'?DONE_WORD[kind]||DONE_WORD.other:type==='broken'?(kind==='danger'?'현실이 됨':kind==='goal'?'실패':'깨짐'):type==='cancelled'?'취소':'';
+    const canon=title=>String(title||'').normalize('NFKC').replace(/\s+/g,' ').trim().toLowerCase();
+    const key=t=>t.kind+'|'+canon(t.title);
+    // One turn clock: USER messages in the last committed memory range. No "current turn" is stored on the room.
+    const userCount=(rows,role=r=>r?.role)=>{let n=0;for(const r of rows||[])if(role(r)==='user')n++;return n;};
+    const clock=room=>userCount(room?.unified?.memoryManifest||[]);
+    // Read-side cleanup: never throws, keeps every row that has a title, and gives the same result on every read (a missing or
+    // repeated id is derived from the row, not random), so signatures and copy stamps stay put. A clean array comes back as the
+    // same array and is remembered; rows are never edited in place — writers build a new list.
+    function normalizeLoose(rows){
+      if(!Array.isArray(rows))return [];
+      if(CANON.has(rows))return rows;
+      const used=new Set(),out=[];
+      rows.forEach((row,i)=>{
+        if(!isObj(row))return;const title=text(row.title);if(!title)return;
+        const k=text(row.kind),kind=KINDS.includes(k)?k:'other',origin=row.origin==='manual'?'manual':'auto',opened=isObj(row.opened)?row.opened:{};
+        const closed=text(row.status)==='closed'&&isObj(row.closed)&&CLOSE_TYPES.includes(text(row.closed.type))?endOf(row.closed,true):null;
+        let id=text(row.id);
+        if(!id||used.has(id)){const base='th_'+aiHashTiny(JSON.stringify([i,kind,title]));id=base;for(let n=2;used.has(id);n++)id=base+'_'+n;}
+        used.add(id);
+        const t={id,kind,title,detail:text(row.detail),who:namesOf(row.who),due:text(row.due),status:closed?'closed':'open',origin,enabled:row.enabled!==false,
+          opened:{date:dateOf(opened.date),evidence:text(opened.evidence),messageId:text(opened.messageId),turn:turnOf(opened.turn)},closed,updatedTurn:turnOf(row.updatedTurn)};
+        if(origin==='manual'&&!closed&&isObj(row.suggestClose)&&CLOSE_TYPES.includes(text(row.suggestClose.type)))t.suggestClose=endOf(row.suggestClose,false);
+        out.push(t);
+      });
+      let same=false;try{same=JSON.stringify(out)===JSON.stringify(rows);}catch(_){}
+      const result=same?rows:out;CANON.add(result);return result;
+    }
+    // Backup check: structure only. Kind, status, close type and id are fixed by normalizeLoose on restore, so one odd value
+    // (or a kind added by a later version) never refuses the whole backup file.
+    function validateStored(rows,label){
+      if(!Array.isArray(rows)||rows.some(row=>!isObj(row)||typeof row.title!=='string'||(row.who!=null&&!Array.isArray(row.who))))throw Error(label+'의 남은 일 형식이 올바르지 않습니다.');
+    }
+    // Write paths only: open rows and manual rows always stay; closed AI rows beyond CLOSED_KEEP go, longest closed first.
+    function prune(rows){
+      const closed=rows.map((t,i)=>({t,i})).filter(({t})=>t?.status==='closed'&&t.origin!=='manual');
+      if(closed.length<=CLOSED_KEEP)return rows;
+      const drop=new Set(closed.sort((a,b)=>(Number(a.t.closed?.turn)||0)-(Number(b.t.closed?.turn)||0)||a.i-b.i).slice(0,closed.length-CLOSED_KEEP).map(x=>x.t));
+      return rows.filter(t=>!drop.has(t));
+    }
+    // A room that never had threads gets no key for an empty result, so stamps taken before this feature still match.
+    function assign(room,rows){if(rows.length||room.threads!==undefined)room.threads=rows;return room;}
+    // Rebuilds: an AI row that matches an earlier AI row (same kind and title) keeps its id, on/off switch and opening turn;
+    // the change turn stays too when the content did not change. Manual rows pass through as they are.
+    function carry(previous,next){
+      const pool=new Map(),content=t=>JSON.stringify([t.detail,t.who,t.due,t.status,t.closed?.type||'',t.closed?.how||'']);
+      for(const t of normalizeLoose(previous))if(t.origin!=='manual'){const k=key(t);if(!pool.has(k))pool.set(k,[]);pool.get(k).push(t);}
+      const rows=normalizeLoose(next).map(t=>{
+        if(t.origin==='manual')return t;
+        const old=pool.get(key(t))?.shift();if(!old)return t;
+        return {...t,id:old.id,enabled:old.enabled,opened:{...t.opened,messageId:t.opened.messageId||old.opened.messageId,turn:old.opened.turn>0?old.opened.turn:t.opened.turn},updatedTurn:content(t)===content(old)?old.updatedTurn:t.updatedTurn};
+      });
+      return normalizeLoose(prune(rows));
+    }
+    return {KINDS,KIND_LABEL,FULL_KINDS,CLOSE_TYPES,DATE_KINDS,UNKNOWN_DATE,KIND_ALIAS,CLOSE_ALIAS,STATUS_ALIAS,INJECT_CHARS,SHRINK_CAPS,STALE_TURNS,STATUS_CHARS,TITLE_CHARS,CLOSED_INDEX_MAX,OPEN_MAX,CLOSED_KEEP,RULES,
+      list,kindLabel,closeWord,canon,key,userCount,clock,normalizeLoose,validateStored,prune,assign,carry};
   })();
 
   // 2.7.2: request-local metadata only; persisted room/event schemas stay unchanged.
@@ -9607,6 +9720,7 @@ function openDefaultExtraPresetDialog(room){return WUIOpenPromise('presets',{wis
     for(const [index,room] of data.rooms.entries()){
       if(!plain(room)||!Array.isArray(room.slots))throw new Error(`백업 채팅방 ${index+1}의 slots 배열이 올바르지 않습니다.`);
       if(room.relationships!==undefined)WishRelationships.normalize(room.relationships);
+      if(room.threads!=null)WishThreads.validateStored(room.threads,`백업 채팅방 ${index+1}`);
       const slotIds=new Set();
       for(const [slotIndex,slot] of room.slots.entries()){
         const id=String(slot?.id||'');
@@ -17909,13 +18023,13 @@ const eligibility=sessionSetupEligibilityFor(r);vm.fresh=eligibility?.fresh&&WUI
 // Shared prompt editor. Defaults are resolved lazily after all engines initialize.
 const WishPromptGuides=(()=>{
   const catalog=[
-    ['apiCommon','공통 추출 규칙','api'],['apiMemory','현재상태 · 날짜별 사건 · 자료','api'],
+    ['apiCommon','공통 추출 규칙','api'],['apiMemory','현재상태 · 날짜별 사건 · 자료','api'],['apiThreads','남은 일 · 외부 AI와 공통','api'],
     ['apiObserve','인물 · 인지 · 은폐','api'],['apiSpeech','호칭 · 말투','api'],
     ['apiRelationships','관계 · 감정선','api'],['apiDate','날짜 · 시점 판정','api'],
     ['apiDelta','절약 모드 · 현재상태 변경분','api'],['apiRecall','AI 후보 선별','api'],
     ['apiBundleMemory','기억 묶음 정리 · 내장 API','api'],['apiBundlePeople','인물 묶음 정리 · 내장 API','api'],['apiIndex','절약 모드 · 후보 색인','api'],['apiLoreConversion','텍스트 → 자료 카드','api'],['apiLoreBundle','자료집 묶음 정리 · 내장 API','api'],
     /* PRIVATE_CATALOG */
-    ['externalAll','외부 AI · 전체 재구축','external'],['externalMemory','외부 AI · 기억 재구축','external'],['externalPeople','외부 AI · 인물 재구축','external'],['externalRelationships','외부 AI · 관계 재구축','external'],
+    ['externalAll','외부 AI · 전체 재구축','external'],['externalMemory','외부 AI · 기억 재구축','external'],['apiThreads','외부 AI · 남은 일 · API와 공통','external'],['externalPeople','외부 AI · 인물 재구축','external'],['externalRelationships','외부 AI · 관계 재구축','external'],
     ['externalSecondary','외부 AI · 2차 재구축','external'],['loreExternal','외부 AI · 자료집 재구축','external'],['manualRelay','외부 AI · 복붙 공통 안내','external']
   ];
   const raw=id=>localStorage.getItem(API_GUIDE_STORAGE_KEYS[id]);
