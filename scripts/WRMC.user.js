@@ -13280,9 +13280,11 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     // 인지 개별 수동 선택은 같은 USER의 리롤까지 유지하고, 이미 한 번 쓴 선택은 다음 새 USER 전송에서 자동 초기화합니다.
     const cognitionOverrides=cognitionOverridesForBridge(p,reason);
     // 인지 골라서: the scene is the turn the memory recall reads. Before a send it is the latest AI answer; a reroll reads the
-    // USER being rerolled and the carrier AI answer, never the answer it discards. Other reasons pass no scene.
+    // USER being rerolled and the carrier AI answer, never the answer it discards. Other reasons (poll, update, start) read the
+    // recent messages the recall keeps between sends (autoRecallContextText, set below from this same frame).
     const sceneOf=m=>m?recallSceneText(stripOurContextBlock(messageTextOf(m)).text):'';
-    const cognitionScene=reason==='before-send'?sceneOf(frame.latest):reason==='before-reroll'?[sceneOf(frame.carrier),String(messageTextOf(frame.messages.find(m=>messageRoleOf(m)==='user'&&String(messageIdOf(m)||'')===frame.latestUserId))||'')].filter(x=>x.trim()).join('\n\n'):'';
+    const sendReason=reason==='before-send'||reason==='before-reroll',recentText=sendReason?'':frame.messages.slice(0,APP.autoScanMessageLimit).map(m=>stripAutomationNoise(messageTextOf(m),true)).reverse().join('\n\n').slice(-12000);
+    const cognitionScene=reason==='before-send'?sceneOf(frame.latest):reason==='before-reroll'?[sceneOf(frame.carrier),String(messageTextOf(frame.messages.find(m=>messageRoleOf(m)==='user'&&String(messageIdOf(m)||'')===frame.latestUserId))||'')].filter(x=>x.trim()).join('\n\n'):recentText;
     const cognition=await bridge?.getStableContext?.(apiChatIdOf(room),frame.stable,{useInput:reason==='before-send'||reason==='before-reroll',overrides:cognitionOverrides,fullFit:true,sceneText:cognitionScene,sticky:p.cognitionSticky||{}});
     if((reason==='before-send'||reason==='before-reroll')&&(cognitionOverrides.include.length||cognitionOverrides.exclude.length))normalizePendingCognitionOverrides(p).usedAt=Date.now();
     if(String((p.items||[]).find(i=>i.group==='cognition'||i.slotId==='__cognition')?.content||'')!==String(cognition?.text||''))p.recallNeedsRefresh=true;
@@ -13307,7 +13309,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
         room.autoRecallContextText=liveQuery;
       }
     }
-    if(reason!=='before-send'&&reason!=='before-reroll')room.autoRecallContextText=frame.messages.slice(0,APP.autoScanMessageLimit).map(m=>stripAutomationNoise(messageTextOf(m),true)).reverse().join('\n\n').slice(-12000);
+    if(!sendReason)room.autoRecallContextText=recentText;
     const latestId=String(messageIdOf(frame.latest)||'');
     const newId=String(messageIdOf(frame.carrier)||'');
     const carrierChanged=p.baselineAssistantId!==latestId;
