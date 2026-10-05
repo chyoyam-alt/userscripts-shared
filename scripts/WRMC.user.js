@@ -4770,11 +4770,14 @@ function wishEventHeading(date,title){
 function wishLogDedupeGroup(b){return b&&!b.isUnknown&&!b.isYearOnly&&!b.isCustomDate?logEventIdentity(b):'';}
 // guard (U3 stage): headingOf(id) is a stored event's own heading line, skip(text) reports a row left out. An update or an addition that
 // would read back as another event's date and title, or repeat another block's heading line, is left out and reported instead of
-// failing the answer; the stored event stays as it was. Events that already shared a heading before this answer are not blocked.
+// failing the answer; the stored event stays as it was. Events that already shared a heading line before this answer are not
+// blocked against each other.
 function wishApplyEventDelta(db,data,rp='',guard=null){if(!data||!Array.isArray(data.updates)||!Array.isArray(data.additions)||!Array.isArray(data.invalidated))throw Error('날짜별 사건 결과 구조가 올바르지 않습니다.');const by=new Map(db.events.map(e=>[e.id,e]));const invalid=new Set();for(const row of data.invalidated){const ref=String(row.ref||'').trim();if(!by.has(ref))throw Error('날짜별 사건 invalidated REF가 올바르지 않습니다: '+ref);invalid.add(ref);}if(invalid.size)db.events=db.events.filter(e=>!invalid.has(e.id));const current=new Map(db.events.map(e=>[e.id,e]));
-  const seen=new Map(db.events.map(e=>{const b=parseDatedLogBlocks(guard?.headingOf?.(e.id)||'')[0];return [e,b?{heading:b.heading,identity:wishEventIdentity(e.date,e.title),key:b.isUnknown?'':b.key,group:wishLogDedupeGroup(b)}:wishEventHeading(e.date,e.title)];})),held=new Map();
-  // The other event (and how its heading reads) that a changed value would match; values that did not change are not compared.
-  const clash=(self,next,was)=>[...seen].find(([e,v])=>e!==self&&(next.identity!==was?.identity&&next.identity===v.identity||!!next.key&&next.key!==was?.key&&next.key===v.key))?.[1]||null;
+  const seen=new Map(db.events.map(e=>{const b=parseDatedLogBlocks(guard?.headingOf?.(e.id)||'')[0];return [e,b?{heading:b.heading,identity:wishEventIdentity(e.date,e.title),key:b.isUnknown?'':b.key,group:wishLogDedupeGroup(b)}:wishEventHeading(e.date,e.title)];})),held=new Map(),orig=new Map([...seen].map(([e,v])=>[e,v.key]));
+  // The other event (and how its heading reads) that a changed value would match; values that did not change are not compared, and
+  // two stored events whose blocks already shared one heading line (orig) are not compared with each other: an answer that touches
+  // both copies of an old pair (WishMemorySafety.preserve rewrites each heading line) leaves a pair, not a new duplicate.
+  const clash=(self,next,was)=>[...seen].find(([e,v])=>e!==self&&!(self&&orig.get(self)&&orig.get(e)===orig.get(self))&&(next.identity!==was?.identity&&next.identity===v.identity||!!next.key&&next.key!==was?.key&&next.key===v.key))?.[1]||null;
   for(const raw of data.updates){const e=current.get(String(raw.ref||'').trim());if(!e)throw Error('날짜별 사건이 없는 기존 REF를 수정하려 했습니다: '+raw.ref);const title=String(raw.title||'').trim(),summary=String(raw.summary||'').trim();if(!title||!summary)throw Error('날짜로그 '+raw.ref+(title?' 「'+title+'」':'')+': 사건 제목이나 요약이 비었습니다.');const date={kind:String(raw.date?.kind||'unknown'),display:String(raw.date?.display||'날짜 미상')};
     // Same display, title and summary keep the stored heading line: WishMemorySafety.preserve rewrites only a changed event.
     const was=seen.get(e),same=(e.date?.display||'날짜 미상')===date.display&&e.title===title&&e.summary===summary,next=same?was:wishEventHeading(date,title),hit=same?null:clash(e,next,was);
@@ -7572,7 +7575,7 @@ function remapLogSelectionKeysByPairs(room,pairs,newBlocks){
 function assertNoNewLogHeadingDuplicates(oldBlocks,newBlocks){
  const count=list=>list.reduce((m,b)=>m.set(b.key,(m.get(b.key)||0)+1),new Map()),before=count(oldBlocks),after=count(newBlocks);
  const added=[...after].filter(([k,n])=>n>1&&n>(before.get(k)||0)).map(([k])=>newBlocks.find(b=>b.key===k).heading);
- if(added.length)throw Error('날짜·사건 제목이 같은 날짜로그 블록이 하나 더 생겨 저장하지 않았습니다: '+added.join(', ')+'. 날짜와 사건 제목이 같으면 같은 블록으로 봅니다. 다른 사건이면 한쪽의 날짜나 사건 제목을 다르게 쓰고, 같은 사건이면 이미 있는 블록에 내용을 보태 주세요.');
+ if(added.length)throw Error('날짜·사건 제목이 같은 날짜로그 블록이 하나 더 생겨 저장하지 않았습니다: '+added.slice(0,5).join(', ')+(added.length>5?' 외 '+(added.length-5)+'개':'')+'. 날짜·사건 제목을 똑같이 쓴 블록은 같은 블록으로 봅니다. 다른 사건이면 한쪽의 날짜나 사건 제목을 다르게 쓰고, 같은 사건이면 이미 있는 블록에 내용을 보태 주세요.');
 }
 // A raw log save can move blocks, and an unknown-date key holds its block position. An old unknown-date block takes the key of the new one
 // with the same heading+body, compared after the same cleanup the save applies (n-th copy to n-th copy, only when both sides hold as many
@@ -19173,10 +19176,15 @@ const typed=['key','dsKey','vx','fbAppCheck'].some(k=>String(x[k]||'').trim());
 for(const k of Object.keys(opened))if(x[k]===opened[k]&&!(typed&&k==='provider')&&!(k==='dsBase'&&String(x.dsKey||'').trim()))x[k]=latest[k];
 const fields={provider:x.provider,key:x.key,'firebase-config':x.firebase,'firebase-appcheck':x.fbAppCheck,'vertex-sa':x.vx,'vertex-location':x.vxLoc,'deepseek-key':x.dsKey,'deepseek-base':x.dsBase,model:x.model,'gemini-thinking':x.thinking,'deepseek-model':x.dsModel,'deepseek-thinking':x.dsThinking,'deepseek-custom':x.dsCustom};return settingsFromAiDialog(WUIForm(Object.fromEntries(Object.entries(fields).map(([k,v])=>['#rpcm-ai-'+k,v]))),fresh);}
 function WUIDateApply(d){const replacements=[];for(const b of d.blocks){if(b.isSpecialDate||b.isYearOnly)continue;const x=d.draft.dn[String(b.index)];if(!x)continue;const y=String(x.y||'').trim()?Number(x.y):null,m=Number(x.m),day=Number(x.d);if(b.isUnknown&&!y&&!m&&!day)continue;if(b.isUnknown&&y===null&&(m||day))throw Error('날짜 미상 블록은 연도까지 입력해야 합니다.');if(y!==null&&(!Number.isInteger(y)||y<1||y>999999))throw Error('연도는 1~999999로 입력해 주세요.');if(!Number.isInteger(m)||m<1||m>12||!Number.isInteger(day)||day<1||day>new Date(y||2000,m,0).getDate())throw Error('올바른 월과 일을 입력해 주세요.');if(y!==(b.year||null)||m!==b.month||day!==b.day)replacements.push({start:b.sourceStart,end:b.headingEnd,text:formatNormalizedLogHeading(b,y,m,day),block:b});}if(!replacements.length){notify('변경된 날짜가 없습니다.');return;}
- // A block whose new heading line would equal another block's (same key) stays as it was; the rest is applied.
- const counts=new Map(),skipped=[];for(const b of d.blocks)counts.set(b.key,(counts.get(b.key)||0)+1);
- const accepted=replacements.filter(r=>{const p=parseDatedLogBlocks(r.text)[0],key=p&&!p.isUnknown?p.key:'';if(key&&key!==r.block.key&&counts.get(key)){skipped.push(r.block.heading+' → '+r.text);return false;}counts.set(r.block.key,counts.get(r.block.key)-1);if(key)counts.set(key,(counts.get(key)||0)+1);return true;});
- if(skipped.length)notify('날짜 표기 정리: 다른 블록과 날짜·사건 제목이 똑같아지는 '+skipped.length+'개 블록은 그대로 두었습니다 — '+skipped.join(', ')+'. 같은 사건이면 두 블록을 직접 합쳐 주세요.','warn',9000);
+ // Judged on the log as it would be saved: a block whose new heading line would equal another block's there (same key) stays as it
+ // was and the rest is applied, so dates shifted together (18일→19일, 19일→20일) all go through. Blocks that already shared one
+ // heading line may move together. Where blocks newly meet on one heading line, the block already there stays and a moved one is
+ // left; with none there, the first in log order is changed. A block left goes back to its old heading line, which is checked again.
+ const pos=new Map(d.blocks.map((b,i)=>[b,i])),keyOf=new Map(replacements.map(r=>{const p=parseDatedLogBlocks(r.text)[0];return [r.block,p&&!p.isUnknown?p.key:''];})),moving=new Set(replacements.filter(r=>keyOf.get(r.block)!==r.block.key).map(r=>r.block)),left=new Set(),at=new Map(),put=(k,b)=>{if(k)(at.get(k)||at.set(k,[]).get(k)).push(b);};
+ for(const b of d.blocks)put(moving.has(b)?keyOf.get(b):b.key,b);
+ for(const todo=[...at.keys()];todo.length;){const k=todo.pop(),list=at.get(k).sort((a,b)=>pos.get(a)-pos.get(b)),anchor=(list.find(b=>!moving.has(b)||left.has(b))||list[0]).key,out=list.filter(b=>b.key!==anchor&&moving.has(b)&&!left.has(b));if(!out.length)continue;at.set(k,list.filter(b=>!out.includes(b)));for(const b of out){left.add(b);put(b.key,b);if(b.key)todo.push(b.key);}}
+ const accepted=replacements.filter(r=>!left.has(r.block)),skipped=replacements.filter(r=>left.has(r.block)).map(r=>r.block.heading+' → '+r.text);
+ if(skipped.length)notify('날짜 표기 정리: 다른 블록과 날짜·사건 제목이 똑같아지는 '+skipped.length+'개 블록은 그대로 두었습니다 — '+skipped.slice(0,5).join(', ')+(skipped.length>5?' 외 '+(skipped.length-5)+'개':'')+'. 같은 사건이면 '+(skipped.length>1?'겹치는 블록끼리':'두 블록을')+' 직접 합쳐 주세요.','warn',9000);
  if(!accepted.length)return;
  let next=d.originalText;accepted.sort((a,b)=>b.start-a.start).forEach(r=>next=next.slice(0,r.start)+r.text+next.slice(r.end));const blocks=parseDatedLogBlocks(next);if(blocks.length!==d.blocks.length)throw Error('날짜 수정 후 블록 수가 달라져 적용을 중단했습니다.');const slot=d.wishRoom.slots.find(s=>s.id==='logSummary');if(slot.content!==d.originalText)throw Error('편집 중 로그가 바뀌었습니다. 다시 열어 주세요.');slot.content=next;remapLogSelectionKeysByIndex(d.wishRoom,d.blocks,blocks);WUIResolve(d.id,true);}
 function WUIDedupeApply(d){
