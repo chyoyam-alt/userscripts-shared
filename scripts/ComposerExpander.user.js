@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ↗️ Crack Composer Expander (채팅창 펼치기)
 // @namespace    crack-composer-resizer
-// @version      1.5.0
+// @version      1.5.1
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/ComposerExpander.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/ComposerExpander.user.js
 // @description  PC 크랙 채팅 입력창에 내용이 넘칠 때 ↗ 전체 펼치기와 ↙ 원래 크기 복원을 제공하며 라디오존데 v3.9.7과 즉시 동기화됩니다.
@@ -17,7 +17,7 @@
   window.__CRACK_COMPOSER_RESIZER_V1__ = true;
 
   const APP = Object.freeze({
-    version: '1.5.0',
+    version: '1.5.1',
     minViewportWidth: 768,
     maxViewportRatio: 0.82,
     overflowSlack: 3,
@@ -63,6 +63,7 @@
     syncRaf: 0,
     animationRaf: 0,
     restoreTimer: 0,
+    compactJob: null,
     routeKey: location.href,
   };
 
@@ -500,6 +501,7 @@
     if (state.expanded || !(input instanceof HTMLElement) || !(target instanceof HTMLElement)) return;
     if (!hasExpandableContent(input) || !elementOverflows(target)) return;
 
+    cancelCompactAfterSend();
     finishRestore({ scrollToEnd: false });
     state.originalStyles = snapshotStyles(target);
     state.collapsedHeight = currentHeight(target);
@@ -526,41 +528,67 @@
     else expandInput();
   }
 
+  function cancelCompactAfterSend() {
+    const job = state.compactJob;
+    if (!job) return;
+    state.compactJob = null;
+    if (job.raf) cancelAnimationFrame(job.raf);
+    for (const timer of job.timers) clearTimeout(timer);
+    job.timers.clear();
+  }
+
   function compactAfterSend(previousTarget = state.target) {
+    cancelCompactAfterSend();
+    const input = state.input;
+    if (!(input instanceof HTMLElement) || !input.isConnected || hasExpandableContent(input)) return;
+    // 전송 당시의 입력창만 복구한다. 후속 예약에서 문서의 다른 입력창을 찾지 않는다.
     collapseInput({ immediate: true, scrollToEnd: false });
+    const candidates = new Set([input, previousTarget, state.target, findResizeTarget(input)]);
+    const job = { input, href: location.href, raf: 0, timers: new Set() };
+    state.compactJob = job;
 
-    const compactOnce = (force = false) => {
-      const input = findChatInput();
-      if (!force && input instanceof HTMLElement && hasExpandableContent(input)) return;
-
-      const candidates = new Set();
-      if (previousTarget instanceof HTMLElement && previousTarget.isConnected) candidates.add(previousTarget);
-      if (state.target instanceof HTMLElement && state.target.isConnected) candidates.add(state.target);
-      if (input instanceof HTMLElement) {
-        candidates.add(input);
-        const target = findResizeTarget(input);
-        if (target instanceof HTMLElement) candidates.add(target);
+    const compactOnce = () => {
+      if (state.compactJob !== job) return;
+      if (location.href !== job.href || state.input !== input || !input.isConnected ||
+          state.expanded || hasExpandableContent(input)) {
+        cancelCompactAfterSend();
+        return;
       }
-
+      let changed = false;
       for (const element of candidates) {
-        for (const property of STYLE_PROPS) element.style.removeProperty(property);
-        element.removeAttribute('data-ccr-expanded');
-        element.removeAttribute('data-ccr-animating');
+        if (!(element instanceof HTMLElement) || !element.isConnected) continue;
+        for (const property of STYLE_PROPS) {
+          if (!element.style.getPropertyValue(property)) continue;
+          element.style.removeProperty(property);
+          changed = true;
+        }
+        for (const attribute of ['data-ccr-expanded', 'data-ccr-animating']) {
+          if (!element.hasAttribute(attribute)) continue;
+          element.removeAttribute(attribute);
+          changed = true;
+        }
       }
-
-      state.expanded = false;
-      state.originalStyles = null;
-      state.collapsedHeight = 0;
-      state.originalScrollTop = 0;
-      state.hadContent = false;
-      scheduleRadiosondeRestore();
-      setButtonState(false, false);
-      scheduleSync(20);
+      if (changed) scheduleSync(20);
     };
 
-    compactOnce(true);
-    requestAnimationFrame(compactOnce);
-    for (const delay of [45, 140, 300, 650, 1200]) setTimeout(compactOnce, delay);
+    state.hadContent = false;
+    setButtonState(false, false);
+    compactOnce();
+    scheduleSync(20);
+    // 순정의 늦은 높이 보정을 위한 기존 대기 간격은 유지하되, 변화가 없으면 재갱신하지 않는다.
+    job.raf = requestAnimationFrame(() => {
+      job.raf = 0;
+      compactOnce();
+      if (state.compactJob === job && !job.timers.size) cancelCompactAfterSend();
+    });
+    for (const delay of [45, 140, 300, 650, 1200]) {
+      const timer = setTimeout(() => {
+        job.timers.delete(timer);
+        compactOnce();
+        if (state.compactJob === job && !job.raf && !job.timers.size) cancelCompactAfterSend();
+      }, delay);
+      job.timers.add(timer);
+    }
   }
 
   function disconnectContextObservers() {
@@ -584,6 +612,7 @@
 
     state.contentObserver = new MutationObserver(() => {
       const hasContent = hasExpandableContent(input);
+      if (hasContent && state.compactJob?.input === input) cancelCompactAfterSend();
       const becameEmpty = state.hadContent && !hasContent;
       state.hadContent = hasContent;
       if (state.expanded && becameEmpty) {
@@ -599,6 +628,7 @@
 
   function setContext(input, target) {
     if (state.input === input && state.target === target) return;
+    if (state.input !== input) cancelCompactAfterSend();
     if (state.expanded || state.originalStyles) collapseInput({ immediate: true, scrollToEnd: false });
     state.input = input;
     state.target = target;
@@ -636,13 +666,15 @@
     const top = Math.max(0, Math.min(rect.top, viewportHeight));
 
     if (button instanceof HTMLElement) {
-      button.style.setProperty('left', `${Math.round(Math.max(left, right - 29))}px`, 'important');
-      button.style.setProperty('top', `${Math.round(top + 6)}px`, 'important');
-      button.style.setProperty('visibility', visible ? 'visible' : 'hidden', 'important');
+      setImportantStyle(button, 'left', `${Math.round(Math.max(left, right - 29))}px`);
+      setImportantStyle(button, 'top', `${Math.round(top + 6)}px`);
+      setImportantStyle(button, 'visibility', visible ? 'visible' : 'hidden');
       try {
         const source = document.querySelector('#chud-sidebar, #chud-infobar') || host;
         const color = getComputedStyle(source).color;
-        if (color) button.style.setProperty('--ccr-control-color', color);
+        if (color && button.style.getPropertyValue('--ccr-control-color') !== color) {
+          button.style.setProperty('--ccr-control-color', color);
+        }
       } catch (_) {}
     }
   }
@@ -677,7 +709,6 @@
       layer.appendChild(button);
     }
     state.toggle = button;
-    positionControls();
   }
 
   function bindHost(host) {
@@ -693,6 +724,7 @@
   }
 
   function unbindContext({ restore = true } = {}) {
+    cancelCompactAfterSend();
     if (restore && (state.expanded || state.originalStyles)) {
       collapseInput({ immediate: true, scrollToEnd: false });
     }
@@ -766,7 +798,6 @@
     if (state.expanded) {
       updateExpandedHeight();
       setButtonState(true, true);
-      positionControls();
       return;
     }
 
@@ -873,12 +904,15 @@
   function hookHistory() {
     if (window.__CRACK_COMPOSER_RESIZER_HISTORY__) return;
     window.__CRACK_COMPOSER_RESIZER_HISTORY__ = true;
-    const fire = () => setTimeout(() => {
-      if (state.routeKey === location.href) return;
-      state.routeKey = location.href;
-      unbindContext({ restore: true });
-      scheduleSync(50);
-    }, 40);
+    const fire = () => {
+      if (state.compactJob && state.compactJob.href !== location.href) cancelCompactAfterSend();
+      setTimeout(() => {
+        if (state.routeKey === location.href) return;
+        state.routeKey = location.href;
+        unbindContext({ restore: true });
+        scheduleSync(50);
+      }, 40);
+    };
 
     const originalPush = history.pushState;
     const originalReplace = history.replaceState;
@@ -904,6 +938,7 @@
         return;
       }
       const hasContent = hasExpandableContent(event.target);
+      if (hasContent && state.compactJob?.input === event.target) cancelCompactAfterSend();
       const becameEmpty = state.hadContent && !hasContent;
       state.hadContent = hasContent;
       if (state.expanded && becameEmpty) {
