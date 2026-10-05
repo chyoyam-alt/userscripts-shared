@@ -1290,45 +1290,78 @@
 
   // AI-bound RP text only: drops page wrapping that is not story (hidden markdown comment lines, HTML comments, images, image-URL
   // lines). Never for hashes, anchors, manifests, stamps, caches or local matching. Where unsure it keeps the text (cleans less).
-  function wishCleanRpText(text){
+  // keepComments (a USER message): its hidden comments stay, since they may be the USER's own OOC note; only its images go.
+  const WISH_RP_IMAGE=(()=>{const dest=String.raw`\(\s*(?:<[^<>\n]*>|(?:[^\s()]|\([^\s()]*\))*)(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\s*\)`,img=String.raw`!\[[^\]\n]*\]`+dest;return new RegExp(String.raw`(?<!\\)(?:\[\s*${img}\s*\]${dest}|${img})`,'g');})();
+  function wishCleanRpText(text,keepComments=false){
     const src=String(text??'');
-    if(!/<!--|\]:|!\[|https?:\/\//i.test(src))return src; // nothing to drop: the very same string
-    // Whole comment lines first, so an unclosed <!-- inside one cannot eat the story after it. A title with an unescaped bracket is
-    // not a comment (the page shows it). An HTML comment is cut only when it does not run across a code fence line.
-    const kept=src.split('\n').filter(line=>!/^\s*\[(?:\/\/|comment)\]:\s*#\s*\((?:[^()\\\n]|\\.)*\)\s*$/i.test(line)).join('\n').replace(/<!--(?:(?!\n[ \t]*(?:```|~~~))[\s\S])*?-->/g,'');
+    if(!(keepComments?/!\[|https?:\/\//i:/<!--|\]:|!\[|https?:\/\//i).test(src))return src; // nothing to drop: the very same string
+    // A ``` or ~~~ fence (to its closing line, or to the end when unclosed) keeps its comments and images: the page shows every character in it.
+    const parts=[];let fence=null,cur=[];const flush=code=>{if(cur.length)parts.push({code,lines:cur});cur=[];};
+    for(const line of src.split('\n')){
+      if(fence){cur.push(line);const c=line.trim();if(c.length>=fence.len&&[...c].every(ch=>ch===fence.ch)){flush(true);fence=null;}continue;}
+      const o=line.match(/^[ \t]{0,3}(`{3,}|~{3,})(.*)$/);
+      if(o&&!(o[1][0]==='`'&&o[2].includes('`'))){flush(false);fence={ch:o[1][0],len:o[1].length};}
+      cur.push(line);
+    }
+    flush(!!fence);
     const out=[];
-    for(const line of kept.split('\n')){
-      const cut=line.replace(/!\[[^\]\n]*\]\([^)\n]*\)/g,'');
-      if((cut!==line&&!cut.trim())||/^\s*https?:\/\/\S+\.(?:png|jpe?g|gif|webp|bmp|svg|avif)(?:\?\S*)?\s*$/i.test(cut))continue;
-      out.push(cut.replace(/[^\S\n]+$/,''));
+    for(const part of parts){
+      if(part.code){out.push(...part.lines.map(line=>line.replace(/[^\S\n]+$/,'')));continue;} // line ends trimmed, nothing else
+      // Whole comment lines first, so an unclosed <!-- inside one cannot eat the story after it. A title with an unescaped bracket is
+      // not a comment (the page shows it). An HTML comment never takes in another <!--; one that starts inside a line does not run
+      // across a blank line, and an escaped \<!-- is text.
+      let body=part.lines;
+      if(!keepComments)body=body.filter(line=>!/^\s*\[(?:\/\/|comment)\]:\s*#\s*\((?:[^()\\\n]|\\.)*\)\s*$/i.test(line)).join('\n').replace(/(\\?)<!--((?:(?!<!--|\n[ \t]*(?:```|~~~))[\s\S])*?)-->/g,(all,esc,inner,at,str)=>esc||(/\n[ \t]*\n/.test(inner)&&/\S/.test(str.slice(str.lastIndexOf('\n',at-1)+1,at)))?all:'').split('\n');
+      for(const line of body){
+        const cut=line.replace(WISH_RP_IMAGE,'');
+        if((cut!==line&&!cut.trim())||/^\s*https?:\/\/\S+\.(?:png|jpe?g|gif|webp|bmp|svg|avif)(?:\?\S*)?\s*$/i.test(cut))continue;
+        out.push(cut.replace(/[^\S\n]+$/,''));
+      }
     }
     return out.join('\n').replace(/\n{3,}/g,'\n\n').trim();
   }
-  // A turn row as the AI reads it, cleaned message by message (an unclosed <!-- never reaches the next message). A USER message keeps
-  // its text when cleaning would change one of its OOC correction lines: correction_targets quote that line from the RP.
-  // A row whose messages do not join back to its own text is sent as it is.
+  // A USER message as the AI reads it: images out, hidden comments kept, and the message is sent as it is when cleaning would change
+  // one of its OOC correction lines (correction_targets quote that line from the RP).
+  function wishCleanUserText(text){
+    const s=String(text??''),c=wishCleanRpText(s,true);if(c===s)return c;
+    const lines=new Set(c.split('\n').map(x=>x.trim()));return WishMemorySafety.corrections([{userText:s}]).every(x=>lines.has(x))?c:s;
+  }
+  function wishCleanMessage(role,text){return role==='user'?wishCleanUserText(text):wishCleanRpText(text);}
+  // A turn row as the AI reads it, cleaned message by message (an unclosed <!-- never reaches the next message); a message left
+  // empty adds no blank lines. A row whose messages do not join back to its own text is sent as it is.
   function wishCleanTurn(t){
-    const user=s=>{const c=wishCleanRpText(s);if(c===s)return c;const lines=new Set(c.split('\n').map(x=>x.trim()));return WishMemorySafety.corrections([{userText:s}]).every(x=>lines.has(x))?c:s;};
     const msgs=Array.isArray(t?.relationshipSourceMessages)&&t.relationshipSourceMessages.length?t.relationshipSourceMessages:null;
     if(msgs){
-      const join=(isUser,f)=>msgs.filter(m=>(m.role==='user')===isUser).map(m=>f(String(m.text??''))).join('\n\n'),same=x=>x;
-      if(join(true,same)!==String(t.userText??'')||join(false,same)!==String(t.assistantText??''))return t;
-      return {...t,userText:join(true,user),assistantText:join(false,wishCleanRpText)};
+      const side=isUser=>msgs.filter(m=>(m.role==='user')===isUser).map(m=>String(m.text??''));
+      if(side(true).join('\n\n')!==String(t.userText??'')||side(false).join('\n\n')!==String(t.assistantText??''))return t;
+      const join=(isUser,f)=>side(isUser).map(f).filter(x=>x.trim()).join('\n\n');
+      return {...t,userText:join(true,wishCleanUserText),assistantText:join(false,x=>wishCleanRpText(x))};
     }
     const n=Number(t?.messageCount);if(n>2||(t?.key==='prologue'&&n>1))return t; // several messages without their list
-    return {...t,userText:user(String(t?.userText??'')),assistantText:wishCleanRpText(t?.assistantText)};
+    return {...t,userText:wishCleanUserText(t?.userText),assistantText:wishCleanRpText(t?.assistantText)};
   }
   // 빠르게 TXT only: the date notations already found in each turn (row.timeHints, the turns' [장면 시간 단서] JSON), one line per
   // notation with the turns that carry it. A turn without one is left out and never takes a neighbour's date; nothing is guessed.
   function wishDateToc(rows){
     const MAX=3000,HEAD='[날짜 목차 — 확프가 원문에서 찾은 날짜 표기 · 장면 날짜를 정할 때 원문과 함께 참고]';
-    const clock=/(?:\s*(?:AM|PM|오전|오후))?\s*\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:AM|PM|오전|오후))?$/i;
+    // Grouping key: the field value up to the next 'label:' of a one-line panel, with clock times (16:36, PM 04:36, 오후 3시 20분, a range of
+    // them), elapsed-time brackets and time-of-day words taken out, so the turns of one day share a line. Nothing is added to the value.
+    const DP='(?:AM|PM|A\\.M\\.|P\\.M\\.|오전|오후|새벽|아침|낮|점심|저녁|밤|심야|한밤중?|정오|자정|morning|afternoon|evening|night|noon|midnight)';
+    const CLOCK=new RegExp(`(?:${DP}\\s*)?(?:\\d{1,2}\\s*[:：]\\s*\\d{2}(?:\\s*[:：]\\s*\\d{2})?(?:\\s*[AP]\\.?M\\.?(?!\\p{L}))?|\\d{1,2}\\s*시(?![간대즌점작각절기])(?:\\s*\\d{1,2}\\s*분|\\s*반)?(?:\\s*\\d{1,2}\\s*초)?(?:\\s*정각)?)`,'giu');
+    const DAYPART=new RegExp(`(?<=^|[\\s,·(\\[/])${DP}(?=$|[\\s,·)\\]/.])`,'giu');
+    const PART=/(?:\s+[/|·]|[,，;])\s*(?:[^\s\p{L}\p{N}]+\s*)?(?:[^\s:：]{1,10}\s+)?[^\s:：]{0,9}\p{L}[^\s:：]{0,9}\s*[:：]/u;
+    const DATE=/\d\s*(?:년|월|일|年|月|日)|\d{4}\s*[./-]\s*\d{1,2}|\d{1,2}\s*[./]\s*\d{1,2}|[월화수목금토일]요일|\bD\s*[+-]?\s*\d|\bDay\s*\d|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d|\d\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|\b(?:mon|tues|wednes|thurs|fri|satur|sun)day\b|[첫둘셋넷]째\s*날|\d\s*번째\s*날/iu;
+    const norm=v=>String(v).split(PART)[0].replace(CLOCK,' ').replace(/[(（[]\s*(?:총|약|경과|\+)?\s*(?:\d+\s*(?:시간|분|초|hours?|h|min|mins|m)\s*)+(?:경과)?\s*[)）\]]/giu,' ').replace(DAYPART,' ')
+      .replace(/[(（[]\s*[-~–—,·]*\s*[)）\]]/g,' ').replace(/\s+/g,' ').replace(/\s+([,·])/g,'$1').replace(/^[\s,·|/\-~–—:;.]+|[\s,·|/\-~–—:;]+$/g,'');
     const keyOf=t=>{
       const all=(t?.timeHints||[]).map(h=>String(h?.value??'').match(/^(날짜|일시|시간|시각|date|datetime|time): ([\s\S]*)$/i)).filter(Boolean);
-      const dates=all.filter(m=>/^(날짜|일시|date|datetime)$/i.test(m[1]));
-      // Without a date field, a time field is read with its clock time cut off the end (the minutes change every turn); a bare clock time is no date.
-      const values=dates.length?dates.map(m=>m[2].trim()):all.map(m=>m[2].trim().replace(clock,'').replace(/[\s,·|/-]+$/,''));
-      const key=[...new Set(values.filter(Boolean))].join(' · ');return key.length>160?key.slice(0,159)+'…':key;
+      const isDate=m=>/^(날짜|일시|date|datetime)$/i.test(m[1]);
+      // A 날짜/date value counts with any word left; any other field only when what is left still holds a date (a clock time, a time of
+      // day or a place is no date). Date fields come first; a time field is read only when no date field gives a value.
+      const ok=(m,x)=>/^(날짜|date)$/i.test(m[1])?/[\p{L}\p{N}]/u.test(x):DATE.test(x);
+      const pick=ms=>ms.map(m=>[m,norm(m[2])]).filter(([m,x])=>x&&ok(m,x)).map(([,x])=>x);
+      const values=pick(all.filter(isDate)),use=values.length?values:pick(all.filter(m=>!isDate(m)));
+      const key=[...new Set(use)].join(' · ');return key.length>160?key.slice(0,159)+'…':key;
     };
     const groups=[];
     (rows||[]).forEach((t,i)=>{const key=keyOf(t),n=i+1;if(!key)return;const g=groups.at(-1);if(g?.key!==key){groups.push({key,runs:[[n,n]]});return;}const run=g.runs.at(-1);if(run[1]===n-1)run[1]=n;else g.runs.push([n,n]);});
@@ -9512,7 +9545,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
         for(const candidates of batches){
           const remaining=selectionDeadline-Date.now();
           if(remaining<=0)throw Error(`주입 후보 AI 선별이 ${Math.ceil(RECALL_SELECTION_TIMEOUT_MS/1000)}초를 넘어 로컬 선별로 전환합니다.`);
-          const result=await callAiProvider(settings,getGuideText('apiRecall')+(indexed?getGuideText('apiIndex'):''),JSON.stringify({mode:cfg,query:String(query).slice(-8000),scene_context:{previous_answer:recallSceneText(scene,true),current_state_excerpt:String(room.slots?.find(s=>s.id==='currentState')?.content||'').slice(0,5000),scope:'읽기 전용 일부 문맥 · 신규 사실 생성 금지'},candidates}),{taskKind:'select',responseMimeType:'application/json',maxOutputTokens:indexed?Math.min(16384,8192+candidates.filter(x=>x.build_index).length*600):4096,timeoutMs:remaining,operationLabel:cfg.semantic&&cfg.selector?'관련 기억 찾기·우선순위 정하기':cfg.semantic?'표현이 다른 기억 찾기':'기억 우선순위 정하기'});
+          const result=await callAiProvider(settings,getGuideText('apiRecall')+(indexed?getGuideText('apiIndex'):''),JSON.stringify({mode:cfg,query:wishCleanUserText(String(query)).slice(-8000),scene_context:{previous_answer:recallSceneText(scene,true),current_state_excerpt:String(room.slots?.find(s=>s.id==='currentState')?.content||'').slice(0,5000),scope:'읽기 전용 일부 문맥 · 신규 사실 생성 금지'},candidates}),{taskKind:'select',responseMimeType:'application/json',maxOutputTokens:indexed?Math.min(16384,8192+candidates.filter(x=>x.build_index).length*600):4096,timeoutMs:remaining,operationLabel:cfg.semantic&&cfg.selector?'관련 기억 찾기·우선순위 정하기':cfg.semantic?'표현이 다른 기억 찾기':'기억 우선순위 정하기'});
           const parsed=WLOG.parseJson(result.text,'주입 후보 선별',result.diagnostic),data=indexed?WishEconomy.decode(parsed):parsed,valid=new Set(candidates.map(x=>x.id)),seen=new Set();
           if(!data||Object.keys(data).some(k=>k!=='scores')||!Array.isArray(data.scores)||data.scores.length!==candidates.length)throw Error('후보 개수가 맞지 않는 AI 결과');
           for(const row of data.scores){if(!row||Object.keys(row).some(k=>!['id','relevance','related',...(indexed?['index_quotes']:[])].includes(k))||!valid.has(row.id)||seen.has(row.id)||!Number.isInteger(row.relevance)||row.relevance<0||row.relevance>100||typeof row.related!=='boolean')throw Error('유효하지 않은 AI 후보 선별');seen.add(row.id);scores.push(row);}
@@ -10117,7 +10150,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
       const list=all.filter(m=>['user','assistant'].includes(messageRoleOf(m))).map(m=>({id:String(messageIdOf(m)),role:messageRoleOf(m),raw:messageTextOf(m)})),textOf=m=>m.text??=stripAutomationNoise(m.raw,true,true).trim();
       // The texts searched in turn: as read, then as the AI read it (page wrapping out; the memory paths also leave out status panels,
       // which only a fenced message has). A message whose text is the same as in the pass before is not searched again.
-      const views=[textOf,m=>m.clean??=wishCleanRpText(textOf(m)),m=>m.bare??=/```|~~~/.test(m.raw)?wishCleanRpText(stripAutomationNoise(m.raw,true).trim()):views[1](m)];
+      const views=[textOf,m=>m.clean??=wishCleanMessage(m.role,textOf(m)),m=>m.bare??=/```|~~~/.test(m.raw)?wishCleanMessage(m.role,stripAutomationNoise(m.raw,true).trim()):views[1](m)];
       const skip=(m,v)=>v?views[v](m)===views[v-1](m)||!(m['marks'+v]??=views[v](m).replace(/[*_~`]/g,'')).includes(word):!m.raw.replace(/[*_~`]/g,'').includes(word);
       let turn=0;const turns=list.map(m=>m.role==='user'?++turn:turn),anchorAt=t.anchor?list.findIndex(m=>m.id===t.anchor):-1;
       const label=i=>(list[i].role==='user'?'USER':'AI')+' · '+fmtTurn(turns[i])+' · 메시지 '+shortId(list[i].id);
@@ -11271,7 +11304,7 @@ ${AI_JSON_TEXT_RULE}
       const source=await prepareLoreExternalSource(room);check();
       // Checked on the text as read; the TXT then carries each message without page wrapping (a message that would be left empty keeps
       // its text). The importer checks the rp_source_sha256 its answer copies, never a rebuilt text, so answers to older TXT files still go in.
-      const rows=loreExternalExportRows(source),sent=m=>({...m,text:wishCleanRpText(m.text)||m.text});
+      const rows=loreExternalExportRows(source),sent=m=>({...m,text:wishCleanMessage(m.role,m.text)||m.text});
       const view={...source,preface:source.preface.map(sent),turns:source.turns.map(t=>({...t,messages:(t.messages||[]).map(sent)}))},sentRows=rows.map(row=>({...row,message:sent(row.message)})),rpText=buildLoreExternalRpText(view);
       task.stage('자료집 기준·실제 메시지 ID 확인 중');
       const pack=structuredClone(await ensureAutoLorePack(room));check();
@@ -12571,7 +12604,7 @@ anchor는 장면과 무관하게 항상 필요한 절대 규칙에만 드물게 
       for(let i=job.index;i<segments.length;i++){
         assertLive();onProgress({done:i,total:segments.length,status:'API 분석 중'});
         // The AI reads each message without page wrapping; the segments, cursor and signature stay on the text as read.
-        const prompt=JSON.stringify({history_review:all||!cursor,segment:i+1,segment_count:segments.length,existing:job.entries.map(loreApiCard),protected:protectedEntries.map(loreApiCard),fixed,rp:segments[i].map(row=>({role:row.role,text:wishCleanRpText(row.text)}))});
+        const prompt=JSON.stringify({history_review:all||!cursor,segment:i+1,segment_count:segments.length,existing:job.entries.map(loreApiCard),protected:protectedEntries.map(loreApiCard),fixed,rp:segments[i].map(row=>({role:row.role,text:wishCleanMessage(row.role,row.text)}))});
         WishMemorySafety.wire(guide,prompt);
         const result=await callAiProvider(settings,guide,prompt,{taskKind:'extract',responseMimeType:'application/json',operationLabel:'자료집 묶음 정리 '+(i+1)+'/'+segments.length});
         calls++;assertLive(false);
