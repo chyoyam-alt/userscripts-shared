@@ -9572,6 +9572,9 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     }
     if(!options.forceLocal){rank.at=Date.now();allFitRankCache.set(key,rank);}while(allFitRankCache.size>2)allFitRankCache.delete(allFitRankCache.keys().next().value);
   }
+  // Latest-date logs are kept by default (logItemPriority): every path ranks them right after the required items, even when a filter dropped them.
+  const recent=local.filter(x=>x.item.autoType==='recent-log').map(x=>x.id);
+  if(recent.length)rank={...rank,ids:[...recent,...rank.ids.filter(id=>!recent.includes(id))]};
   const fit=length=>{const chosen=[...required];for(const id of rank.ids){const item=optional[id];if(item&&length([...chosen,item])<=limit)chosen.push(item);}const keep=new Set(chosen);return items.filter(item=>keep.has(item));};
   let selected=fit(size),selectedTotal=exactSize(selected);
   if(size(selected)!==selectedTotal||selectedTotal>limit){selected=fit(exactSize);selectedTotal=exactSize(selected);}
