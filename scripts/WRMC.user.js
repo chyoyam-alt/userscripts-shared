@@ -130,6 +130,7 @@
     safeChars: 40000,
     carrierSafeChars: 40000,
     carrierFallbackChars: 36000,
+    carrierByteBudget: 100000,
     absoluteUiMax: 45000,
     activePollMs: 10000,
     idleAutoScanMs: 15000,
@@ -9510,6 +9511,42 @@ function remapUnknownLogSelectionKeys(room,oldBlocks,newBlocks){
     const message=String(error?.message||error||'');
     return message.includes('메시지 PATCH 실패')&&/API 오류 500/.test(message);
   }
+  // Message PATCH takes a JSON body of at most 102,400 UTF-8 bytes and answers 413 above it (measured 2026-10-05).
+  // carrierByteBudget keeps 2,400 bytes of slack. Counted on the exact body apiRequest sends, escapes included.
+  function carrierBodyBytes(text) {
+    return new TextEncoder().encode(JSON.stringify({message:String(text??'')})).length;
+  }
+  function isServerPatch413(error) {
+    const message=String(error?.message||error||'');
+    return message.includes('메시지 PATCH 실패')&&/API 오류 413/.test(message);
+  }
+  function carrierByteError(subject,bytes,budget,next) {
+    const e=Error(subject+' 서버 용량 한도 '+budget.toLocaleString()+'바이트를 넘습니다(현재 '+bytes.toLocaleString()+'바이트). 글자 수가 아니라 서버로 보내는 요청 크기(용량) 기준이며, 한글이 많을수록 같은 글자 수라도 용량이 큽니다. '+next);
+    e.code='WISH_CARRIER_TOO_LARGE';return e;
+  }
+  function requiredByteError(bytes,budget) {
+    return carrierByteError('현재상태·인지·호칭·켜진 캐릭터/OOC·고정 자료와 AI 원문만으로',bytes,budget,'고정 항목 또는 이번 세션 포함 선택을 줄여 주세요. 원문과 저장 기억은 삭제하지 않았습니다.');
+  }
+  function carrier413Error(error,what='주입 내용') {
+    const e=Error('서버가 용량 한도 초과(413)로 거절해 '+what+'을 줄여 다시 보냈지만 다시 거절했습니다. 글자 수가 아니라 서버로 보내는 요청 크기(용량) 기준입니다. 고정 자료·켜진 캐릭터/OOC·현재상태처럼 항상 들어가는 항목이나 이번 세션 포함 선택을 줄여 주세요. 원문과 저장 기억은 삭제하지 않았습니다. · '+String(error?.message||error));
+    e.code='WISH_CARRIER_TOO_LARGE';return e;
+  }
+  // Selection stays character-based. A pick whose request body is over the byte budget is picked again by the same
+  // selection under a character limit lowered in proportion; the last round keeps only the items that always go in.
+  async function chooseAllFitItemsWithinBytes(room,items,original,query,options,build,budget=APP.carrierByteBudget) {
+    let selection=await chooseAllFitItems(room,items,original,query,options),text=build(selection.items),bytes=carrierBodyBytes(text);
+    if(bytes<=budget)return selection;
+    const coreText=build((items||[]).filter(i=>allFitRequired(i)&&injectionCadenceKind(i)!=='threads')),coreBytes=carrierBodyBytes(coreText);
+    if(coreBytes>budget)throw requiredByteError(coreBytes,budget);
+    let limit=Math.min(Number(selection.limit)||allFitLimit(room),text.length);
+    for(let round=1;bytes>budget;round++){
+      limit=round>=4?coreText.length:Math.max(coreText.length,Math.min(limit-1,Math.floor(text.length*budget/bytes)-Math.ceil(text.length/100)));
+      selection=await chooseAllFitItems(room,items,original,query,{...options,limit});
+      text=build(selection.items);bytes=carrierBodyBytes(text);
+      if(round>=4&&bytes>budget)throw requiredByteError(bytes,budget);
+    }
+    return {...selection,byteLimited:true,bytes};
+  }
   function allFitRequired(item) {
     return (item?.quickChoice?.version===2&&item.quickChoice.action==='include')||!['log','lore','relationship'].includes(injectionCadenceKind(item))||['pinned-log','manual-log','pinned-lore'].includes(item.autoType);
   }
@@ -9960,6 +9997,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     if (!original) throw new Error('AI 시작 메시지 원문이 비어 있어 시작 설정을 적용하지 않았습니다.');
     const nextText = buildSessionSetupMessage(original, setupBlock);
     if(setupBlock&&nextText.length>allFitLimit(room))throw Error('시작 메시지와 주입 자료가 허용 글자 수를 넘습니다. 항목을 줄여 주세요.');
+    if(setupBlock&&carrierBodyBytes(nextText)>APP.carrierByteBudget)throw carrierByteError('시작 메시지와 주입 자료가',carrierBodyBytes(nextText),APP.carrierByteBudget,'항목을 줄여 주세요.');
 
     await assertActiveRoomLease(rid);
     const current = await fetchMessage(rid,messageId);
@@ -9975,10 +10013,13 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
         `https://contents-api.wrtn.ai/character-chat/character-chats/${rid}/messages/${messageId}`,
       ];
       let lastErr = null, patched = false;
+      const errors = [];
       for (const url of candidates) {
         try { await apiRequest('PATCH',url,{message:nextText}); patched=true; lastErr=null; break; }
-        catch (error) { lastErr=error; }
+        catch (error) { lastErr=error; errors.push(String(error?.message||error)); }
       }
+      // 413 reads as a PATCH failure the caller retries smaller (isServerPatch413); other failures keep their own error.
+      if (!patched && errors.some(m=>/API 오류 413/.test(m))) throw new Error(`AI 시작 메시지 PATCH 실패 · ${errors.join(' / ')}`);
       if (!patched) throw lastErr || new Error('AI 시작 메시지 PATCH 실패');
     }
 
@@ -9998,13 +10039,26 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     if(!target.fresh)throw Error(target.reason);
     const bridge=cogBridge();
     await bridge?.refreshExpression?.(apiChatIdOf(room));
-    const original=stripSessionSetupBlock(target.raw).text;
-    const selection=await chooseAllFitItems(room,sessionSetupSelectedItems(room),original,'',{
-      totalLength:items=>buildSessionSetupMessage(original,buildSessionSetupBlock(room,items).block).length
-    });
-    const built = buildSessionSetupBlock(room,selection.items);
+    const original=stripSessionSetupBlock(target.raw).text,pool=sessionSetupSelectedItems(room);
+    const setupText=items=>buildSessionSetupMessage(original,buildSessionSetupBlock(room,items).block);
+    const pick=async budget=>{
+      const selection=await chooseAllFitItemsWithinBytes(room,pool,original,'',{totalLength:items=>setupText(items).length},setupText,budget),built=buildSessionSetupBlock(room,selection.items);
+      if(selection.byteLimited&&!built.items.length)throw Object.assign(Error('서버 용량 한도 안에 AI 시작 메시지와 함께 넣을 수 있는 주입 항목이 없습니다. 글자 수가 아니라 서버로 보내는 요청 크기(용량) 기준입니다. 켜진 항목의 분량을 줄여 주세요.'),{code:'WISH_CARRIER_TOO_LARGE'});
+      return built;
+    };
+    let built = await pick(APP.carrierByteBudget);
     if (!built.block || !built.items.length) throw new Error('켜져 있고 내용이 있는 주입 항목이 없습니다. 먼저 사용할 항목을 켜 주세요.');
-    const result = await writeFreshSessionSetup(room,built.block,built.hash);
+    let result;
+    try { result = await writeFreshSessionSetup(room,built.block,built.hash); }
+    catch (error) {
+      // 413: the server refused the size; pick again 10% under the refused bytes and send once more.
+      if (!isServerPatch413(error)) throw error;
+      notify('서버 용량 한도 초과(413) · 시작 설정을 줄여 다시 보내는 중','warn',3500);
+      try { built = await pick(Math.floor(carrierBodyBytes(buildSessionSetupMessage(original,built.block))*0.9)); }
+      catch (e) { if (e?.code==='WISH_CARRIER_TOO_LARGE') throw carrier413Error(error,'시작 설정'); throw e; }
+      try { result = await writeFreshSessionSetup(room,built.block,built.hash); }
+      catch (e) { if (isServerPatch413(e)) throw carrier413Error(e,'시작 설정'); throw e; }
+    }
     room.sessionSetup = { version:1, messageId:result.messageId, appliedHash:built.hash, appliedAt:Date.now(), verified:true };
     await saveRoom(room);
     state.sessionSetupEligibility.delete(String(apiChatIdOf(room)||''));
@@ -11873,8 +11927,9 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
 
   function assertRequiredRecallBudget(room,items,original){
     const required=(items||[]).filter(i=>allFitRequired(i)&&injectionCadenceKind(i)!=='threads'),limit=allFitLimit(room);
-    const total=buildInjectedMessage(original,buildContextBlockFromItems(required,room)).length;
+    const text=buildInjectedMessage(original,buildContextBlockFromItems(required,room)),total=text.length;
     if(total>limit)throw Error('현재상태·인지·호칭·켜진 캐릭터/OOC·고정 자료와 AI 원문만으로 '+limit.toLocaleString()+'자를 넘습니다. 고정 항목 또는 이번 세션 포함 선택을 줄여 주세요. 원문과 저장 기억은 삭제하지 않았습니다.');
+    const bytes=carrierBodyBytes(text);if(bytes>APP.carrierByteBudget)throw requiredByteError(bytes,APP.carrierByteBudget);
     const anchors=required.filter(item=>item.autoType==='pinned-lore');
     const projection=SecondaryRebuild.projector(room);
     const chars=anchors.reduce((sum,item)=>sum+String(projection.item({...item,content:item._loreLevels?.full||item.content,compressionLevel:'full'}).content||'').trim().length,0);
@@ -11945,9 +12000,9 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
     let candidates=gather(false),normalPlan=candidates.normalPlan;
     // Measure the actual wire string, including the original AI response, headings,
     // comment escaping and approved compressed representations. No rough body sum.
-    const fullTotal=buildInjectedMessage(original,buildContextBlockFromItems(normalPlan,room)).length;
+    const fitText=items=>buildInjectedMessage(original,buildContextBlockFromItems(items,room)),fullText=fitText(normalPlan),fullTotal=fullText.length;
     if(hasOriginal)assertRequiredRecallBudget(room,normalPlan,original);
-    let selection=fullTotal<=limit?{items:normalPlan,method:'all-fit',total:fullTotal,fullTotal,omitted:0,error:'',limit}:null;
+    let selection=fullTotal<=limit&&carrierBodyBytes(fullText)<=APP.carrierByteBudget?{items:normalPlan,method:'all-fit',total:fullTotal,fullTotal,omitted:0,error:'',limit}:null;
     if(selection){
       const done=typeof WishPerformance==='undefined'?()=>{}:WishPerformance.start('allFitWithoutRanking');done();
     }else{
@@ -11966,9 +12021,9 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
     const inventory=JSON.stringify(['selection-low-v1',WishPromptGuides.selectorStamp(),recallSelectionSettings(room),SecondaryRebuild.stamp(room),WishEconomy.stamp(room),normalPlan.map(i=>[pendingItemIdentity(i),i.content,i.autoType,i.quickChoice]).sort((a,b)=>a[0].localeCompare(b[0]))]);
     const previousPlan=pending.recallPlan;
     const retained=!selection&&!allowAi&&previousPlan?.inventoryHash===aiHashTiny(inventory)&&previousPlan.inventoryChars===inventory.length&&previousPlan.method==='ai'&&Array.isArray(previousPlan.rankedKeys);
-    if(!selection)selection=await chooseAllFitItems(room,normalPlan,original,query,{forceLocal:!allowAi||!hasOriginal,sceneText:scene,...(retained?{preferredKeys:previousPlan.rankedKeys,preferredMethod:'ai'}:{})});
+    if(!selection)selection=await chooseAllFitItemsWithinBytes(room,normalPlan,original,query,{forceLocal:!allowAi||!hasOriginal,sceneText:scene,...(retained?{preferredKeys:previousPlan.rankedKeys,preferredMethod:'ai'}:{})},fitText);
     assertPlan();
-    const review={method:selection.method,error:selection.error,reason:selection.method==='all-fit'?'within-limit':retained?'prepared-result':selection.fullTotal<=APP.carrierSafeChars?'room-limit':selection.method==='ai'?'over-limit':selection.error?'ai-failure':'before-send-or-local'};
+    const review={method:selection.method,error:selection.error,reason:selection.method==='all-fit'?'within-limit':retained?'prepared-result':selection.fullTotal<=APP.carrierSafeChars?(selection.byteLimited?'byte-limit':'room-limit'):selection.method==='ai'?'over-limit':selection.error?'ai-failure':'before-send-or-local'};
     const plan={fullTotal:selection.fullTotal,messageId:carrierSource?.messageId||''};
     const selectedBase=base.filter(item=>injectionCadenceKind(item)!=='relationship'||!candidates.eligible.has(item)||selection.items.includes(item));
     const logs=selection.items.filter(item=>injectionCadenceKind(item)==='log');
@@ -11978,7 +12033,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
     const inactive=[...fixedLogs,...relatedLogs.slice(0,logTarget),...loreAnchors,...relatedLore.slice(0,loreTarget)].filter(item=>!eligible.has(item));
     const recalled=[...logs,...lore,...inactive].map(item=>{const old=previous.get(pendingItemIdentity(item));return {...item,totalTurns:0,usedTurns:0,turnStartUserId:old?.turnStartUserId||pending.latestUserId||pending.turnStartUserId};});
     pending.items=[...selectedBase,...recalled];delete pending.recallNeedsRefresh;
-    pending.recallPlan={inventoryHash:aiHashTiny(inventory),inventoryChars:inventory.length,method:selection.method,rankedKeys:selection.rankedKeys||selection.items.filter(i=>!allFitRequired(i)).map(pendingItemIdentity),queryHash:retained?previousPlan.queryHash:aiHashTiny(query),fullTotal:selection.fullTotal,total:selection.total,omitted:selection.omitted,limit:selection.limit,retained:!!retained};
+    pending.recallPlan={inventoryHash:aiHashTiny(inventory),inventoryChars:inventory.length,method:selection.method,rankedKeys:selection.rankedKeys||selection.items.filter(i=>!allFitRequired(i)).map(pendingItemIdentity),queryHash:retained?previousPlan.queryHash:aiHashTiny(query),fullTotal:selection.fullTotal,total:selection.total,omitted:selection.omitted,limit:selection.limit,retained:!!retained,...(selection.byteLimited?{byteLimited:true}:{})};
     room.lastLoreSearch={at:Date.now(),queryHash:aiHashTiny(query),semanticUsed:!!vector,semanticError,matchedLore:lore.length,
       matchedLogs:logs.filter(item=>item.autoType==='related-log').length,reviewMethod:review.method,reviewError:review.error,
       reviewReason:review.reason||'',reviewBaseTotal:hasOriginal?plan.fullTotal:null,reviewLimit:limit,reviewCarrierId:plan.messageId};
@@ -12925,18 +12980,20 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     if(!original)throw new Error('carrier AI 원문이 비어 있어 안전하게 재검증할 수 없습니다.');
     const expected=buildInjectedMessage(original,p.contextBlock);
     // 2.4.5에서 만든 40k 초과 pending은 같은 큰 본문을 다시 보내지 않고
-    // 현재 후보로 안전 예산을 다시 계산한 뒤 그 결과를 검증합니다.
-    if(expected.length>allFitLimit(room)){
+    // 현재 후보로 안전 예산을 다시 계산한 뒤 그 결과를 검증합니다. 바이트 예산 초과와 서버 413도 같습니다.
+    const resize=async()=>{
       const resized=await reconcileStableCarrier(room,'manual-resize',frame),nextPending=room.pending;
       if(resized?.deferred)return resized;
       if(nextPending?.verified)return {verified:true,text:buildInjectedMessage(nextPending.originalText,nextPending.contextBlock),serverChars:nextPending.serverChars,repaired:true,resized:true};
 
       throw new Error('저장 주입본을 안전 크기로 재조정했지만 서버 확인이 끝나지 않았습니다.');
-    }
+    };
+    if(expected.length>allFitLimit(room)||carrierBodyBytes(expected)>APP.carrierByteBudget)return resize();
     let verification;
     if(normalizeLineBreaks(text)===normalizeLineBreaks(expected))verification={verified:true,serverChars:text.length};
     else{
-      verification=await patchMessage(rid,p.messageId,expected,text);
+      try{verification=await patchMessage(rid,p.messageId,expected,text);}
+      catch(error){if(isServerPatch413(error))return resize();throw error;}
     }
     if(!verification.verified)throw new Error('저장 주입본을 다시 적용했지만 서버 본문과 일치하지 않습니다.');
     p.originalText=original;p.originalChars=original.length;p.carrierChars=expected.length;p.verified=true;p.verifiedAt=Date.now();p.serverChars=verification.serverChars;
@@ -13634,13 +13691,15 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     // 관련 후보는 앞 단계에서 이미 에리 의미검색과 선택적 AI 재검토를 마쳤습니다.
     // 최종 40k/36k 맞춤은 네트워크 없는 결정적 로컬 순서만 사용합니다.
     const prepared=p.recallPlan?.rankedKeys?{preferredKeys:p.recallPlan.rankedKeys,preferredMethod:p.recallPlan.method}:{};
-    let selection=await chooseAllFitItems(room,candidateItems,original,room.autoRecallContextText||'',{forceLocal:true,...prepared});
+    const fitText=items=>buildInjectedMessage(original,buildContextBlockFromItems(items,room));
+    let selection=await chooseAllFitItemsWithinBytes(room,candidateItems,original,room.autoRecallContextText||'',{forceLocal:true,...prepared},fitText);
     if(room.pending!==p||allFitSourceStamp(room)!==sourceStamp)throw Error('선별 중 기억 또는 설정이 변경되어 재적용을 보류했습니다. 다음 확인 때 새 자료로 다시 계산합니다.');
     active=selection.items;
     let block=buildContextBlockFromItems(active,room),injected=buildInjectedMessage(original,block);
     if(injected.length>allFitLimit(room))throw new Error('이전 AI 원문과 주입 내용이 길이 한도를 넘습니다. 항목을 줄여 주세요.');
+    if(carrierBodyBytes(injected)>APP.carrierByteBudget)throw carrierByteError('이전 AI 원문과 주입 내용이',carrierBodyBytes(injected),APP.carrierByteBudget,'항목을 줄여 주세요.');
     let next={...p,messageId:newId,originalText:original,contextBlock:block,items:p.items,injectedChars:block.length,originalChars:original.length,
-      selection:{method:selection.method==='all-fit'&&prepared.preferredMethod?prepared.preferredMethod:selection.method,limit:selection.limit,fullTotal:p.recallPlan?.fullTotal??selection.fullTotal,omitted:Math.max(0,Number(p.recallPlan?.omitted)||0)+selection.omitted,error:selection.error,keys:active.map(pendingItemIdentity),...(selection.threadsOut?{threadsOut:true}:{})},carrierChars:injected.length,carrierArmedAt:Date.now(),verified:false,awaitingCarrier:false};
+      selection:{method:selection.method==='all-fit'&&prepared.preferredMethod?prepared.preferredMethod:selection.method,limit:selection.limit,fullTotal:p.recallPlan?.fullTotal??selection.fullTotal,omitted:Math.max(0,Number(p.recallPlan?.omitted)||0)+selection.omitted,error:selection.error,keys:active.map(pendingItemIdentity),...(selection.threadsOut?{threadsOut:true}:{}),...(selection.byteLimited||p.recallPlan?.byteLimited?{byteLimited:true}:{})},carrierChars:injected.length,carrierArmedAt:Date.now(),verified:false,awaitingCarrier:false};
     if(previousCarrier)next.previousCarrierCleanup=previousCarrier;
     else if(p.previousCarrierCleanup?.messageId)next.previousCarrierCleanup=structuredClone(p.previousCarrierCleanup);
     else delete next.previousCarrierCleanup;
@@ -13651,17 +13710,22 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       try{
         patchVerification=await patchMessage(apiChatIdOf(room),newId,injected);
       }catch(error){
-        const fallbackLimit=carrierFallbackLimit(room);
-        if(!isServerPatch500(error)||injected.length<=fallbackLimit)throw error;
-        notify(`서버 저장 한도 재조정 중 · ${fallbackLimit.toLocaleString()}자`,'warn',3500);
-        selection=await chooseAllFitItems(room,candidateItems,original,room.autoRecallContextText||'',{forceLocal:true,limit:fallbackLimit,...(p.recallPlan?.rankedKeys?{preferredKeys:p.recallPlan.rankedKeys,preferredMethod:p.recallPlan.method}:{})});
+        // 413 (body too large): pick again 10% under the refused bytes, as the 500 retry steps 40,000 → 36,000 characters.
+        // A 500 keeps its 36,000-character retry; both stay within the byte budget.
+        const tooLarge=isServerPatch413(error),fallbackLimit=tooLarge?allFitLimit(room):carrierFallbackLimit(room);
+        if(!tooLarge&&(!isServerPatch500(error)||injected.length<=fallbackLimit))throw error;
+        const byteBudget=tooLarge?Math.min(APP.carrierByteBudget,Math.floor(carrierBodyBytes(injected)*0.9)):APP.carrierByteBudget;
+        notify(tooLarge?'서버 용량 한도 초과(413) · 주입 내용을 줄여 다시 보내는 중':`서버 저장 한도 재조정 중 · ${fallbackLimit.toLocaleString()}자`,'warn',3500);
+        try{selection=await chooseAllFitItemsWithinBytes(room,candidateItems,original,room.autoRecallContextText||'',{forceLocal:true,limit:fallbackLimit,...(p.recallPlan?.rankedKeys?{preferredKeys:p.recallPlan.rankedKeys,preferredMethod:p.recallPlan.method}:{})},fitText,byteBudget);}
+        catch(e){if(tooLarge&&e?.code==='WISH_CARRIER_TOO_LARGE')throw carrier413Error(error);throw e;}
         if(room.pending!==next||allFitSourceStamp(room)!==sourceStamp)throw Error('서버 재시도 준비 중 기억 또는 설정이 변경되어 재적용을 보류했습니다.');
         active=selection.items;block=buildContextBlockFromItems(active,room);injected=buildInjectedMessage(original,block);
-        if(injected.length>fallbackLimit)throw new Error('서버 재시도용 주입 내용이 안전 한도를 넘습니다. 고정 항목을 줄여 주세요.');
+        if(injected.length>fallbackLimit||carrierBodyBytes(injected)>byteBudget)throw new Error('서버 재시도용 주입 내용이 안전 한도를 넘습니다. 고정 항목을 줄여 주세요.');
         next={...next,contextBlock:block,injectedChars:block.length,carrierChars:injected.length,carrierArmedAt:Date.now(),
-          selection:{method:`${selection.method}+server-backoff`,limit:selection.limit,fullTotal:selection.fullTotal,omitted:selection.omitted,error:selection.error,keys:active.map(pendingItemIdentity),firstPatchError:String(error?.message||error),...(selection.threadsOut?{threadsOut:true}:{})}};
+          selection:{method:`${selection.method}+${tooLarge?'server-413':'server-backoff'}`,limit:selection.limit,fullTotal:selection.fullTotal,omitted:selection.omitted,error:selection.error,keys:active.map(pendingItemIdentity),firstPatchError:String(error?.message||error),...(selection.threadsOut?{threadsOut:true}:{}),...(selection.byteLimited?{byteLimited:true}:{})}};
         savePendingBackup(room.chatId,next);room.pending=next;await saveRoom(room);
-        patchVerification=await patchMessage(apiChatIdOf(room),newId,injected,raw);
+        try{patchVerification=await patchMessage(apiChatIdOf(room),newId,injected,raw);}
+        catch(e){if(tooLarge&&isServerPatch413(e))throw carrier413Error(e);throw e;}
       }
     }
     const verification=raw===injected?{verified:true,serverChars:raw.length}:patchVerification;
@@ -16708,8 +16772,8 @@ function createWishUI(AD) {
     return `<section class="m3-cap" data-key="cap"><div class="m3-cap-top"><div class="m3-cap-lab">${I.verified ? '서버 저장 확인된 주입량' : I.matchesSaved ? '서버 확인 전 주입량' : '갱신 전 후보 예상량'}</div><div class="m3-cap-num"><span data-count="${tot}">${fmt(tot)}</span></div><div class="m3-cap-den">/ ${fmt(max)}자 · ${Math.round(tot / max * 100)}%</div></div>
     ${capMeter()}
     <div class="m3-legend">${GKEYS.filter(k => g[k]).map(k => `<span style="--m3-c:${COL[k]}"><b></b>${KLABEL[k]}${k==='guide'?help('[공통 안내]\nAI가 기억을 참고하는 방법과 인지 경계를 설명하는 안내문입니다.\n\n[제목·구분 서식]\n각 항목의 제목·줄바꿈·숨김 표시입니다. 기억 본문과 별도로 실제 주입 길이에 포함됩니다.'):''}<em>${fmt(g[k])}</em></span>`).join('')}</div>
-    <p class="m3-muted" data-key="selection-threshold">${tot>max?fmt(max)+'자 초과 · 갱신 시 최종 맞춤 필요 · 확정 주입량 아님':!I.matchesSaved?'최근·관련 후보 계산 완료 · 갱신 시 최종 계산':Number(I.selection?.fullTotal)>max?'하이브리드 후보 '+fmt(I.selection.fullTotal)+'자 → '+(I.verified?'확인된 주입 ':'확인 대기 ')+fmt(tot)+'자 · '+(method.includes('server-backoff')?'서버 500 후 36,000자 안전 축소':'로컬 안전선 맞춤')+' · 제외 '+Number(I.selection.omitted||0)+'개':Number(I.selection?.omitted)>0?'저장된 안전선 맞춤 · 제외 '+Number(I.selection.omitted)+'개':'최근·관련 기억 선택 완료 · '+fmt(max)+'자 안전선 이내'}${I.matchesSaved&&I.selection?.threadsOut?' · 서사 고리는 자리가 모자라 이번 턴 빠짐':''}${!I.hasOriginal?' · AI 원문 합산 전 예상':''}</p>
-    ${I.review&&!(I.review.reason==='within-limit')?`<p class="m3-muted" data-key="recall-last-decision">마지막 주입 계산${Number.isFinite(I.review.total)?' '+fmt(I.review.total)+'자 / '+fmt(I.review.limit||max)+'자':''} · ${esc(({'within-limit':'한도 내 전체 포함 — 단어·AI 선별 생략','room-limit':'방 설정 한도에 맞춰 로컬 선별','no-carrier':'원문 확인 전 — 생성형 선별 안 함','disabled':'재검토 꺼짐','too-few-candidates':'추가 평가 대상 부족 — 로컬 사용','no-provider':'AI 연결 없음 — 로컬 사용','prepared-result':'동일 조건의 준비 결과 사용 — 추가 호출 없음','before-send-or-local':'로컬 검색 결과 사용 — 새 AI 요청 없음','previous-failure':'직전 평가 실패 — 재호출 없이 로컬 사용','ai-failure':'AI 평가 실패 — 로컬 사용','over-limit':'한도 초과 — AI 재검토 완료'})[I.review.reason]||'이전 계산 기록')}<br>입력 중 검색 호출 없음 · AI 원문·안내문 포함 한도 이내면 전체 사용 · 초과할 때만 선별 · 자동 기억 정리는 별도입니다.</p>`:''}
+    <p class="m3-muted" data-key="selection-threshold">${tot>max?fmt(max)+'자 초과 · 갱신 시 최종 맞춤 필요 · 확정 주입량 아님':!I.matchesSaved?'최근·관련 후보 계산 완료 · 갱신 시 최종 계산':Number(I.selection?.fullTotal)>max?'하이브리드 후보 '+fmt(I.selection.fullTotal)+'자 → '+(I.verified?'확인된 주입 ':'확인 대기 ')+fmt(tot)+'자 · '+(method.includes('server-backoff')?'서버 500 후 36,000자 안전 축소':method.includes('server-413')?'서버 용량 한도(413) 후 축소':I.selection?.byteLimited?'서버 용량 한도 맞춤':'로컬 안전선 맞춤')+' · 제외 '+Number(I.selection.omitted||0)+'개':Number(I.selection?.omitted)>0?(method.includes('server-413')?'서버 용량 한도(413) 후 축소':I.selection?.byteLimited?'서버 용량 한도 맞춤':'저장된 안전선 맞춤')+' · 제외 '+Number(I.selection.omitted)+'개':'최근·관련 기억 선택 완료 · '+fmt(max)+'자 안전선 이내'}${I.matchesSaved&&I.selection?.threadsOut?' · 서사 고리는 자리가 모자라 이번 턴 빠짐':''}${!I.hasOriginal?' · AI 원문 합산 전 예상':''}</p>
+    ${I.review&&!(I.review.reason==='within-limit')?`<p class="m3-muted" data-key="recall-last-decision">마지막 주입 계산${Number.isFinite(I.review.total)?' '+fmt(I.review.total)+'자 / '+fmt(I.review.limit||max)+'자':''} · ${esc(({'within-limit':'한도 내 전체 포함 — 단어·AI 선별 생략','room-limit':'방 설정 한도에 맞춰 로컬 선별','byte-limit':'서버 용량 한도에 맞춰 로컬 선별','no-carrier':'원문 확인 전 — 생성형 선별 안 함','disabled':'재검토 꺼짐','too-few-candidates':'추가 평가 대상 부족 — 로컬 사용','no-provider':'AI 연결 없음 — 로컬 사용','prepared-result':'동일 조건의 준비 결과 사용 — 추가 호출 없음','before-send-or-local':'로컬 검색 결과 사용 — 새 AI 요청 없음','previous-failure':'직전 평가 실패 — 재호출 없이 로컬 사용','ai-failure':'AI 평가 실패 — 로컬 사용','over-limit':'한도 초과 — AI 재검토 완료'})[I.review.reason]||'이전 계산 기록')}<br>입력 중 검색 호출 없음 · AI 원문·안내문 포함 한도 이내면 전체 사용 · 초과할 때만 선별 · 자동 기억 정리는 별도입니다.</p>`:''}
     </section>`;
   }
   function injRows() {
