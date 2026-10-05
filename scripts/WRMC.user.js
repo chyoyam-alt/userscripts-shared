@@ -4359,7 +4359,7 @@ summary는 사건 하나만 읽어도 누가 무엇을 왜 했고 어떤 결과�
 - '그 약속/그것/그 일'만 남기지 말고 원문에서 확인한 대상과 필요한 최소 조건을 적는다. 약속 사건은 누가 누구에게 무엇을, 어떤 조건으로 약속했는지 보존한다. 관련 사건 전체를 반복 복사하지 않는다.
 - 인물이 그렇게 행동한 감정적 이유가 원문(대사·서술)에 있으면 행동과 함께 적는다. '사과함'만 쓰지 말고 무엇을 왜 사과했고 상대가 어떻게 받아들였는지(말·몸짓)까지 적는다.
 - 그 장면을 다시 생생하게 떠올리게 하는 구체 단서가 원문에 있으면 1~3개 남긴다: 감정이 실린 몸짓·표정(무릎을 꿇음, 손이 떨림, 품에 얼굴을 묻음), 감각(향·온기·소리), 상징 물건, 날씨·장소의 특징. '애틋한·따뜻한' 같은 일반 분위기 형용사로 길이를 채우지 않는다.
-- 장면의 결(코믹한 소동으로 끝남, 울며 화해함, 장난스러운 벌처럼)이 원문 서술로 분명하면 짧게 한 구절 남긴다. 원문 근거 없는 평가 형용사는 쓰지 않는다.
+- 장면의 결(예: 울며 화해함)이 원문 서술로 분명하면 짧게 한 구절 남긴다. 원문 근거 없는 평가 형용사는 쓰지 않는다.
 - 성적 장면은 관계에 남은 의미(고백·돌봄·동의의 흐름·이후 태도)와 뒤 장면에 이어지는 사실만 쓰고, 신체 묘사의 세부는 옮기지 않는다. RP 본문이든 USER가 요청해 받은 보고서든 같다.
 - 새 기록에서 시간 변화는 이후/현재 등으로 구분하고, →는 행동·감정·전달 방향, ⇒는 원문이 명시한 인과에만 쓴다. 실제 인용·약속어·암호의 기호는 바꾸지 않는다.
 - 사건 하나는 보통 300~800자로 쓴다. 관계가 크게 바뀐 장면은 더 길어도 되고(약 2,000자까지), 작은 연결 사건은 짧아도 된다. 짧게 줄이기보다 이 사건만 읽고도 그 장면을 다시 그릴 수 있게 쓴다. 길이는 수식어가 아니라 이유·몸짓·짧은 대사·결과로 채우고, 해설·평가 문장('~의 전환점이 되었다', '~를 보여 준다')으로 채우지 않는다. 날짜로그 전체에는 합계 분량 제한이 없으므로(개별 사건·요청·출력 한도는 별도) 분량 때문에 사건을 합치거나 무효화하지 않는다.
@@ -5903,7 +5903,7 @@ summary는 필요한 범위에서 핵심 원인/상황 → 행동 → 중요 대
 - summary 첫머리에 원문에서 확인되는 장소와 관여한 인물, 정보격차에 영향이 있는 목격자·청취자를 적는다. 확인되지 않은 장소·인물은 빈칸을 채우듯 추정하지 않는다. 목격·청취는 직접 근거가 있을 때만 적고, 자리에 있었다는 이유만으로 보거나 듣거나 알았다고 확정하지 않는다. 중요한 부재도 명시된 경우만 적으며, 장소·시간이 바뀌면 참여 범위를 구분한다.
 - 인물이 그렇게 행동한 감정적 이유가 원문(대사·서술)에 있으면 행동과 함께 적는다. '사과함'만 쓰지 말고 무엇을 왜 사과했고 상대가 어떻게 받아들였는지(말·몸짓)까지 적는다.
 - 그 장면을 다시 생생하게 떠올리게 하는 구체 단서가 원문에 있으면 1~3개 남긴다: 감정이 실린 몸짓·표정(무릎을 꿇음, 손이 떨림, 품에 얼굴을 묻음), 감각(향·온기·소리), 상징 물건, 날씨·장소의 특징. '애틋한·따뜻한' 같은 일반 분위기 형용사로 길이를 채우지 않는다.
-- 장면의 결(코믹한 소동으로 끝남, 울며 화해함, 장난스러운 벌처럼)이 원문 서술로 분명하면 짧게 한 구절 남긴다. 원문 근거 없는 평가 형용사는 쓰지 않는다.
+- 장면의 결(예: 울며 화해함)이 원문 서술로 분명하면 짧게 한 구절 남긴다. 원문 근거 없는 평가 형용사는 쓰지 않는다.
 - 장면의 감정을 결정한 실제 대사(약속·고백·사과·맹세라면 그 결정적 한 마디)가 원문에 있으면 그 한 마디를 원문 그대로 짧게 넣는다(40자 안팎). PC 대사만 고르지 않는다. 상대 인물의 말이 결정적이었다면 그 말을 고른다. 긴 대사 전문과 대화 순서는 옮기지 않는다.
 - 약속 사건은 누가 누구에게 무엇을, 어떤 조건으로 약속했는지 보존한다.
 - 성적 장면은 관계에 남은 의미(고백·돌봄·동의의 흐름·이후 태도)와 뒤 장면에 이어지는 사실만 쓰고, 신체 묘사의 세부는 옮기지 않는다. RP 본문이든 USER가 요청해 받은 보고서든 같다.
@@ -18775,10 +18775,10 @@ const WishPromptGuides=(()=>{
   // Read the two small override records only; no timer or RP traversal is added.
   function selectorStamp(){try{return JSON.stringify([raw('apiRecall'),raw('apiIndex')]);}catch(_){return 'storage-unavailable';}}
   // A text saved against an older default: shown in the editor only. Each guide is compared with the version in which its own
-  // default last changed (a saved text without a version counts as oldest); apiIndex, apiLoreConversion and externalSecondary
+  // default last changed (a saved text without a version counts as oldest); apiIndex and apiLoreConversion
   // have kept their defaults since saved texts carry a version.
-  const DEFAULT_CHANGED={apiMemory:'1.8.0',apiObserve:'1.8.0',apiLoreBundle:'1.8.0',apiThreads:'1.8.0',apiRelationships:'1.8.0',apiDelta:'1.8.0',apiRecall:'1.8.0',apiBundleMemory:'1.8.0',apiBundlePeople:'1.8.0',externalAll:'1.8.0',externalMemory:'1.8.0',externalPeople:'1.8.0',externalRelationships:'1.8.0',loreExternal:'1.8.0',
-    apiCommon:'1.7.0',apiSpeech:'1.7.0',apiDate:'1.7.0',manualRelay:'1.7.0',currentState:'1.7.0',logSummary:'1.7.0',loreAuto:'1.7.0'};
+  const DEFAULT_CHANGED={apiMemory:'1.8.0',apiObserve:'1.8.0',apiLoreBundle:'1.8.0',apiThreads:'1.8.0',apiRelationships:'1.8.0',apiDelta:'1.8.0',apiRecall:'1.8.0',apiBundleMemory:'1.8.0',apiBundlePeople:'1.8.0',externalAll:'1.8.0',externalMemory:'1.8.0',externalPeople:'1.8.0',externalRelationships:'1.8.0',loreExternal:'1.8.0',externalSecondary:'1.8.0',apiSpeech:'1.8.0',apiDate:'1.8.0',
+    apiCommon:'1.7.0',manualRelay:'1.7.0',currentState:'1.7.0',logSummary:'1.7.0',loreAuto:'1.7.0'};
   const versionParts=v=>{const m=String(v||'').match(/^(\d+)\.(\d+)\.(\d+)$/);return m?m.slice(1).map(Number):[0,0,0];};
   function stale(id){
     const r=readGuideRecord(id),since=DEFAULT_CHANGED[id];if(!r||!since)return false;
