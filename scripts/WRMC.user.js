@@ -4757,7 +4757,36 @@ function wishStoredEventForRef(stored,ref){
   const hit=byRef||(k?stored.find(e=>key(e.title)&&key(e.title)===k):null);
   return {hit:hit||null,byRef:!!byRef};
 }
-function wishApplyEventDelta(db,data,rp=''){if(!data||!Array.isArray(data.updates)||!Array.isArray(data.additions)||!Array.isArray(data.invalidated))throw Error('날짜별 사건 결과 구조가 올바르지 않습니다.');const by=new Map(db.events.map(e=>[e.id,e]));const invalid=new Set();for(const row of data.invalidated){const ref=String(row.ref||'').trim();if(!by.has(ref))throw Error('날짜별 사건 invalidated REF가 올바르지 않습니다: '+ref);invalid.add(ref);}if(invalid.size)db.events=db.events.filter(e=>!invalid.has(e.id));const current=new Map(db.events.map(e=>[e.id,e]));for(const raw of data.updates){const e=current.get(String(raw.ref||'').trim());if(!e)throw Error('날짜별 사건이 없는 기존 REF를 수정하려 했습니다: '+raw.ref);const title=String(raw.title||'').trim(),summary=String(raw.summary||'').trim();if(!title||!summary)throw Error('날짜로그 '+raw.ref+(title?' 「'+title+'」':'')+': 사건 제목이나 요약이 비었습니다.');Object.assign(e,{date:{kind:String(raw.date?.kind||'unknown'),display:String(raw.date?.display||'날짜 미상')},title,summary,keywords:wishUnique(raw.keywords,40)});}let order=db.events.reduce((n,e)=>Math.max(n,Number(e.order)||0),0);const identities=new Set(db.events.map(e=>wishEventIdentity(e.date,e.title)));const stored=[...by.values()];for(const raw of data.additions){const title=String(raw.title||'').trim(),summary=String(raw.summary||'').trim(),date={kind:String(raw.date?.kind||'unknown'),display:String(raw.date?.display||'날짜 미상')},ref=String(raw.ref??'').trim(),label='날짜로그 새 사건'+(title?' 「'+title+'」':'')+': ';if(!/^NEW_EVENT_/i.test(ref)){const {hit,byRef}=wishStoredEventForRef(stored,ref);if(hit)throw Error(label+'이미 저장된 사건 「'+String(hit.title||'')+'」의 '+(byRef?'ref('+ref+')를':'제목('+ref+')을')+' ref로 썼습니다. 저장된 사건은 additions에 다시 넣지 않습니다. 보탤 내용이 있으면 memory.events에 본문이 온 사건의 updates에 ref '+hit.id+'로 쓰고, 새 사건이면 ref를 NEW_EVENT_n으로 씁니다.');throw Error(label+'ref '+(ref||'(빈 값)')+'는 쓸 수 없습니다. 새 사건 REF는 NEW_EVENT_* 형식이어야 합니다(NEW_EVENT_1, NEW_EVENT_2처럼 씁니다).');}if(!title||!summary)throw Error('날짜로그 새 사건'+(title?' 「'+title+'」':'')+': 제목이나 요약이 비었습니다.');const identity=wishEventIdentity(date,title);if(identities.has(identity))throw Error(`이미 있는 날짜·사건 제목을 새 사건으로 다시 만들었습니다: ${date.display} 「${title}」`);identities.add(identity);db.events.push({id:wishId('event'),order:++order,date,title,summary,keywords:wishUnique(raw.keywords,40)});}db.events.sort((a,b)=>a.order-b.order);return data;}
+// How an event's heading line reads back once saved (formatDatedLogHeading writes it, parseDatedLogBlocks reads it): an AI display
+// such as '9월 9일 - 9월 12일' comes back as date '9월 9일' and title '9월 12일｜…'. key is the 날짜로그 block key, empty for 날짜 미상
+// (that key holds the block position, so two such blocks never share it). group is the [중복 날짜 정리] group of the block.
+function wishEventHeading(date,title){
+  const heading=formatDatedLogHeading(date?.display,title),b=parseDatedLogBlocks(heading)[0];
+  return {heading,identity:b?wishEventIdentity({display:b.fullDate||'날짜 미상'},b.events||'사건'):wishEventIdentity(date,title),key:b&&!b.isUnknown?b.key:'',group:wishLogDedupeGroup(b)};
+}
+// The group [중복 날짜 정리] puts a parsed block in (same rule as duplicateLogDateGroups: a dated block, by date and event title);
+// '' for a block that tool leaves out. Two blocks of one group can be merged there.
+function wishLogDedupeGroup(b){return b&&!b.isUnknown&&!b.isYearOnly&&!b.isCustomDate?logEventIdentity(b):'';}
+// guard (U3 stage): headingOf(id) is a stored event's own heading line, skip(text) reports a row left out. An update or an addition that
+// would read back as another event's date and title, or repeat another block's heading line, is left out and reported instead of
+// failing the answer; the stored event stays as it was. Events that already shared a heading before this answer are not blocked.
+function wishApplyEventDelta(db,data,rp='',guard=null){if(!data||!Array.isArray(data.updates)||!Array.isArray(data.additions)||!Array.isArray(data.invalidated))throw Error('날짜별 사건 결과 구조가 올바르지 않습니다.');const by=new Map(db.events.map(e=>[e.id,e]));const invalid=new Set();for(const row of data.invalidated){const ref=String(row.ref||'').trim();if(!by.has(ref))throw Error('날짜별 사건 invalidated REF가 올바르지 않습니다: '+ref);invalid.add(ref);}if(invalid.size)db.events=db.events.filter(e=>!invalid.has(e.id));const current=new Map(db.events.map(e=>[e.id,e]));
+  const seen=new Map(db.events.map(e=>{const b=parseDatedLogBlocks(guard?.headingOf?.(e.id)||'')[0];return [e,b?{heading:b.heading,identity:wishEventIdentity(e.date,e.title),key:b.isUnknown?'':b.key,group:wishLogDedupeGroup(b)}:wishEventHeading(e.date,e.title)];})),held=new Map();
+  // The other event (and how its heading reads) that a changed value would match; values that did not change are not compared.
+  const clash=(self,next,was)=>[...seen].find(([e,v])=>e!==self&&(next.identity!==was?.identity&&next.identity===v.identity||!!next.key&&next.key!==was?.key&&next.key===v.key))?.[1]||null;
+  for(const raw of data.updates){const e=current.get(String(raw.ref||'').trim());if(!e)throw Error('날짜별 사건이 없는 기존 REF를 수정하려 했습니다: '+raw.ref);const title=String(raw.title||'').trim(),summary=String(raw.summary||'').trim();if(!title||!summary)throw Error('날짜로그 '+raw.ref+(title?' 「'+title+'」':'')+': 사건 제목이나 요약이 비었습니다.');const date={kind:String(raw.date?.kind||'unknown'),display:String(raw.date?.display||'날짜 미상')};
+    // Same display, title and summary keep the stored heading line: WishMemorySafety.preserve rewrites only a changed event.
+    const was=seen.get(e),same=(e.date?.display||'날짜 미상')===date.display&&e.title===title&&e.summary===summary,next=same?was:wishEventHeading(date,title),hit=same?null:clash(e,next,was);
+    if(hit){held.set(e,wishEventIdentity(date,title));guard?.skip?.('날짜로그 「'+String(e.title||'')+'」 수정 건너뜀: 고치면 다른 블록과 날짜·사건 제목이 똑같아집니다(고친 모습 '+next.heading+' · 이미 있는 블록 '+hit.heading+'). 기존 사건을 그대로 두었습니다. 같은 사건이면 '+(was.group&&was.group===hit.group?'날짜로그의 [중복 날짜 정리]로 두 블록을 합칠 수 있습니다.':'날짜로그에서 두 블록을 직접 합쳐 주세요.'));continue;}
+    Object.assign(e,{date,title,summary,keywords:wishUnique(raw.keywords,40)});seen.set(e,next);}
+  // Refusal of an addition is decided as if every update had been applied, so a skipped update never turns an answer that used to
+  // pass into a refused one; an addition that only meets the event kept by a skip is left out below instead.
+  let order=db.events.reduce((n,e)=>Math.max(n,Number(e.order)||0),0);const identities=new Set(db.events.map(e=>held.get(e)??wishEventIdentity(e.date,e.title)));const stored=[...by.values()];
+  for(const raw of data.additions){const title=String(raw.title||'').trim(),summary=String(raw.summary||'').trim(),date={kind:String(raw.date?.kind||'unknown'),display:String(raw.date?.display||'날짜 미상')},ref=String(raw.ref??'').trim(),label='날짜로그 새 사건'+(title?' 「'+title+'」':'')+': ';if(!/^NEW_EVENT_/i.test(ref)){const {hit,byRef}=wishStoredEventForRef(stored,ref);if(hit)throw Error(label+'이미 저장된 사건 「'+String(hit.title||'')+'」의 '+(byRef?'ref('+ref+')를':'제목('+ref+')을')+' ref로 썼습니다. 저장된 사건은 additions에 다시 넣지 않습니다. 보탤 내용이 있으면 memory.events에 본문이 온 사건의 updates에 ref '+hit.id+'로 쓰고, 새 사건이면 ref를 NEW_EVENT_n으로 씁니다.');throw Error(label+'ref '+(ref||'(빈 값)')+'는 쓸 수 없습니다. 새 사건 REF는 NEW_EVENT_* 형식이어야 합니다(NEW_EVENT_1, NEW_EVENT_2처럼 씁니다).');}if(!title||!summary)throw Error('날짜로그 새 사건'+(title?' 「'+title+'」':'')+': 제목이나 요약이 비었습니다.');const identity=wishEventIdentity(date,title);if(identities.has(identity))throw Error(`이미 있는 날짜·사건 제목을 새 사건으로 다시 만들었습니다: ${date.display} 「${title}」`);
+    const next=wishEventHeading(date,title),hit=clash(null,next,null);
+    if(hit){guard?.skip?.('날짜로그 새 사건 「'+title+'」 건너뜀: 저장하면 이미 있는 블록과 같은 날짜·사건 제목으로 읽힙니다(새 사건 '+next.heading+' · 이미 있는 블록 '+hit.heading+'). 새 블록을 만들지 않았습니다. 보탤 내용이 있으면 그 블록을 직접 편집해 주세요.');continue;}
+    identities.add(identity);const e={id:wishId('event'),order:++order,date,title,summary,keywords:wishUnique(raw.keywords,40)};db.events.push(e);seen.set(e,next);}
+  db.events.sort((a,b)=>a.order-b.order);return data;}
 function wishApplyStateSnapshot(db,data,rp){
     if(!data||!Array.isArray(data.sections)||!Array.isArray(data.retired))throw Error('현재상태 결과 구조가 올바르지 않습니다.');
     const existing=new Map(db.stateSections.map(s=>[s.id,s])),retire=new Map();
@@ -5530,7 +5559,9 @@ function applyObserve(cog,speech,data,rp,cutoff,relationshipRows=[],relationship
       }
       const events=WishMemorySafety.checkEvents(req,m.events),quotes=WishMemorySafety.checkQuotes(req,m.references.upsert,p.mem);
       m.events=events.events;m.references.upsert=quotes.upserts;notices.push(...events.notices,...quotes.notices);rejectedQuotes.push(...quotes.rejected);
-      wishApplyEventDelta(db,m.events,wishTurnText(p.mem));wishApplyStateSnapshot(db,m.state,wishTurnText(p.mem));
+      // A row that would repeat another block's heading line is left out and named in the 주의 rows (counted as 건너뜀).
+      const logBlocks=parseDatedLogBlocks(next.slots.find(s=>s.id==='logSummary')?.content||'');
+      wishApplyEventDelta(db,m.events,wishTurnText(p.mem),{headingOf:id=>/^event_\d+$/.test(id)?logBlocks[Number(id.slice(6))]?.heading||'':'',skip:text=>{notices.push(text);fx.left.push(text);}});wishApplyStateSnapshot(db,m.state,wishTurnText(p.mem));
       const refs=new Set();for(const row of m.references.upsert){if(refs.has(row.ref))throw Error('자료 REF 중복: '+row.ref);refs.add(row.ref);}
       wishApplyReferencesDelta(db,m.references);
       const th=WishThreads.applyDelta(next.threads,req.db,m.threads,{turn:Number(req.threadTurn)||0,messageId:String(p.mem.at(-1).assistantId||'')});
@@ -5568,7 +5599,7 @@ function applyObserve(cog,speech,data,rp,cutoff,relationshipRows=[],relationship
       const guarded=WishMemorySafety.filterFactCorrections(req,data.observe);data.observe=guarded.observe;notices.push(...guarded.notices);
       if(req.relationshipRange?.guarded&&!req.relationshipRange.indices.length&&Array.isArray(data.observe?.relationship_upsert)&&data.observe.relationship_upsert.length){const n=data.observe.relationship_upsert.length;data.observe.relationship_upsert=[];notices.push(`관계 전용 재구축 뒤 새로 반영할 RP가 없어, AI가 낸 관계 변경 ${n}건을 적용하지 않았습니다(재구축 이전 턴 재처리 방지).`);}
       const out=applyObserve(cog,room.speechRelations,data.observe,wishTurnText(p.obs),p.obs.at(-1).assistantId,room.relationships,{sourceRows:req.relationshipRange?.rows||p.obs,allowedPairs:new Set(req.relationshipPairs||[]),notices,held:heldAdds,cogHeld:cogHeldAdds,hold:req.holdContext||{bundle:'unified'},fix:fx,storedSpeech:req.storedSpeech});
-      newCog=out.cog;next.speechRelations=out.speech;next.relationships=out.relationships;if(req.relationshipRange?.complete)next.relationshipBaseline=null;next.relationshipRevision=(Number(room.relationshipRevision)||0)+1;next.unified.observeCursor=p.obs.at(-1).key;
+      newCog=out.cog;next.speechRelations=normalizeSpeechRelations(out.speech);next.relationships=out.relationships;if(req.relationshipRange?.complete)next.relationshipBaseline=null;next.relationshipRevision=(Number(room.relationshipRevision)||0)+1;next.unified.observeCursor=p.obs.at(-1).key;
       preservationNotice=[out.preservedSpeech?'빈 응답의 기존 호칭·말투 '+out.preservedSpeech+'방향 유지':'',out.preservedAliases?'미언급 별칭 '+out.preservedAliases+'인물 유지':''].filter(Boolean).join(' · ');
     }
     next.unified.lastError='';next.unified.status=(p.memory&&p.observe?'기억·인물 통합':p.memory?'기억':'인물')+' 정리 완료 · 1회 호출'+(req.eventScope?' · 사건 '+req.eventScope.body_count+'/'+req.eventScope.total_count+'개 참고'+(!req.eventScope.index_complete?' (목차 일부)':''):'')+(preservationNotice?' · '+preservationNotice+' (해제·정정은 해당 편집창에서 확인)':'');next.unified.lastRunAt=Date.now();
@@ -7535,6 +7566,13 @@ function remapLogSelectionKeysByPairs(room,pairs,newBlocks){
  const remap=arr=>(arr||[]).map(String).filter(k=>byOldKey.has(k)).map(k=>byOldKey.get(k)).filter(k=>valid.has(k));
  room.autoLogPinnedKeys=remap(room.autoLogPinnedKeys);room.autoLogExcludedKeys=remap(room.autoLogExcludedKeys);room.manualLogSelectedKeys=remap(room.manualLogSelectedKeys);
 }
+// A save may not add a second block with the same heading line (same 날짜로그 key): 2차 재구축, 고정·제외 and 로그 고르기 can not
+// tell such blocks apart. A heading that already appeared more than once does not block other edits.
+function assertNoNewLogHeadingDuplicates(oldBlocks,newBlocks){
+ const count=list=>list.reduce((m,b)=>m.set(b.key,(m.get(b.key)||0)+1),new Map()),before=count(oldBlocks),after=count(newBlocks);
+ const added=[...after].filter(([k,n])=>n>1&&n>(before.get(k)||0)).map(([k])=>newBlocks.find(b=>b.key===k).heading);
+ if(added.length)throw Error('날짜·사건 제목이 같은 날짜로그 블록이 하나 더 생겨 저장하지 않았습니다: '+added.join(', ')+'. 날짜와 사건 제목이 같으면 같은 블록으로 봅니다. 다른 사건이면 한쪽의 날짜나 사건 제목을 다르게 쓰고, 같은 사건이면 이미 있는 블록에 내용을 보태 주세요.');
+}
 // A raw log save can move blocks, and an unknown-date key holds its block position. An old unknown-date block takes the key of the new one
 // with the same heading+body, compared after the same cleanup the save applies (n-th copy to n-th copy, only when both sides hold as many
 // copies). A block edited in place keeps its key when it did not move and it is the only unmatched block with its heading on each side.
@@ -9040,6 +9078,9 @@ function remapUnknownLogSelectionKeys(room,oldBlocks,newBlocks){
     const speechValue=s=>({id:text(s.id),speaker:text(s.speaker),target:text(s.target),address:text(s.address),register:text(s.register),note:text(s.note)});
     const sectionValue=p=>({index:p.index,title:p.title,body:p.source});
     const logValue=b=>({key:b.key,heading:b.heading,body:b.body});
+    // Blocks with the same heading line share one key. The n-th copy of a key (document order) is told apart by n: the first copy
+    // keeps [key] (records saved before stay valid), later copies are [key,'2'], [key,'3']. inventory and projector both use this.
+    const logIdentities=blocks=>{const seen=new Map();return blocks.map(b=>{const n=(seen.get(b.key)||0)+1;seen.set(b.key,n);return n>1?[b.key,String(n)]:[b.key];});};
     const factValue=f=>({id:text(f.id),label:text(f.label),type:text(f.type||f.category),content:text(f.content),archived:!!f.archived});
     const loreValue=(p,e)=>({packId:text(p.scopeId),owner:text(p.ownerChatId),ownerApi:text(p.ownerApiChatId),copyOrigin:p.copyOrigin||null,entry:Object.fromEntries(['id','name','type','summary','inject','triggers','entities','notes','speechRule','exactQuote','quoteSpeaker','quoteTarget','sceneContext','sceneLocation','sceneDate','evidence','userProtected','copyOrigin'].map(k=>[k,e[k]??null]))});
     function schemaCheck(value,schema,path='결과'){
@@ -9076,7 +9117,7 @@ function remapUnknownLogSelectionKeys(room,oldBlocks,newBlocks){
       const names=[...(cog?.actors||[]).flatMap(a=>[text(a.name),...(a.aliases||[]).map(String)]),...(room.slots||[]).filter(s=>s.group==='character').flatMap(s=>[text(s.title),...(s.aliases||[]).map(String)])].filter(Boolean);
       function container(kind,identity,basis,readonly,category,title){
         if(identity.some(v=>v==null||text(v)===''))throw Error('저장 자료의 식별값이 비어 있습니다. 추정해서 내보내지 않았습니다.');
-        const cid=key(kind,...identity);if(ids.has(cid))throw Error('2차 재구축 대상의 식별값이 중복됩니다. 원본을 먼저 확인해 주세요.');ids.add(cid);
+        const cid=key(kind,...identity);if(ids.has(cid))throw Error('2차 재구축 대상의 식별값이 중복됩니다: '+(LABELS[category]||kind)+' 「'+text(title)+'」. 원본에서 같은 항목을 먼저 확인해 주세요.');ids.add(cid);
         const c={key:cid,kind,identity:identity.map(String),basis:stampValue(basis),category,title:text(title),fields:[]};containers.push(c);
         const unit={container:cid,category,title:text(title),readonly,bodies:[]};units.push(unit);c.unit=unit;return c;
       }
@@ -9095,7 +9136,8 @@ function remapUnknownLogSelectionKeys(room,oldBlocks,newBlocks){
         }else if(category==='logs'&&parseDatedLogBlocks(src).length){
           const normalized=normalizeLineBreaks(src),blocks=parseDatedLogBlocks(normalized),prefix=normalized.slice(0,blocks[0].sourceStart).trim();
           if(prefix)units.push({container:key('log-prefix',s.id),category,title:'날짜로그 머리말',readonly:{content:prefix},bodies:[]});
-          for(const b of blocks){const c=container('log',[b.key],logValue(b),{slot_id:s.id,key:b.key,heading:b.heading,order:b.index,enabled:!!s.enabled},category,b.heading);add(c,'body',b.body,b.heading);}
+          const logIds=logIdentities(blocks);
+          for(const [n,b] of blocks.entries()){const c=container('log',logIds[n],logValue(b),{slot_id:s.id,key:b.key,...(logIds[n].length>1?{occurrence:Number(logIds[n][1])}:{}),heading:b.heading,order:b.index,enabled:!!s.enabled},category,b.heading);add(c,'body',b.body,b.heading);}
         }else{
           const c=container('slot',[s.id],slotValue(s),{id:s.id,title:s.title,group:s.group,aliases:s.aliases||[],enabled:!!s.enabled},category,s.title);
           add(c,'whole',src,s.title,['character','extra'].includes(category)&&options.includeProtected===true);
@@ -9279,9 +9321,9 @@ function remapUnknownLogSelectionKeys(room,oldBlocks,newBlocks){
     function records(room){const record=room?.expressionRebuild;if(!record||record.version!==VERSION||record.roomId!==text(room.chatId)||record.enabled===false||!Array.isArray(record.containers))return new Map();if(compiled.has(record))return compiled.get(record);const map=new Map(record.containers.map(c=>[c.key,c]));compiled.set(record,map);return map;}
     function projector(room,{contextNotation=false}={}){
       const map=records(room),basisCache=new Map(),stateCache=new Map();
-      let logSource=null,logBlocks=new Map(),packMap=null;
+      let logSource=null,logBlocks=[],logIds=[],packMap=null;
       const packById=id=>{if(!packMap)packMap=new Map((lorePackCache||[]).map(p=>[p.scopeId,p]));return packMap.get(id);};
-      function logs(slot){const src=text(slot.content);if(logSource!==src){logSource=src;logBlocks=new Map(parseDatedLogBlocks(src).map(b=>[b.key,b]));}return logBlocks;}
+      function logs(slot){const src=text(slot.content);if(logSource!==src){logSource=src;logBlocks=parseDatedLogBlocks(src);logIds=logIdentities(logBlocks);}return logBlocks;}
       function lookup(cid,basis,field,source){
         const c=map.get(cid);if(!c)return source;
         if(!basisCache.has(cid))basisCache.set(cid,typeof basis==='function'?basis():basis);
@@ -9297,10 +9339,10 @@ function remapUnknownLogSelectionKeys(room,oldBlocks,newBlocks){
           const replacements=[];
           for(const p of stateSpans(src)){const k=key('section',slot.id,p.index,p.title),next=lookup(k,()=>stampValue(sectionValue(p)),'body',p.source);if(next!==p.source)replacements.push({...p,text:next});}
           replacements.sort((a,b)=>b.start-a.start);for(const r of replacements)out=out.slice(0,r.start)+r.text+out.slice(r.end);
-        }else if(slot.id==='logSummary'&&logs(slot).size){
+        }else if(slot.id==='logSummary'&&logs(slot).length){
           // Whole-log fallback preserves all headings and inter-card separators.
-          out=normalizeLineBreaks(src);const blocks=parseDatedLogBlocks(out);
-          for(const b of [...blocks].reverse()){const next=lookup(key('log',b.key),()=>stampValue(logValue(b)),'body',b.body);if(next!==b.body){const p=trimSpan(out,b.endTitle,b.sourceEnd);out=out.slice(0,p.start)+next+out.slice(p.end);}}
+          out=normalizeLineBreaks(src);const blocks=parseDatedLogBlocks(out),idents=logIdentities(blocks);
+          for(const [n,b] of [...blocks.entries()].reverse()){const next=lookup(key('log',...idents[n]),()=>stampValue(logValue(b)),'body',b.body);if(next!==b.body){const p=trimSpan(out,b.endTitle,b.sourceEnd);out=out.slice(0,p.start)+next+out.slice(p.end);}}
         }else out=lookup(cid,()=>stampValue(slotValue(slot)),'whole',src);
         stateCache.set(cid,out);return out;
       }
@@ -9327,7 +9369,8 @@ function remapUnknownLogSelectionKeys(room,oldBlocks,newBlocks){
         }else if(i.sourceSlotId==='logSummary'||i.group==='log-auto'||i.slotId==='logSummary'){
           const slot=(room.slots||[]).find(s=>s.id==='logSummary');if(slot){const src=text(slot.content).trim();
             if(i.autoType==='whole-log'&&next.trim()===src)next=slotProjection(slot);
-            else{const b=logs(slot).get(i.sourceKey);if(b&&next.trim()===b.raw){const compressed=lookup(key('log',b.key),()=>stampValue(logValue(b)),'body',b.body);if(compressed!==b.body)next=b.heading+'\n'+compressed;}}
+            // The block at logIndex when its key and text still match; otherwise the first block with this key and text.
+            else{const blocks=logs(slot),own=b=>!!b&&b.key===i.sourceKey&&next.trim()===b.raw,n=own(blocks[i.logIndex])?Number(i.logIndex):blocks.findIndex(own),b=blocks[n];if(b){const compressed=lookup(key('log',...logIds[n]),()=>stampValue(logValue(b)),'body',b.body);if(compressed!==b.body)next=b.heading+'\n'+compressed;}}
           }
         }else{
           const slot=(room.slots||[]).find(s=>s.id===i.slotId);if(slot&&next.trim()===text(slot.content).trim())next=slotProjection(slot);
@@ -14291,8 +14334,9 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
             if(retentionValue!=null)s.retentionTurns=normalizeRetentionTurns(retentionValue);
           }
           if(s.group==='character')s.aliases=String(overlay.querySelector('[data-v2-ed-alias]')?.value||'').split(',').map(x=>x.trim()).filter(Boolean);
-          const oldLogBlocks=s.id==='logSummary'?parseDatedLogBlocks(s.content||''):null;
-          s.content=['currentState','logSummary'].includes(s.id)?cleanedPastedText(body):body;
+          const oldLogBlocks=s.id==='logSummary'?parseDatedLogBlocks(s.content||''):null,content=['currentState','logSummary'].includes(s.id)?cleanedPastedText(body):body;
+          if(oldLogBlocks)assertNoNewLogHeadingDuplicates(oldLogBlocks,parseDatedLogBlocks(content));
+          s.content=content;
           if(oldLogBlocks)remapUnknownLogSelectionKeys(room,oldLogBlocks,parseDatedLogBlocks(s.content));
           if(s.group==='character')room.deletedCharacterKeys=(room.deletedCharacterKeys||[]).filter(key=>key!==libraryItemKey(s));
         }
@@ -14307,6 +14351,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
           const tail=src.slice(b.sourceStart,b.sourceEnd).match(/\s*$/)[0];
           const next=src.slice(0,b.sourceStart)+newRaw+tail+src.slice(b.sourceEnd),newBlocks=parseDatedLogBlocks(next);
           if(newBlocks.length!==oldBlocks.length)throw Error('날짜 수정 후 블록 수가 달라져 저장을 중단했습니다. 날짜 형식을 확인해 주세요.');
+          assertNoNewLogHeadingDuplicates(oldBlocks,newBlocks);
           s.content=next;remapLogSelectionKeysByIndex(room,oldBlocks,newBlocks);
         }
       }
@@ -19063,7 +19108,13 @@ const typed=['key','dsKey','vx','fbAppCheck'].some(k=>String(x[k]||'').trim());
 // A key typed here belongs to the provider (and DeepSeek address) this sheet shows.
 for(const k of Object.keys(opened))if(x[k]===opened[k]&&!(typed&&k==='provider')&&!(k==='dsBase'&&String(x.dsKey||'').trim()))x[k]=latest[k];
 const fields={provider:x.provider,key:x.key,'firebase-config':x.firebase,'firebase-appcheck':x.fbAppCheck,'vertex-sa':x.vx,'vertex-location':x.vxLoc,'deepseek-key':x.dsKey,'deepseek-base':x.dsBase,model:x.model,'gemini-thinking':x.thinking,'deepseek-model':x.dsModel,'deepseek-thinking':x.dsThinking,'deepseek-custom':x.dsCustom};return settingsFromAiDialog(WUIForm(Object.fromEntries(Object.entries(fields).map(([k,v])=>['#rpcm-ai-'+k,v]))),fresh);}
-function WUIDateApply(d){const replacements=[];for(const b of d.blocks){if(b.isSpecialDate||b.isYearOnly)continue;const x=d.draft.dn[String(b.index)];if(!x)continue;const y=String(x.y||'').trim()?Number(x.y):null,m=Number(x.m),day=Number(x.d);if(b.isUnknown&&!y&&!m&&!day)continue;if(b.isUnknown&&y===null&&(m||day))throw Error('날짜 미상 블록은 연도까지 입력해야 합니다.');if(y!==null&&(!Number.isInteger(y)||y<1||y>999999))throw Error('연도는 1~999999로 입력해 주세요.');if(!Number.isInteger(m)||m<1||m>12||!Number.isInteger(day)||day<1||day>new Date(y||2000,m,0).getDate())throw Error('올바른 월과 일을 입력해 주세요.');if(y!==(b.year||null)||m!==b.month||day!==b.day)replacements.push({start:b.sourceStart,end:b.headingEnd,text:formatNormalizedLogHeading(b,y,m,day)});}if(!replacements.length){notify('변경된 날짜가 없습니다.');return;}let next=d.originalText;replacements.sort((a,b)=>b.start-a.start).forEach(r=>next=next.slice(0,r.start)+r.text+next.slice(r.end));const blocks=parseDatedLogBlocks(next);if(blocks.length!==d.blocks.length)throw Error('날짜 수정 후 블록 수가 달라져 적용을 중단했습니다.');const slot=d.wishRoom.slots.find(s=>s.id==='logSummary');if(slot.content!==d.originalText)throw Error('편집 중 로그가 바뀌었습니다. 다시 열어 주세요.');slot.content=next;remapLogSelectionKeysByIndex(d.wishRoom,d.blocks,blocks);WUIResolve(d.id,true);}
+function WUIDateApply(d){const replacements=[];for(const b of d.blocks){if(b.isSpecialDate||b.isYearOnly)continue;const x=d.draft.dn[String(b.index)];if(!x)continue;const y=String(x.y||'').trim()?Number(x.y):null,m=Number(x.m),day=Number(x.d);if(b.isUnknown&&!y&&!m&&!day)continue;if(b.isUnknown&&y===null&&(m||day))throw Error('날짜 미상 블록은 연도까지 입력해야 합니다.');if(y!==null&&(!Number.isInteger(y)||y<1||y>999999))throw Error('연도는 1~999999로 입력해 주세요.');if(!Number.isInteger(m)||m<1||m>12||!Number.isInteger(day)||day<1||day>new Date(y||2000,m,0).getDate())throw Error('올바른 월과 일을 입력해 주세요.');if(y!==(b.year||null)||m!==b.month||day!==b.day)replacements.push({start:b.sourceStart,end:b.headingEnd,text:formatNormalizedLogHeading(b,y,m,day),block:b});}if(!replacements.length){notify('변경된 날짜가 없습니다.');return;}
+ // A block whose new heading line would equal another block's (same key) stays as it was; the rest is applied.
+ const counts=new Map(),skipped=[];for(const b of d.blocks)counts.set(b.key,(counts.get(b.key)||0)+1);
+ const accepted=replacements.filter(r=>{const p=parseDatedLogBlocks(r.text)[0],key=p&&!p.isUnknown?p.key:'';if(key&&key!==r.block.key&&counts.get(key)){skipped.push(r.block.heading+' → '+r.text);return false;}counts.set(r.block.key,counts.get(r.block.key)-1);if(key)counts.set(key,(counts.get(key)||0)+1);return true;});
+ if(skipped.length)notify('날짜 표기 정리: 다른 블록과 날짜·사건 제목이 똑같아지는 '+skipped.length+'개 블록은 그대로 두었습니다 — '+skipped.join(', ')+'. 같은 사건이면 두 블록을 직접 합쳐 주세요.','warn',9000);
+ if(!accepted.length)return;
+ let next=d.originalText;accepted.sort((a,b)=>b.start-a.start).forEach(r=>next=next.slice(0,r.start)+r.text+next.slice(r.end));const blocks=parseDatedLogBlocks(next);if(blocks.length!==d.blocks.length)throw Error('날짜 수정 후 블록 수가 달라져 적용을 중단했습니다.');const slot=d.wishRoom.slots.find(s=>s.id==='logSummary');if(slot.content!==d.originalText)throw Error('편집 중 로그가 바뀌었습니다. 다시 열어 주세요.');slot.content=next;remapLogSelectionKeysByIndex(d.wishRoom,d.blocks,blocks);WUIResolve(d.id,true);}
 function WUIDedupeApply(d){
  const selected=new Map();
  d.originalGroups.forEach((g,i)=>{
