@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         🎨 Crack Scene Painter Mobile (크랙 장면 삽화 · 모바일)
 // @namespace    crack-scene-painter
-// @version      5.2.7
+// @version      5.2.8
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/CSPM.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/CSPM.user.js
-// @description  크랙 AI 삽화 + 만화 콘티. 5.2.7: 방 이동 저장 보호, 메시지 부분 갱신, 중복 본문 탐색 감소.
+// @description  크랙 AI 삽화 + 만화 콘티. 5.2.8: 모바일 갤러리·UC 전환 오류 수정, 분석·저장 안정화, 중복 조회 감소.
 // @match        https://crack.wrtn.ai/*
 // @grant        GM_xmlhttpRequest
 // @connect      generativelanguage.googleapis.com
@@ -91,10 +91,30 @@
     let cspMessageFullScanPending = false;
     let cspPendingMessageScopes = new Set();
     let danbooruParsedTagbookCache = null;
+    // 5.2.8: 파싱해 둔 태그북은 세대 번호로 관리한다. 다운로드·삭제(다른 탭 포함)로 세대가 바뀌면 다시 읽는다.
+    let danbooruTagbookGen = 0;
+    let danbooruParsedTagbookGen = -1;
+    let danbooruTagbookChannel = null;
+    try {
+        danbooruTagbookChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel(`${CSP_PREFIX}_tagbook`) : null;
+        if (danbooruTagbookChannel) danbooruTagbookChannel.onmessage = () => invalidateDanbooruParsedTagbook(false);
+    } catch (_) {
+        danbooruTagbookChannel = null;
+    }
+    function invalidateDanbooruParsedTagbook(broadcast = true) {
+        danbooruParsedTagbookCache = null;
+        danbooruTagbookGen += 1;
+        clearDanbooruSearchResultCache();
+        if (broadcast) {
+            try { danbooruTagbookChannel?.postMessage('changed'); } catch (_) {}
+        }
+    }
     let promptArchiveMemoryCache = new Map();
     let danbooruSearchResultCache = new Map();
     let naiAccountStatusCache = null;
     let naiAccountStatusFetchedAt = 0;
+    let naiAccountStatusPending = null;
+    let naiAccountStatusEpoch = 0;
     let lastV5QuotaConfirmationKey = '';
 
     const CSP_DEBUG = false;
@@ -1228,10 +1248,9 @@
         return changed;
     }
 
+    const CSP_HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
     function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text || '';
-        return div.innerHTML;
+        return String(text || '').replace(/[&<>"']/g, ch => CSP_HTML_ESCAPES[ch]);
     }
 
     function normalizePrompt(text) {
@@ -3569,6 +3588,7 @@ director.lightingIntent:
 
     async function deleteDanbooruTagbookCache() {
         await deleteStoredMeta(DANBOORU_TAGBOOK_META_ID);
+        invalidateDanbooruParsedTagbook();
     }
 
     function getDanbooruExcludedTopCategoryNames(taxonomy = null) {
@@ -3984,7 +4004,7 @@ director.lightingIntent:
         };
 
         await putDanbooruTagbookCache(cache);
-        danbooruParsedTagbookCache = null;
+        invalidateDanbooruParsedTagbook();
         clearDanbooruSearchResultCache();
         return cache;
     }
@@ -4279,6 +4299,17 @@ director.lightingIntent:
     }
 
     async function getParsedDanbooruTagbook(options = {}) {
+        // 5.2.8: 같은 세대의 파싱 결과가 있으면 검색마다 IndexedDB 전체를 다시 읽지 않는다.
+        if (danbooruTagbookChannel && danbooruParsedTagbookCache && danbooruParsedTagbookGen === danbooruTagbookGen) return danbooruParsedTagbookCache;
+        const gen = danbooruTagbookGen;
+        const parsed = await loadParsedDanbooruTagbook(options);
+        // 파싱 도중 다운로드·삭제가 끝났으면 이번 결과는 쓰되 다음 검색 때 다시 읽게 한다.
+        if (gen === danbooruTagbookGen) danbooruParsedTagbookGen = gen;
+        else if (danbooruParsedTagbookCache === parsed) danbooruParsedTagbookCache = null;
+        return parsed;
+    }
+
+    async function loadParsedDanbooruTagbook(options = {}) {
         const cache = await getDanbooruTagbookCache();
         if (!cache?.csvText && !Array.isArray(cache?.compactRows)) {
             throw new Error('로컬 태그북이 없어. 먼저 다운로드/업데이트를 눌러줘.');
@@ -4767,6 +4798,8 @@ director.lightingIntent:
     function invalidateNaiAccountStatusCache() {
         naiAccountStatusCache = null;
         naiAccountStatusFetchedAt = 0;
+        naiAccountStatusPending = null;
+        naiAccountStatusEpoch += 1;
     }
 
     function formatNaiAccountLookupError(error) {
@@ -4838,41 +4871,57 @@ director.lightingIntent:
         const apiKey = String(apiKeyOverride || global.naiApiKey || '').trim();
         if (!apiKey) throw new Error('NAI Persistent API Token이 비어 있어요.');
 
+        // A forced refresh supersedes older in-flight account responses.
+        if (!apiKeyOverride && options.force === true) invalidateNaiAccountStatusCache();
         const canUseCache = !apiKeyOverride && options.force !== true;
         if (canUseCache && naiAccountStatusCache && Date.now() - naiAccountStatusFetchedAt < 30000) {
             return naiAccountStatusCache;
         }
-
-        const data = await fetchNaiAccountData(apiKey);
-
-        const steps = data?.trainingStepsLeft ?? data?.subscription?.trainingStepsLeft ?? {};
-        let fixed = 0;
-        let purchased = 0;
-        let total = 0;
-        if (typeof steps === 'number' && Number.isFinite(steps)) {
-            fixed = Math.max(0, steps);
-            total = fixed;
-        } else {
-            fixed = Number(steps?.fixedTrainingStepsLeft ?? steps?.fixed ?? 0);
-            purchased = Number(steps?.purchasedTrainingSteps ?? steps?.purchasedTrainingStepsLeft ?? steps?.purchased ?? 0);
-            total = fixed + purchased;
+        if (canUseCache && naiAccountStatusPending?.apiKey === apiKey && naiAccountStatusPending.epoch === naiAccountStatusEpoch) {
+            return naiAccountStatusPending.promise;
         }
 
-        if (![fixed, purchased, total].every(Number.isFinite)) throw new Error('잔여 Anlas 값을 읽지 못했어요.');
-        const result = {
-            total,
-            fixed,
-            purchased,
-            tier: getNaiSubscriptionTier(data),
-            active: data?.active === true || data?.subscription?.active === true,
-            quota: extractNaiV5Quota(data),
-            raw: data
-        };
+        const epoch = naiAccountStatusEpoch;
+        const run = (async () => {
+            const data = await fetchNaiAccountData(apiKey);
+
+            const steps = data?.trainingStepsLeft ?? data?.subscription?.trainingStepsLeft ?? {};
+            let fixed = 0;
+            let purchased = 0;
+            let total = 0;
+            if (typeof steps === 'number' && Number.isFinite(steps)) {
+                fixed = Math.max(0, steps);
+                total = fixed;
+            } else {
+                fixed = Number(steps?.fixedTrainingStepsLeft ?? steps?.fixed ?? 0);
+                purchased = Number(steps?.purchasedTrainingSteps ?? steps?.purchasedTrainingStepsLeft ?? steps?.purchased ?? 0);
+                total = fixed + purchased;
+            }
+
+            if (![fixed, purchased, total].every(Number.isFinite)) throw new Error('잔여 Anlas 값을 읽지 못했어요.');
+            const result = {
+                total,
+                fixed,
+                purchased,
+                tier: getNaiSubscriptionTier(data),
+                active: data?.active === true || data?.subscription?.active === true,
+                quota: extractNaiV5Quota(data),
+                raw: data
+            };
+            if (!apiKeyOverride && epoch === naiAccountStatusEpoch) {
+                naiAccountStatusCache = result;
+                naiAccountStatusFetchedAt = Date.now();
+            }
+            return result;
+        })();
         if (!apiKeyOverride) {
-            naiAccountStatusCache = result;
-            naiAccountStatusFetchedAt = Date.now();
+            const entry = { apiKey, epoch, promise: run };
+            naiAccountStatusPending = entry;
+            run.then(() => {}, () => {}).finally(() => {
+                if (naiAccountStatusPending === entry) naiAccountStatusPending = null;
+            });
         }
-        return result;
+        return run;
     }
 
     function markSceneButtons(messageKey, hasImage) {
@@ -8740,7 +8789,7 @@ ${JSON.stringify(bundle.worldProfile, null, 2)}`);
                 try {
                     request?.abort?.();
                 } catch (_) {}
-                console.warn('[Crack Scene Painter] GM request cancelled by user:', { method, url });
+                console.warn('[Crack Scene Painter] GM request cancelled by user:', { method, url: redactRequestUrl(url) });
                 finishReject(new Error('작업이 취소됐어요.'));
             };
 
@@ -8784,7 +8833,7 @@ ${JSON.stringify(bundle.worldProfile, null, 2)}`);
 
                         finishResolve(JSON.parse(response.responseText));
                     } catch (e) {
-                        console.error('[Crack Scene Painter] GM response parse failed:', { method, url, response, error: e });
+                        console.error('[Crack Scene Painter] GM response parse failed:', { method, url: redactRequestUrl(url), status: response?.status, finalUrl: redactRequestUrl(response?.finalUrl || ''), responseText: String(response?.responseText || '').slice(0, 500), error: e });
                         finishReject(e);
                     }
                 },
@@ -10838,8 +10887,10 @@ ${JSON.stringify(safePlan, null, 2)}
 
         const currentHistoryItem = await appendSceneHistoryImage(messageKey, record, imageUrl, roomId);
         const nextRecords = getSceneRecords(roomId);
+        const replacedRecord = nextRecords[messageKey];
         nextRecords[messageKey] = record;
         saveSceneRecords(nextRecords, { roomId });
+        if (replacedRecord && replacedRecord !== record) cleanupPrunedSceneRecords({ [messageKey]: replacedRecord }, {}, roomId);
         if (!isCurrentCspWorkTarget(workTarget) || !result.box?.isConnected) {
             showToast('🖼️ 생성한 삽화를 원래 방의 갤러리에 저장했어요.');
             return;
@@ -10992,7 +11043,7 @@ ${JSON.stringify(safePlan, null, 2)}
             button.title = 'Gemini가 장면을 분석 중...';
         }
         showToast('🔎 Gemini가 장면과 삽입 위치를 분석 중...');
-        showTaskHud('장면 분석 시작', '지금 선택한 AI 답변을 읽고, 어디에 어떤 장면을 넣을지 고르는 중이야.', 10);
+        const hud = showTaskHud('장면 분석 시작', '지금 선택한 AI 답변을 읽고, 어디에 어떤 장면을 넣을지 고르는 중이야.', 10);
         const ticker = startTaskHudTicker([
             { title: '로그 정리 중', message: '현재 AI 답변의 문단과 장면 흐름을 정리하고 있어.', progress: 24 },
             { title: 'Gemini 분석 요청', message: 'Gemini API에 장면 분석을 요청했어. 이 단계가 길어지면 API 응답 대기 중일 수 있어.', progress: 46 },
@@ -11001,7 +11052,7 @@ ${JSON.stringify(safePlan, null, 2)}
         ]);
 
         try {
-            const plan = await generateScenePlanWithGemini(bubble, markdown);
+            const plan = await generateScenePlanWithGemini(bubble, markdown, { signal: hud.abortController.signal });
             assertCurrentCspWorkTarget(workTarget);
             debugLog('Gemini scene plan ready', {
                 key,
@@ -11011,12 +11062,12 @@ ${JSON.stringify(safePlan, null, 2)}
             updateTaskHud({ title: '분석 완료', message: 'Gemini 분석이 끝났어. 생성 전에 확인창을 열어줄게.', progress: 100, status: 'success' });
             showScenePlanModal({ targetBubble: bubble, markdown, plan });
             showToast('✅ Gemini 분석 완료. 생성 전 확인창을 열었어요.');
-            setTimeout(() => hideTaskHud(), 360);
+            setTimeout(() => { if (currentTaskHud === hud) hideTaskHud(); }, 360);
         } catch (err) {
             console.error('[Crack Scene Painter] Gemini 분석 실패:', err);
             updateTaskHud({ title: '분석 실패', message: '버튼을 눌렀는데 아무 창도 안 뜨면 보통 이 단계에서 실패한 거야.\n콘솔의 [Crack Scene Painter] 로그와 오류 메시지를 확인해줘.\n\n사유: ' + err.message, progress: 100, status: 'error' });
             showToast('⚠️ Gemini 분석 실패: ' + err.message);
-            setTimeout(() => hideTaskHud(), 1800);
+            setTimeout(() => { if (currentTaskHud === hud) hideTaskHud(); }, 1800);
         } finally {
             ticker.stop();
             button?.removeAttribute('data-csp-loading');
@@ -12136,18 +12187,21 @@ ${JSON.stringify(safePlan, null, 2)}
     async function refreshV35MobileQuota({ rerender = true, force = false } = {}) {
         const s = cspV35Session;
         if (!s) return null;
+        const requestId = (s.__mobileQuotaRequestId || 0) + 1;
+        s.__mobileQuotaRequestId = requestId;
         try {
             const info = await fetchNaiAnlasBalance('', force ? { force: true } : {});
-            if (cspV35Session !== s) return null;
+            if (cspV35Session !== s || s.__mobileQuotaRequestId !== requestId) return null;
             s.naiAccount = info || null;
             s.quota = info?.quota || { status: 'unavailable' };
         } catch (_) {
-            if (cspV35Session === s) {
+            if (cspV35Session === s && s.__mobileQuotaRequestId === requestId) {
                 s.naiAccount = null;
                 s.quota = { status: 'unavailable' };
             }
         }
-        if (rerender && cspV35Session === s && cspV35Root?.dataset.view === 'studio') renderV35Studio();
+        if (cspV35Session !== s || s.__mobileQuotaRequestId !== requestId) return null;
+        if (rerender && cspV35Root?.dataset.view === 'studio') renderV35Studio();
         return s.quota;
     }
 
@@ -12268,7 +12322,7 @@ ${JSON.stringify(safePlan, null, 2)}
     async function runV35Generation(reroll=false){
         if(cspComicSession) return cspComicRun(cspComicSession,()=>cspComicGenerate(cspComicSession,reroll),'NAI가 만화를 생성 중…');
         const s=cspV35Session;
-        if(!s||['generating','decoding'].includes(s.status))return;
+        if(!s||['prompting','generating','decoding','analyzing'].includes(s.status))return;
         const workTarget=s.workTarget;
         if(!isCurrentCspWorkTarget(workTarget)){v35Toast('대화방이나 답변이 바뀌었어요. 원래 메시지에서 다시 열어줘.','error',0);return;}
         const roomId=workTarget.roomId;
@@ -12309,6 +12363,7 @@ ${JSON.stringify(safePlan, null, 2)}
             s.currentImageSrc=src;
             const rec=s.messageKey?normalizeSceneRecordHistory(getSceneRecords(roomId)[s.messageKey],s.messageKey):null;
             s.currentHistoryIndex=rec?clampHistoryIndex(rec):null;
+            invalidateNaiAccountStatusCache();
             s.status='ready';s.statusMessage='';s.error='';renderCurrent();
             if(cspV35Session===s&&roomId===getRoomId())refreshV35MobileQuota({ force: true });
             v35Toast(reroll?'리롤 완료':'이미지 생성 완료','success');
@@ -12320,12 +12375,13 @@ ${JSON.stringify(safePlan, null, 2)}
     }
     async function runV35Reanalysis(){
         const s=cspV35Session;
-        if(!s||s.status==='analyzing')return;
+        // 5.2.8: 생성 중에는 재분석을 시작하지 않는다(이미지와 저장되는 계획이 어긋남).
+        if(!s||!['idle','ready'].includes(s.status))return;
         if(!s.markdown||!s.targetBubble){v35Toast('원래 메시지가 현재 화면에 없어서 요청 재분석할 수 없어.','error',0);return}
 
         const idx=Math.max(0,Number(s.plan.insertAfterParagraph||0));
         const requestText=await showV35RefineRequestDialog({focusIndex:idx});
-        if(!requestText||cspV35Session!==s)return;
+        if(!requestText||cspV35Session!==s||!['idle','ready'].includes(s.status))return;
 
         if((s.promptDirty||s.negativeDirty||s.characterDirty)&&!confirm('직접 고친 프롬프트가 있어. 요청 재분석을 하면 수동 수정분이 새 분석 결과로 교체돼. 계속할까?'))return;
 
@@ -12366,7 +12422,7 @@ ${JSON.stringify(safePlan, null, 2)}
         }
     }
 
-    async function openV35StudioFromRecord(messageKey,index=0){if(await cspComicOpenRecord(messageKey,index))return;const rec=normalizeSceneRecordHistory(getSceneRecords()[messageKey],messageKey);if(!rec)return;const resolved=await resolveGeneratedPromptSnapshot(rec,getRoomSettings()),src=await getRecordImageSrc(rec,index),markdown=document.querySelector(`.csp-message-generate-btn[data-message-key="${CSS.escape(messageKey)}"]`)?.closest('[data-message-group-id]')?.querySelector('.wrtn-markdown')||null,bubble=markdown?(getMessageGroupContainer(markdown)||markdown):null;cspV35Session=createV35StudioSession({targetBubble:bubble,markdown,plan:resolved.plan||rec.plan,restored:{...resolved,messageKey,imageSrc:src,naiSettings:{...(resolved.naiSettings||rec.naiSettings||{}),model:rec?.naiSettings?.model||getGlobalSettings().naiModel}}});cspV35Session.messageKey=messageKey;cspV35Session.currentHistoryIndex=index;renderV35Studio();refreshV35MobileQuota();v35Toast('과거 이미지 설정을 스튜디오에 불러왔어.','success')}
+    async function openV35StudioFromRecord(messageKey,index=0){if(await cspComicOpenRecord(messageKey,index))return;const rec=normalizeSceneRecordHistory(getSceneRecords()[messageKey],messageKey);if(!rec)return;const selected=cspComicClone(rec);selected.currentIndex=index;syncCurrentImageFieldsFromHistory(selected);const resolved=await resolveGeneratedPromptSnapshot(selected,getRoomSettings()),src=await getRecordImageSrc(rec,index),markdown=document.querySelector(`.csp-message-generate-btn[data-message-key="${CSS.escape(messageKey)}"]`)?.closest('[data-message-group-id]')?.querySelector('.wrtn-markdown')||null,bubble=markdown?(getMessageGroupContainer(markdown)||markdown):null;cspV35Session=createV35StudioSession({targetBubble:bubble,markdown,plan:resolved.plan||rec.plan,restored:{...resolved,messageKey,imageSrc:src,naiSettings:{...(resolved.naiSettings||rec.naiSettings||{}),model:rec?.naiSettings?.model||getGlobalSettings().naiModel}}});cspV35Session.messageKey=messageKey;cspV35Session.currentHistoryIndex=index;renderV35Studio();refreshV35MobileQuota();v35Toast('과거 이미지 설정을 스튜디오에 불러왔어.','success')}
     function v35다운로드(src,title='scene-image'){if(!src)return;const a=document.createElement('a');a.href=src;a.download=`${sanitizeFileName(title)}.png`;document.body.appendChild(a);a.click();a.remove()}
     function v35Saved(text='저장됨 · 방금'){const e=cspV35Root?.querySelector('#v35-save-state');if(e){e.textContent=text;setTimeout(()=>{if(e.isConnected)e.textContent='저장됨'},2200)}}
     function v35SaveGlobal(patch){const n={...getGlobalSettings(),...(patch||{})};saveGlobalSettings(n);v35Saved();return n}
@@ -13263,17 +13319,22 @@ ${JSON.stringify(safePlan, null, 2)}
         if (!s || !body) return;
         const sync = () => {
             const g = s.generation;
+            const previousModel = g.model;
             const m = body.querySelector('#v35-g-model'); if (m) g.model = normalizeNaiModel(m.value);
             const w = body.querySelector('#v35-g-width'); if (w) g.width = Math.max(64, Number(w.value || 832));
             const h = body.querySelector('#v35-g-height'); if (h) g.height = Math.max(64, Number(h.value || 1216));
             const q = body.querySelector('#v35-g-quality'); if (q) g.v5QualityPreset = normalizeNaiV5QualityPreset(q.value);
-            const u = body.querySelector('#v35-g-uc'); if (u) { Object.assign(g, setNaiUcPresetForModel(g, g.model, u.value)); g.ucPreset = getNaiUcPresetForModel(g, g.model); }
+            const u = body.querySelector('#v35-g-uc'); if (u) { Object.assign(g, setNaiUcPresetForModel(g, previousModel, u.value)); g.ucPreset = getNaiUcPresetForModel(g, g.model); }
             const seed = body.querySelector('#v35-g-seed'); if (seed) g.seed = seed.value.trim();
             const steps = body.querySelector('#v35-g-steps'); if (steps) g.steps = Number(steps.value || 28);
             const scale = body.querySelector('#v35-g-scale'); if (scale) g.scale = Number(scale.value || 5);
             const sampler = body.querySelector('#v35-g-sampler'); if (sampler) g.sampler = sampler.value;
             const noise = body.querySelector('#v35-g-noise'); if (noise) g.noiseSchedule = noise.value;
             const rescale = body.querySelector('#v35-g-rescale'); if (rescale) g.guidanceRescale = Number(rescale.value || 0);
+            const topQuality = cspV35Root?.querySelector('#v35m-q-quality');
+            if (topQuality && q) topQuality.value = g.v5QualityPreset;
+            const topUc = cspV35Root?.querySelector('#v35m-q-uc');
+            if (topUc && u && previousModel === g.model) topUc.value = String(g.ucPreset);
         };
         body.querySelectorAll('#v35-g-model,#v35-g-width,#v35-g-height,#v35-g-quality,#v35-g-uc,#v35-g-seed,#v35-g-steps,#v35-g-scale,#v35-g-sampler,#v35-g-noise,#v35-g-rescale').forEach(el => el.addEventListener('change', () => {
             const modelChanged = el.id === 'v35-g-model';
@@ -13454,21 +13515,86 @@ ${JSON.stringify(safePlan, null, 2)}
         app.innerHTML=`<div class="v35m-top"><button class="iconbtn" id="v35m-g-back">←</button><div class="v35m-title">갤러리</div><span class="badge" id="v35m-g-count">0</span><div class="grow"></div><button class="iconbtn" id="v35m-g-settings">⚙</button></div><div class="v35m-gallery-tools"><input class="input" id="v35m-g-search" placeholder="장면 제목 / 캐릭터 검색" value="${escapeHtml(ui.query||'')}"><select class="select" id="v35m-g-sort"><option value="newest" ${ui.sort==='newest'?'selected':''}>최신순</option><option value="oldest" ${ui.sort==='oldest'?'selected':''}>오래된순</option></select></div><div class="v35m-gallery-grid" id="v35m-g-grid"></div>`;
         root.querySelector('#v35m-g-back').onclick=()=>cspV35Session?renderV35Studio():closeV35();
         root.querySelector('#v35m-g-settings').onclick=()=>openV35Settings('storage');
-        root.querySelector('#v35m-g-search').oninput=e=>{patchV35Ui('gallery',{query:e.target.value});renderV35MobileGallery(root)};
+        const search = root.querySelector('#v35m-g-search');
+        let lastQuery = search.value;
+        search.oninput = e => {
+            const query = e.target.value;
+            if (query === lastQuery) return;
+            lastQuery = query;
+            patchV35Ui('gallery', { query });
+            renderV35MobileGallery(root);
+        };
         root.querySelector('#v35m-g-sort').onchange=e=>{patchV35Ui('gallery',{sort:e.target.value});renderV35MobileGallery(root)};
         renderV35MobileGallery(root);
     }
 
     async function renderV35MobileGallery(root) {
-        const grid=root.querySelector('#v35m-g-grid'),count=root.querySelector('#v35m-g-count'),ui=getV35UiState().gallery,q=String(ui.query||'').trim().toLowerCase();
-        let items=v35GalleryItems();if(q)items=items.filter(x=>`${x.title} ${x.messageKey} ${x.chars}`.toLowerCase().includes(q));if(ui.sort==='oldest')items.reverse();
-        count.textContent=String(items.length);root.__v35Items=items;
-        if(!items.length){grid.innerHTML='<div class="help" style="grid-column:1/-1">조건에 맞는 이미지가 없어.</div>';return}
-        grid.innerHTML=items.map((x,i)=>{const w=Number(x.record?.naiSettings?.width||832),h=Number(x.record?.naiSettings?.height||1216);return `<article class="v35m-gcard"><button class="v35m-gimg" data-mg-view="${i}" style="aspect-ratio:${w}/${h}"><span class="help">불러오는 중…</span><span class="v35m-gmenu" data-mg-menu="${i}">⋯</span></button><div class="v35m-gtitle">${escapeHtml(x.title)}</div><div class="v35m-gmeta">${escapeHtml(formatGalleryDate(x.createdAt)||'')}</div></article>`}).join('');
-        grid.querySelectorAll('[data-mg-view]').forEach(btn=>btn.addEventListener('click',async e=>{if(e.target.closest('[data-mg-menu]'))return;const item=items[Number(btn.dataset.mgView)];try{openV35Viewer({src:await getRecordImageSrc(item.record,item.index),title:item.title,item})}catch(err){v35Toast('이미지 로드 실패: '+(err?.message||err),'error',0)}}));
-        grid.querySelectorAll('[data-mg-menu]').forEach(btn=>btn.addEventListener('click',e=>{e.stopPropagation();openV35MobileGallerySheet(items[Number(btn.dataset.mgMenu)])}));
-        await Promise.all(items.map(async(item,i)=>{const b=grid.querySelector(`[data-mg-view="${i}"]`);if(!b)return;try{const src=await getRecordImageSrc(item.record,item.index);const menu=b.querySelector('[data-mg-menu]')?.outerHTML||'';if(b.isConnected)b.innerHTML=`<img src="${escapeHtml(src)}" alt="${escapeHtml(item.title)}">${menu}`}catch(_){if(b.isConnected)b.textContent='불러오기 실패'}}));
-        grid.querySelectorAll('[data-mg-menu]').forEach(btn=>btn.addEventListener('click',e=>{e.stopPropagation();openV35MobileGallerySheet(items[Number(btn.dataset.mgMenu)])}));
+        const grid = root.querySelector('#v35m-g-grid'), count = root.querySelector('#v35m-g-count');
+        if (!grid || !count) return;
+        const revision = (root.__v35MobileGalleryRevision || 0) + 1;
+        root.__v35MobileGalleryRevision = revision;
+        const roomId = getRoomId();
+        const isCurrent = () => root.isConnected && grid.isConnected
+            && root.__v35MobileGalleryRevision === revision && getRoomId() === roomId;
+        const ui = getV35UiState().gallery, q = String(ui.query || '').trim().toLowerCase();
+        let items = v35GalleryItems();
+        if (q) items = items.filter(x => `${x.title} ${x.messageKey} ${x.chars}`.toLowerCase().includes(q));
+        if (ui.sort === 'oldest') items.reverse();
+
+        const imageIdOf = x => String(x?.record?.history?.[x.index]?.imageId || '');
+        const previousImages = new Map();
+        (root.__v35Items || []).forEach((item, i) => {
+            const id = imageIdOf(item), img = id && grid.querySelector(`[data-mg-view="${i}"] > img`);
+            if (img) previousImages.set(id, img);
+        });
+        count.textContent = String(items.length);
+        root.__v35Items = items;
+        if (!items.length) {
+            grid.innerHTML = '<div class="help" style="grid-column:1/-1">조건에 맞는 이미지가 없어.</div>';
+            return;
+        }
+        grid.innerHTML = items.map((x, i) => {
+            const w = Number(x.record?.naiSettings?.width || 832), h = Number(x.record?.naiSettings?.height || 1216);
+            return `<article class="v35m-gcard"><button class="v35m-gimg" data-mg-view="${i}" style="aspect-ratio:${w}/${h}"><span class="help">불러오는 중…</span><span class="v35m-gmenu" data-mg-menu="${i}">⋯</span></button><div class="v35m-gtitle">${escapeHtml(x.title)}</div><div class="v35m-gmeta">${escapeHtml(formatGalleryDate(x.createdAt) || '')}</div></article>`;
+        }).join('');
+        const buttons = Array.from(grid.querySelectorAll('[data-mg-view]'));
+        buttons.forEach((button, i) => {
+            const item = items[i];
+            button.addEventListener('click', async e => {
+                if (e.target.closest('[data-mg-menu]') || !isCurrent()) return;
+                try {
+                    const src = await getRecordImageSrc(item.record, item.index);
+                    if (isCurrent()) openV35Viewer({ src, title: item.title, item });
+                } catch (err) {
+                    if (isCurrent()) v35Toast('이미지 로드 실패: ' + (err?.message || err), 'error', 0);
+                }
+            });
+            button.querySelector('[data-mg-menu]').addEventListener('click', e => {
+                e.stopPropagation();
+                if (isCurrent()) openV35MobileGallerySheet(item);
+            });
+        });
+        await Promise.all(items.map(async (item, i) => {
+            const button = buttons[i], placeholder = button.querySelector('.help');
+            const reuse = previousImages.get(imageIdOf(item));
+            if (reuse) {
+                previousImages.delete(imageIdOf(item));
+                reuse.alt = item.title;
+                placeholder.replaceWith(reuse);
+                return;
+            }
+            try {
+                const src = await getRecordImageSrc(item.record, item.index);
+                if (!isCurrent() || !button.isConnected) return;
+                const img = document.createElement('img');
+                img.src = src;
+                img.alt = item.title;
+                // Keep the existing menu node and its single event handler.
+                placeholder.replaceWith(img);
+            } catch (_) {
+                if (isCurrent() && button.isConnected) placeholder.textContent = '불러오기 실패';
+            }
+        }));
     }
 
     function openV35MobileGallerySheet(item) {
@@ -14352,6 +14478,9 @@ ${st.text&&!s.busy?`<div class="v35m-reason ${st.tone}">${esc(st.text)}</div>`:'
         // 실제 수집한 대상(오른쪽 메뉴 / data-message-group-id AI 답변 / 하단 액션바) 변화만 분류해서 반응한다.
         cspScopedObserver.observe(document.body, { childList: true, subtree: true });
         document.addEventListener('scroll', markScrolling, { capture: true, passive: true });
+        window.addEventListener('storage', e => {
+            if (!e.key || e.key === getSceneRecordsKey()) invalidateSceneRecordsCache('');
+        });
 
         window.addEventListener('beforeunload', () => {
             clearTimeout(menuInjectTimer);

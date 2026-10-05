@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         🎨 Crack Scene Painter (크랙 장면 삽화)
 // @namespace    crack-scene-painter
-// @version      5.2.7
+// @version      5.2.8
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/CSP.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/CSP.user.js
-// @description  크랙 AI 삽화 + 만화 콘티. 5.2.7: 방 이동 저장 보호, 메시지 부분 갱신, 중복 본문 탐색 감소.
+// @description  크랙 AI 삽화 + 만화 콘티. 5.2.8: 입력·단축키·스튜디오 오류 수정, 잔량·갤러리·태그북 중복 작업 감소.
 // @match        https://crack.wrtn.ai/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
@@ -97,10 +97,30 @@
     let cspPendingMessageScopes = new Set();
     let secretSettingsCache = null;
     let danbooruParsedTagbookCache = null;
+    // 5.2.8: 파싱해 둔 태그북은 세대 번호로 관리한다. 다운로드·삭제(다른 탭 포함)로 세대가 바뀌면 다시 읽는다.
+    let danbooruTagbookGen = 0;
+    let danbooruParsedTagbookGen = -1;
+    let danbooruTagbookChannel = null;
+    try {
+        danbooruTagbookChannel = typeof BroadcastChannel === 'function' ? new BroadcastChannel(`${CSP_PREFIX}_tagbook`) : null;
+        if (danbooruTagbookChannel) danbooruTagbookChannel.onmessage = () => invalidateDanbooruParsedTagbook(false);
+    } catch (_) {
+        danbooruTagbookChannel = null;
+    }
+    function invalidateDanbooruParsedTagbook(broadcast = true) {
+        danbooruParsedTagbookCache = null;
+        danbooruTagbookGen += 1;
+        clearDanbooruSearchResultCache();
+        if (broadcast) {
+            try { danbooruTagbookChannel?.postMessage('changed'); } catch (_) {}
+        }
+    }
     let promptArchiveMemoryCache = new Map();
     let danbooruSearchResultCache = new Map();
     let naiAccountStatusCache = null;
     let naiAccountStatusFetchedAt = 0;
+    let naiAccountStatusPending = null;
+    let naiAccountStatusEpoch = 0;
     let lastV5QuotaConfirmationKey = '';
 
     const CSP_DEBUG = false;
@@ -1234,10 +1254,9 @@
         return changed;
     }
 
+    const CSP_HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
     function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text || '';
-        return div.innerHTML;
+        return String(text || '').replace(/[&<>"']/g, ch => CSP_HTML_ESCAPES[ch]);
     }
 
     function normalizePrompt(text) {
@@ -3590,6 +3609,7 @@ director.lightingIntent:
 
     async function deleteDanbooruTagbookCache() {
         await deleteStoredMeta(DANBOORU_TAGBOOK_META_ID);
+        invalidateDanbooruParsedTagbook();
     }
 
     function getDanbooruExcludedTopCategoryNames(taxonomy = null) {
@@ -4005,7 +4025,7 @@ director.lightingIntent:
         };
 
         await putDanbooruTagbookCache(cache);
-        danbooruParsedTagbookCache = null;
+        invalidateDanbooruParsedTagbook();
         clearDanbooruSearchResultCache();
         return cache;
     }
@@ -4300,6 +4320,17 @@ director.lightingIntent:
     }
 
     async function getParsedDanbooruTagbook(options = {}) {
+        // 5.2.8: 같은 세대의 파싱 결과가 있으면 검색마다 IndexedDB 전체를 다시 읽지 않는다.
+        if (danbooruParsedTagbookCache && danbooruParsedTagbookGen === danbooruTagbookGen) return danbooruParsedTagbookCache;
+        const gen = danbooruTagbookGen;
+        const parsed = await loadParsedDanbooruTagbook(options);
+        // 파싱 도중 다운로드·삭제가 끝났으면 이번 결과는 쓰되 다음 검색 때 다시 읽게 한다.
+        if (gen === danbooruTagbookGen) danbooruParsedTagbookGen = gen;
+        else if (danbooruParsedTagbookCache === parsed) danbooruParsedTagbookCache = null;
+        return parsed;
+    }
+
+    async function loadParsedDanbooruTagbook(options = {}) {
         const cache = await getDanbooruTagbookCache();
         if (!cache?.csvText && !Array.isArray(cache?.compactRows)) {
             throw new Error('로컬 태그북이 없어. 먼저 다운로드/업데이트를 눌러줘.');
@@ -4788,6 +4819,8 @@ director.lightingIntent:
     function invalidateNaiAccountStatusCache() {
         naiAccountStatusCache = null;
         naiAccountStatusFetchedAt = 0;
+        naiAccountStatusPending = null;
+        naiAccountStatusEpoch += 1;
     }
 
     function formatNaiAccountLookupError(error) {
@@ -4863,37 +4896,51 @@ director.lightingIntent:
         if (canUseCache && naiAccountStatusCache && Date.now() - naiAccountStatusFetchedAt < 30000) {
             return naiAccountStatusCache;
         }
-
-        const data = await fetchNaiAccountData(apiKey);
-
-        const steps = data?.trainingStepsLeft ?? data?.subscription?.trainingStepsLeft ?? {};
-        let fixed = 0;
-        let purchased = 0;
-        let total = 0;
-        if (typeof steps === 'number' && Number.isFinite(steps)) {
-            fixed = Math.max(0, steps);
-            total = fixed;
-        } else {
-            fixed = Number(steps?.fixedTrainingStepsLeft ?? steps?.fixed ?? 0);
-            purchased = Number(steps?.purchasedTrainingSteps ?? steps?.purchasedTrainingStepsLeft ?? steps?.purchased ?? 0);
-            total = fixed + purchased;
+        if (canUseCache && naiAccountStatusPending?.apiKey === apiKey && naiAccountStatusPending.epoch === naiAccountStatusEpoch) {
+            return naiAccountStatusPending.promise;
         }
 
-        if (![fixed, purchased, total].every(Number.isFinite)) throw new Error('잔여 Anlas 값을 읽지 못했어요.');
-        const result = {
-            total,
-            fixed,
-            purchased,
-            tier: getNaiSubscriptionTier(data),
-            active: data?.active === true || data?.subscription?.active === true,
-            quota: extractNaiV5Quota(data),
-            raw: data
-        };
+        const epoch = naiAccountStatusEpoch;
+        const run = (async () => {
+            const data = await fetchNaiAccountData(apiKey);
+
+            const steps = data?.trainingStepsLeft ?? data?.subscription?.trainingStepsLeft ?? {};
+            let fixed = 0;
+            let purchased = 0;
+            let total = 0;
+            if (typeof steps === 'number' && Number.isFinite(steps)) {
+                fixed = Math.max(0, steps);
+                total = fixed;
+            } else {
+                fixed = Number(steps?.fixedTrainingStepsLeft ?? steps?.fixed ?? 0);
+                purchased = Number(steps?.purchasedTrainingSteps ?? steps?.purchasedTrainingStepsLeft ?? steps?.purchased ?? 0);
+                total = fixed + purchased;
+            }
+
+            if (![fixed, purchased, total].every(Number.isFinite)) throw new Error('잔여 Anlas 값을 읽지 못했어요.');
+            const result = {
+                total,
+                fixed,
+                purchased,
+                tier: getNaiSubscriptionTier(data),
+                active: data?.active === true || data?.subscription?.active === true,
+                quota: extractNaiV5Quota(data),
+                raw: data
+            };
+            if (!apiKeyOverride && epoch === naiAccountStatusEpoch) {
+                naiAccountStatusCache = result;
+                naiAccountStatusFetchedAt = Date.now();
+            }
+            return result;
+        })();
         if (!apiKeyOverride) {
-            naiAccountStatusCache = result;
-            naiAccountStatusFetchedAt = Date.now();
+            const entry = { apiKey, epoch, promise: run };
+            naiAccountStatusPending = entry;
+            run.then(() => {}, () => {}).finally(() => {
+                if (naiAccountStatusPending === entry) naiAccountStatusPending = null;
+            });
         }
-        return result;
+        return run;
     }
 
     function markSceneButtons(messageKey, hasImage) {
@@ -8933,7 +8980,7 @@ ${JSON.stringify(bundle.worldProfile, null, 2)}`);
                 try {
                     request?.abort?.();
                 } catch (_) {}
-                console.warn('[Crack Scene Painter] GM request cancelled by user:', { method, url });
+                console.warn('[Crack Scene Painter] GM request cancelled by user:', { method, url: redactRequestUrl(url) });
                 finishReject(new Error('작업이 취소됐어요.'));
             };
 
@@ -8977,7 +9024,7 @@ ${JSON.stringify(bundle.worldProfile, null, 2)}`);
 
                         finishResolve(JSON.parse(response.responseText));
                     } catch (e) {
-                        console.error('[Crack Scene Painter] GM response parse failed:', { method, url, response, error: e });
+                        console.error('[Crack Scene Painter] GM response parse failed:', { method, url: redactRequestUrl(url), status: response?.status, finalUrl: redactRequestUrl(response?.finalUrl || ''), responseText: String(response?.responseText || '').slice(0, 500), error: e });
                         finishReject(e);
                     }
                 },
@@ -11040,8 +11087,11 @@ ${JSON.stringify(safePlan, null, 2)}
         }
 
         const nextRecords = getSceneRecords(roomId);
+        const replacedRecord = nextRecords[messageKey];
         nextRecords[messageKey] = record;
         saveSceneRecords(nextRecords, { roomId });
+        // Quick generation replaces this record; clean up its former images in the captured room.
+        if (replacedRecord && replacedRecord !== record) cleanupPrunedSceneRecords({ [messageKey]: replacedRecord }, {}, roomId);
         if (!isCurrentCspWorkTarget(workTarget) || !result.box?.isConnected) {
             showToast('🖼️ 생성한 삽화를 원래 방의 갤러리에 저장했어요.');
             return;
@@ -11212,7 +11262,7 @@ ${JSON.stringify(safePlan, null, 2)}
             button.title = 'Gemini가 장면을 분석 중...';
         }
         showToast('🔎 Gemini가 장면과 삽입 위치를 분석 중...');
-        showTaskHud('장면 분석 시작', '지금 선택한 AI 답변을 읽고, 어디에 어떤 장면을 넣을지 고르는 중이야.', 10);
+        const hud = showTaskHud('장면 분석 시작', '지금 선택한 AI 답변을 읽고, 어디에 어떤 장면을 넣을지 고르는 중이야.', 10);
         const ticker = startTaskHudTicker([
             { title: '로그 정리 중', message: '현재 AI 답변의 문단과 장면 흐름을 정리하고 있어.', progress: 24 },
             { title: 'Gemini 분석 요청', message: 'Gemini API에 장면 분석을 요청했어. 이 단계가 길어지면 API 응답 대기 중일 수 있어.', progress: 46 },
@@ -11221,7 +11271,7 @@ ${JSON.stringify(safePlan, null, 2)}
         ]);
 
         try {
-            const plan = await generateScenePlanWithGemini(bubble, markdown);
+            const plan = await generateScenePlanWithGemini(bubble, markdown, { signal: hud.abortController.signal });
             assertCurrentCspWorkTarget(workTarget);
             debugLog('Gemini scene plan ready', {
                 key,
@@ -11231,12 +11281,12 @@ ${JSON.stringify(safePlan, null, 2)}
             updateTaskHud({ title: '분석 완료', message: 'Gemini 분석이 끝났어. 생성 전에 확인창을 열어줄게.', progress: 100, status: 'success' });
             showScenePlanModal({ targetBubble: bubble, markdown, plan });
             showToast('✅ Gemini 분석 완료. 생성 전 확인창을 열었어요.');
-            setTimeout(() => hideTaskHud(), 360);
+            setTimeout(() => { if (currentTaskHud === hud) hideTaskHud(); }, 360);
         } catch (err) {
             console.error('[Crack Scene Painter] Gemini 분석 실패:', err);
             updateTaskHud({ title: '분석 실패', message: '버튼을 눌렀는데 아무 창도 안 뜨면 보통 이 단계에서 실패한 거야.\n콘솔의 [Crack Scene Painter] 로그와 오류 메시지를 확인해줘.\n\n사유: ' + err.message, progress: 100, status: 'error' });
             showToast('⚠️ Gemini 분석 실패: ' + err.message);
-            setTimeout(() => hideTaskHud(), 1800);
+            setTimeout(() => { if (currentTaskHud === hud) hideTaskHud(); }, 1800);
         } finally {
             ticker.stop();
             button?.removeAttribute('data-csp-loading');
@@ -12666,15 +12716,15 @@ ${v35GaugeHtml({thin:true,percent:b.charCount/b.maxCharacters*100,tone:'ok'})}</
         box.querySelectorAll('[data-hi]').forEach(btn=>{btn.addEventListener('click',async()=>{const i=Number(btn.dataset.hi);try{s.currentImageSrc=await getRecordImageSrc(rec,i);s.currentHistoryIndex=i;renderV35Studio()}catch(err){v35Toast('이미지 로드 실패: '+err.message,'error',0)}});btn.addEventListener('contextmenu',async e=>{e.preventDefault();const i=Number(btn.dataset.hi);if(!confirm(`이 장면의 ${i+1}번째 이미지를 삭제할까요?`))return;try{await deleteGalleryHistoryImage(s.messageKey,i);const next=normalizeSceneRecordHistory(getSceneRecords()[s.messageKey],s.messageKey);if(next?.history?.length){s.currentHistoryIndex=clampHistoryIndex(next);s.currentImageSrc=await getRecordImageSrc(next,s.currentHistoryIndex)}else{s.currentHistoryIndex=null;s.currentImageSrc=''}renderV35Studio()}catch(err){v35Toast('이미지 삭제 실패: '+(err?.message||err),'error',0)}})});
         await Promise.all(h.map(async(_,i)=>{const b=box.querySelector(`[data-hi="${i}"]`);if(!b)return;try{const src=await getRecordImageSrc(rec,i);if(b.isConnected)b.innerHTML=`<img src="${escapeHtml(src)}">`}catch(_){b.textContent='×'}}))
     }
-    function bindV35Studio(root){cspComicBindIllustrationShortcut(root);const s=cspV35Session;root.querySelector('#v35-close')?.addEventListener('click',exitV35Studio);root.querySelector('#v35-gallery-open')?.addEventListener('click',openV35Gallery);root.querySelector('#v35-film-all')?.addEventListener('click',openV35Gallery);root.querySelector('#v35-settings-open')?.addEventListener('click',()=>openV35Settings('connection'));root.querySelector('#v35-quota-chip')?.addEventListener('click',()=>{cspV35Session.inspector='generate';renderV35Studio()});root.querySelector('#v35-budget-chip')?.addEventListener('click',()=>{cspV35Session.inspector='prompt';renderV35Studio()});root.querySelector('#v35-cost-chip')?.addEventListener('click',()=>{cspV35Session.inspector='generate';renderV35Studio()});root.querySelectorAll('[data-tool]').forEach(btn=>btn.addEventListener('click',()=>{const t=btn.dataset.tool;s.tool=s.tool===t?'':t;patchV35Ui('studio',{tool:s.tool});renderV35Studio()}));root.querySelectorAll('[data-inspector]').forEach(btn=>btn.addEventListener('click',()=>{s.inspector=btn.dataset.inspector;patchV35Ui('studio',{inspector:s.inspector});renderV35Studio()}));root.querySelector('#v35-q-model')?.addEventListener('change',e=>{const old=v35Model();Object.assign(s.generation,setNaiUcPresetForModel(s.generation,old,s.generation.ucPreset));s.generation.model=normalizeNaiModel(e.target.value);s.generation.ucPreset=getNaiUcPresetForModel(s.generation,s.generation.model);renderV35Studio()});root.querySelector('#v35-q-size')?.addEventListener('change',e=>{const map={portrait:[832,1216],square:[1024,1024],landscape:[1216,832]},v=map[e.target.value];if(v){s.generation.width=v[0];s.generation.height=v[1];renderV35Studio()}else{s.inspector='generate';renderV35Studio()}});root.querySelector('#v35-q-quality')?.addEventListener('change',e=>{s.generation.v5QualityPreset=normalizeNaiV5QualityPreset(e.target.value)});root.querySelector('#v35-q-quality-toggle')?.addEventListener('click',()=>{s.generation.qualityToggle=!s.generation.qualityToggle;renderV35Studio()});root.querySelector('#v35-q-uc')?.addEventListener('change',e=>{Object.assign(s.generation,setNaiUcPresetForModel(s.generation,v35Model(),e.target.value));s.generation.ucPreset=getNaiUcPresetForModel(s.generation,v35Model())});root.querySelector('#v35-generate')?.addEventListener('click',()=>runV35Generation(false));root.querySelector('#v35-reroll')?.addEventListener('click',()=>runV35Generation(true));root.querySelector('#v35-reanalyze')?.addEventListener('click',()=>runV35Reanalysis());root.querySelector('#v35-view')?.addEventListener('click',()=>openV35Viewer({src:s.currentImageSrc,title:s.plan.sceneTitle||'Scene image'}));root.querySelector('#v35-download')?.addEventListener('click',()=>v35다운로드(s.currentImageSrc,s.plan.sceneTitle||'scene-image'));root.querySelector('#v35-nai-usage')?.addEventListener('click',()=>refreshV35NaiUsage(root,{force:true}));root.querySelector('#v35-main-img')?.addEventListener('error',()=>{s.currentImageSrc='';hydrateV35CurrentImageFromHistory(s,{force:true})},{once:true});bindV35PositionOverlay(root)}
+    function bindV35Studio(root){cspComicBindIllustrationShortcut(root);const s=cspV35Session;root.querySelector('#v35-close')?.addEventListener('click',exitV35Studio);root.querySelector('#v35-gallery-open')?.addEventListener('click',openV35Gallery);root.querySelector('#v35-film-all')?.addEventListener('click',openV35Gallery);root.querySelector('#v35-settings-open')?.addEventListener('click',()=>openV35Settings('connection'));root.querySelector('#v35-quota-chip')?.addEventListener('click',()=>{cspV35Session.inspector='generate';renderV35Studio()});root.querySelector('#v35-budget-chip')?.addEventListener('click',()=>{cspV35Session.inspector='prompt';renderV35Studio()});root.querySelector('#v35-cost-chip')?.addEventListener('click',()=>{cspV35Session.inspector='generate';renderV35Studio()});root.querySelectorAll('[data-tool]').forEach(btn=>btn.addEventListener('click',()=>{const t=btn.dataset.tool;s.tool=s.tool===t?'':t;patchV35Ui('studio',{tool:s.tool});renderV35Studio()}));root.querySelectorAll('[data-inspector]').forEach(btn=>btn.addEventListener('click',()=>{s.inspector=btn.dataset.inspector;patchV35Ui('studio',{inspector:s.inspector});renderV35Studio()}));root.querySelector('#v35-q-model')?.addEventListener('change',e=>{const old=v35Model();Object.assign(s.generation,setNaiUcPresetForModel(s.generation,old,s.generation.ucPreset));s.generation.model=normalizeNaiModel(e.target.value);s.generation.ucPreset=getNaiUcPresetForModel(s.generation,s.generation.model);renderV35Studio()});root.querySelector('#v35-q-size')?.addEventListener('change',e=>{const map={portrait:[832,1216],square:[1024,1024],landscape:[1216,832]},v=map[e.target.value];if(v){s.generation.width=v[0];s.generation.height=v[1];renderV35Studio()}else{s.inspector='generate';renderV35Studio()}});root.querySelector('#v35-q-quality')?.addEventListener('change',e=>{s.generation.v5QualityPreset=normalizeNaiV5QualityPreset(e.target.value);const gq=root.querySelector('#v35-g-quality');if(gq)gq.value=s.generation.v5QualityPreset});root.querySelector('#v35-q-quality-toggle')?.addEventListener('click',()=>{s.generation.qualityToggle=!s.generation.qualityToggle;renderV35Studio()});root.querySelector('#v35-q-uc')?.addEventListener('change',e=>{Object.assign(s.generation,setNaiUcPresetForModel(s.generation,v35Model(),e.target.value));s.generation.ucPreset=getNaiUcPresetForModel(s.generation,v35Model());const gu=root.querySelector('#v35-g-uc');if(gu)gu.value=String(s.generation.ucPreset)});root.querySelector('#v35-generate')?.addEventListener('click',()=>runV35Generation(false));root.querySelector('#v35-reroll')?.addEventListener('click',()=>runV35Generation(true));root.querySelector('#v35-reanalyze')?.addEventListener('click',()=>runV35Reanalysis());root.querySelector('#v35-view')?.addEventListener('click',()=>openV35Viewer({src:s.currentImageSrc,title:s.plan.sceneTitle||'Scene image'}));root.querySelector('#v35-download')?.addEventListener('click',()=>v35다운로드(s.currentImageSrc,s.plan.sceneTitle||'scene-image'));root.querySelector('#v35-nai-usage')?.addEventListener('click',()=>refreshV35NaiUsage(root,{force:true}));root.querySelector('#v35-main-img')?.addEventListener('error',()=>{const bad=s.currentImageSrc;if(s.__failedImageSrc===bad)return;s.__failedImageSrc=bad;s.currentImageSrc='';hydrateV35CurrentImageFromHistory(s,{force:true})},{once:true});bindV35PositionOverlay(root)}
     function bindV35ToolPanel(panel){panel.querySelector('[data-close-tool]')?.addEventListener('click',()=>{cspV35Session.tool='';patchV35Ui('studio',{tool:''});renderV35Studio()});panel.querySelector('#v35-scene-title')?.addEventListener('input',e=>{cspV35Session.plan.sceneTitle=e.target.value});panel.querySelector('#v35-scene-anchor')?.addEventListener('input',e=>{cspV35Session.plan.visualAnchor=e.target.value});panel.querySelector('#v35-scene-insert')?.addEventListener('input',e=>{cspV35Session.plan.insertAfterParagraph=Math.max(0,Number(e.target.value||0))});panel.querySelector('#v35-scene-paragraph')?.addEventListener('change',e=>{cspV35Session.plan.insertAfterParagraph=Math.max(0,Number(e.target.value||0));const x=panel.querySelector('#v35-scene-insert');if(x)x.value=String(cspV35Session.plan.insertAfterParagraph)})}
-    function bindV35Inspector(body){const s=cspV35Session;body.querySelectorAll('[data-edit]').forEach(btn=>btn.addEventListener('click',()=>{const k=btn.dataset.edit;s.__edit=s.__edit===k?'':k;renderV35Inspector(cspV35Root)}));body.querySelectorAll('[data-edit-char]').forEach(btn=>btn.addEventListener('click',()=>{const i=Number(btn.dataset.editChar);s.__charEdit=s.__charEdit===i?null:i;renderV35Inspector(cspV35Root)}));body.querySelector('#v35-prompt-edit')?.addEventListener('input',e=>{s.promptState.finalPrompt=e.target.value;s.promptDirty=true;const d=cspV35Root.querySelector('#v35-dirty');if(d)d.textContent='● 프롬프트 수정됨'});body.querySelector('#v35-neg-edit')?.addEventListener('input',e=>{s.promptState.finalNegative=e.target.value;s.negativeDirty=true;const d=cspV35Root.querySelector('#v35-dirty');if(d)d.textContent='● 프롬프트 수정됨'});body.querySelector('#v35-char-prompt')?.addEventListener('input',e=>{if(Number.isInteger(s.__charEdit)&&s.promptState.charPrompts[s.__charEdit]){s.promptState.charPrompts[s.__charEdit].prompt=e.target.value;s.characterDirty=true}});body.querySelector('#v35-char-uc')?.addEventListener('input',e=>{if(Number.isInteger(s.__charEdit)&&s.promptState.charPrompts[s.__charEdit]){s.promptState.charPrompts[s.__charEdit].uc=e.target.value;s.characterDirty=true}});const sync=()=>{const g=s.generation,m=body.querySelector('#v35-g-model');if(m)g.model=normalizeNaiModel(m.value);const w=body.querySelector('#v35-g-width');if(w)g.width=Number(w.value||832);const h=body.querySelector('#v35-g-height');if(h)g.height=Number(h.value||1216);const q=body.querySelector('#v35-g-quality');if(q)g.v5QualityPreset=normalizeNaiV5QualityPreset(q.value);const u=body.querySelector('#v35-g-uc');if(u){Object.assign(g,setNaiUcPresetForModel(g,g.model,u.value));g.ucPreset=getNaiUcPresetForModel(g,g.model)}const seed=body.querySelector('#v35-g-seed');if(seed)g.seed=seed.value.trim();const steps=body.querySelector('#v35-g-steps');if(steps)g.steps=Number(steps.value||28);const scale=body.querySelector('#v35-g-scale');if(scale)g.scale=Number(scale.value||5);const samp=body.querySelector('#v35-g-sampler');if(samp)g.sampler=samp.value;const noise=body.querySelector('#v35-g-noise');if(noise)g.noiseSchedule=noise.value;const res=body.querySelector('#v35-g-rescale');if(res)g.guidanceRescale=Number(res.value||0)};body.querySelectorAll('#v35-g-model,#v35-g-width,#v35-g-height,#v35-g-quality,#v35-g-uc,#v35-g-seed,#v35-g-steps,#v35-g-scale,#v35-g-sampler,#v35-g-noise,#v35-g-rescale').forEach(el=>el.addEventListener('change',()=>{const id=el.id;sync();if(id==='v35-g-model'){s.generation.ucPreset=getNaiUcPresetForModel(s.generation,s.generation.model);renderV35Studio()}}));body.querySelector('#v35-g-quality-toggle')?.addEventListener('click',()=>{s.generation.qualityToggle=!s.generation.qualityToggle;renderV35Inspector(cspV35Root)});body.querySelector('#v35-advanced')?.addEventListener('click',()=>{s.advanced=!s.advanced;patchV35Ui('studio',{advanced:s.advanced});renderV35Inspector(cspV35Root)});body.querySelector('#v35-quota-refresh')?.addEventListener('click',()=>{if(cspV35Session)cspV35Session.quota=null;renderV35Studio();refreshV35Quota()})}
+    function bindV35Inspector(body){const s=cspV35Session;body.querySelectorAll('[data-edit]').forEach(btn=>btn.addEventListener('click',()=>{const k=btn.dataset.edit;s.__edit=s.__edit===k?'':k;renderV35Inspector(cspV35Root)}));body.querySelectorAll('[data-edit-char]').forEach(btn=>btn.addEventListener('click',()=>{const i=Number(btn.dataset.editChar);s.__charEdit=s.__charEdit===i?null:i;renderV35Inspector(cspV35Root)}));body.querySelector('#v35-prompt-edit')?.addEventListener('input',e=>{s.promptState.finalPrompt=e.target.value;s.promptDirty=true;const d=cspV35Root.querySelector('#v35-dirty');if(d)d.textContent='● 프롬프트 수정됨'});body.querySelector('#v35-neg-edit')?.addEventListener('input',e=>{s.promptState.finalNegative=e.target.value;s.negativeDirty=true;const d=cspV35Root.querySelector('#v35-dirty');if(d)d.textContent='● 프롬프트 수정됨'});body.querySelector('#v35-char-prompt')?.addEventListener('input',e=>{if(Number.isInteger(s.__charEdit)&&s.promptState.charPrompts[s.__charEdit]){s.promptState.charPrompts[s.__charEdit].prompt=e.target.value;s.characterDirty=true}});body.querySelector('#v35-char-uc')?.addEventListener('input',e=>{if(Number.isInteger(s.__charEdit)&&s.promptState.charPrompts[s.__charEdit]){s.promptState.charPrompts[s.__charEdit].uc=e.target.value;s.characterDirty=true}});const sync=()=>{const g=s.generation,prevModel=g.model,m=body.querySelector('#v35-g-model');if(m)g.model=normalizeNaiModel(m.value);const w=body.querySelector('#v35-g-width');if(w)g.width=Number(w.value||832);const h=body.querySelector('#v35-g-height');if(h)g.height=Number(h.value||1216);const q=body.querySelector('#v35-g-quality');if(q)g.v5QualityPreset=normalizeNaiV5QualityPreset(q.value);const u=body.querySelector('#v35-g-uc');if(u){Object.assign(g,setNaiUcPresetForModel(g,prevModel,u.value));g.ucPreset=getNaiUcPresetForModel(g,g.model)}const tq=cspV35Root?.querySelector('#v35-q-quality');if(tq&&q)tq.value=g.v5QualityPreset;const tu=cspV35Root?.querySelector('#v35-q-uc');if(tu&&u&&prevModel===g.model)tu.value=String(g.ucPreset);const seed=body.querySelector('#v35-g-seed');if(seed)g.seed=seed.value.trim();const steps=body.querySelector('#v35-g-steps');if(steps)g.steps=Number(steps.value||28);const scale=body.querySelector('#v35-g-scale');if(scale)g.scale=Number(scale.value||5);const samp=body.querySelector('#v35-g-sampler');if(samp)g.sampler=samp.value;const noise=body.querySelector('#v35-g-noise');if(noise)g.noiseSchedule=noise.value;const res=body.querySelector('#v35-g-rescale');if(res)g.guidanceRescale=Number(res.value||0)};body.querySelectorAll('#v35-g-model,#v35-g-width,#v35-g-height,#v35-g-quality,#v35-g-uc,#v35-g-seed,#v35-g-steps,#v35-g-scale,#v35-g-sampler,#v35-g-noise,#v35-g-rescale').forEach(el=>el.addEventListener('change',()=>{const id=el.id;sync();if(id==='v35-g-model'){s.generation.ucPreset=getNaiUcPresetForModel(s.generation,s.generation.model);renderV35Studio()}}));body.querySelector('#v35-g-quality-toggle')?.addEventListener('click',()=>{s.generation.qualityToggle=!s.generation.qualityToggle;renderV35Inspector(cspV35Root)});body.querySelector('#v35-advanced')?.addEventListener('click',()=>{s.advanced=!s.advanced;patchV35Ui('studio',{advanced:s.advanced});renderV35Inspector(cspV35Root)});body.querySelector('#v35-quota-refresh')?.addEventListener('click',()=>{if(cspV35Session)cspV35Session.quota=null;renderV35Studio();refreshV35Quota()})}
     function v35PromptRequest(){const s=cspV35Session,ps=s.promptState,chars=(ps.charPrompts||[]).map(c=>({...c,prompt:dedupePromptString(c.prompt||''),uc:dedupePromptString(c.uc||'')})),charPrompt=dedupePromptString(buildCommaPrompt(chars.map(c=>stripSubjectCountTags(c.prompt||'')))),charUc=dedupePromptString(buildCommaPrompt(chars.map(c=>c.uc||'')));let basePrompt=dedupePromptString(ps.basePrompt||''),baseNegative=dedupePromptString(ps.baseNegative||'');let finalPrompt=s.promptDirty?dedupePromptString(ps.finalPrompt||''):dedupePromptString(buildCommaPrompt([basePrompt,charPrompt]));let finalNegative=s.negativeDirty?dedupePromptString(ps.finalNegative||''):dedupePromptString(buildCommaPrompt([baseNegative,charUc]));if(s.promptDirty)basePrompt=removePromptTokens(finalPrompt,charPrompt)||finalPrompt;if(s.negativeDirty)baseNegative=removePromptTokens(finalNegative,charUc)||finalNegative;return{basePrompt,baseNegative,finalPrompt,finalNegative,charPrompts:chars}}
     function v35Decode(src){return new Promise((resolve,reject)=>{const img=new Image();img.onload=()=>resolve(src);img.onerror=()=>reject(new Error('생성 이미지를 디코딩하지 못했어요.'));img.src=src;if(img.decode)img.decode().then(()=>resolve(src)).catch(()=>{})})}
     async function runV35Generation(reroll=false){
         if(cspComicSession) return cspComicRun(cspComicSession,()=>cspComicGenerate(cspComicSession,reroll),'NAI가 만화를 생성 중…');
         const s=cspV35Session;
-        if(!s||['generating','decoding'].includes(s.status))return;
+        if(!s||['prompting','generating','decoding','analyzing'].includes(s.status))return;
         const workTarget=s.workTarget;
         if(!isCurrentCspWorkTarget(workTarget)){v35Toast('대화방이나 답변이 바뀌었어요. 원래 메시지에서 다시 열어줘.','error',0);return;}
         const roomId=workTarget.roomId;
@@ -12789,12 +12839,13 @@ ${v35GaugeHtml({thin:true,percent:b.charCount/b.maxCharacters*100,tone:'ok'})}</
 
     async function runV35Reanalysis(){
         const s=cspV35Session;
-        if(!s||s.status==='analyzing')return;
+        // 5.2.8: 생성 중에는 재분석을 시작하지 않는다(이미지와 저장되는 계획이 어긋남).
+        if(!s||!['idle','ready'].includes(s.status))return;
         if(!s.markdown||!s.targetBubble){v35Toast('원래 메시지가 현재 화면에 없어서 요청 재분석할 수 없어.','error',0);return}
 
         const idx=Math.max(0,Number(s.plan.insertAfterParagraph||0));
         const requestText=await showV35RefineRequestDialog({focusIndex:idx});
-        if(!requestText||cspV35Session!==s)return;
+        if(!requestText||cspV35Session!==s||!['idle','ready'].includes(s.status))return;
 
         if((s.promptDirty||s.negativeDirty||s.characterDirty)&&!confirm('직접 고친 프롬프트가 있어. 요청 재분석을 하면 수동 수정분이 새 분석 결과로 교체돼. 계속할까?'))return;
 
@@ -12835,8 +12886,8 @@ ${v35GaugeHtml({thin:true,percent:b.charCount/b.maxCharacters*100,tone:'ok'})}</
         }
     }
 
-    function openV35Gallery(){const{root,app}=mountV35('gallery');root.dataset.view='gallery';const ui=getV35UiState().gallery;app.innerHTML=`<div class="v35-top">${cspV35Session?'<button class="btn ghost" id="v35-g-back">← Studio</button>':''}<div class="v35-brand">🖼 Gallery</div><div class="grow"></div><button class="btn ghost" id="v35-g-settings">⚙ 설정</button><button class="iconbtn" id="v35-g-close">×</button></div><div class="gallery-body"><div class="gallery-toolbar"><input class="input" id="v35-g-search" style="width:280px" placeholder="장면 제목 / 캐릭터 / message id 검색" value="${escapeHtml(ui.query||'')}"><select class="select" id="v35-g-sort" style="width:130px"><option value="newest" ${ui.sort==='newest'?'selected':''}>최신순</option><option value="oldest" ${ui.sort==='oldest'?'selected':''}>오래된순</option></select><div class="grow"></div><span class="help" id="v35-g-count"></span></div><div class="gallery-grid" id="v35-g-grid"></div></div>`;root.querySelector('#v35-g-close')?.addEventListener('click',()=>{closeV35();cspV35Session=null});root.querySelector('#v35-g-back')?.addEventListener('click',()=>renderV35Studio());root.querySelector('#v35-g-settings')?.addEventListener('click',()=>openV35Settings('storage'));root.querySelector('#v35-g-search')?.addEventListener('input',e=>{patchV35Ui('gallery',{query:e.target.value});renderV35Gallery(root)});root.querySelector('#v35-g-sort')?.addEventListener('change',e=>{patchV35Ui('gallery',{sort:e.target.value});renderV35Gallery(root)});renderV35Gallery(root)}
-    async function renderV35Gallery(root){const grid=root.querySelector('#v35-g-grid'),count=root.querySelector('#v35-g-count'),ui=getV35UiState().gallery,q=String(ui.query||'').trim().toLowerCase();let items=v35GalleryItems();if(q)items=items.filter(x=>`${x.title} ${x.messageKey} ${x.chars}`.toLowerCase().includes(q));if(ui.sort==='oldest')items.reverse();count.textContent=`${items.length}장`;if(!items.length){grid.innerHTML='<div class="help">조건에 맞는 이미지가 없어.</div>';return}grid.innerHTML=items.map((x,i)=>`<article><button class="gimg" data-g-view="${i}" style="aspect-ratio:${Number(x.record?.naiSettings?.width||832)}/${Number(x.record?.naiSettings?.height||1216)}"><span class="help">불러오는 중…</span></button><div class="gtitle">${escapeHtml(x.title)}</div><div class="gmeta"><span>${escapeHtml(formatGalleryDate(x.createdAt)||'')}</span><span class="grow"></span><button class="iconbtn" style="width:24px;height:24px" data-g-menu="${i}">⋯</button></div></article>`).join('');root.__v35Items=items;root.querySelectorAll('[data-g-view]').forEach(btn=>btn.addEventListener('click',async()=>{const x=items[Number(btn.dataset.gView)];try{openV35Viewer({src:await getRecordImageSrc(x.record,x.index),title:x.title,item:x})}catch(err){v35Toast('이미지 로드 실패: '+err.message,'error',0)}}));root.querySelectorAll('[data-g-menu]').forEach(btn=>btn.addEventListener('click',()=>openV35GalleryMenu(btn,items[Number(btn.dataset.gMenu)])));await Promise.all(items.map(async(x,i)=>{const b=grid.querySelector(`[data-g-view="${i}"]`);if(!b)return;try{const src=await getRecordImageSrc(x.record,x.index);if(b.isConnected)b.innerHTML=`<img src="${escapeHtml(src)}" alt="${escapeHtml(x.title)}">`}catch(_){b.textContent='불러오기 실패'}}))}
+    function openV35Gallery(){const{root,app}=mountV35('gallery');root.dataset.view='gallery';const ui=getV35UiState().gallery;app.innerHTML=`<div class="v35-top">${cspV35Session?'<button class="btn ghost" id="v35-g-back">← Studio</button>':''}<div class="v35-brand">🖼 Gallery</div><div class="grow"></div><button class="btn ghost" id="v35-g-settings">⚙ 설정</button><button class="iconbtn" id="v35-g-close">×</button></div><div class="gallery-body"><div class="gallery-toolbar"><input class="input" id="v35-g-search" style="width:280px" placeholder="장면 제목 / 캐릭터 / message id 검색" value="${escapeHtml(ui.query||'')}"><select class="select" id="v35-g-sort" style="width:130px"><option value="newest" ${ui.sort==='newest'?'selected':''}>최신순</option><option value="oldest" ${ui.sort==='oldest'?'selected':''}>오래된순</option></select><div class="grow"></div><span class="help" id="v35-g-count"></span></div><div class="gallery-grid" id="v35-g-grid"></div></div>`;root.querySelector('#v35-g-close')?.addEventListener('click',()=>{closeV35();cspV35Session=null});root.querySelector('#v35-g-back')?.addEventListener('click',()=>renderV35Studio());root.querySelector('#v35-g-settings')?.addEventListener('click',()=>openV35Settings('storage'));{const searchInput=root.querySelector('#v35-g-search');let lastQuery=String(searchInput?.value??'');searchInput?.addEventListener('input',e=>{const v=String(e.target.value);if(v===lastQuery)return;lastQuery=v;patchV35Ui('gallery',{query:e.target.value});renderV35Gallery(root)})}root.querySelector('#v35-g-sort')?.addEventListener('change',e=>{patchV35Ui('gallery',{sort:e.target.value});renderV35Gallery(root)});renderV35Gallery(root)}
+    async function renderV35Gallery(root){const grid=root.querySelector('#v35-g-grid'),count=root.querySelector('#v35-g-count'),ui=getV35UiState().gallery,q=String(ui.query||'').trim().toLowerCase();let items=v35GalleryItems();if(q)items=items.filter(x=>`${x.title} ${x.messageKey} ${x.chars}`.toLowerCase().includes(q));if(ui.sort==='oldest')items.reverse();count.textContent=`${items.length}장`;if(!items.length){grid.innerHTML='<div class="help">조건에 맞는 이미지가 없어.</div>';return}const imageIdOf=x=>String(x?.record?.history?.[x.index]?.imageId||''),prevImgs=new Map();(root.__v35Items||[]).forEach((x,i)=>{const id=imageIdOf(x),im=id&&grid.querySelector(`[data-g-view="${i}"] > img`);if(im)prevImgs.set(id,im)});grid.innerHTML=items.map((x,i)=>`<article><button class="gimg" data-g-view="${i}" style="aspect-ratio:${Number(x.record?.naiSettings?.width||832)}/${Number(x.record?.naiSettings?.height||1216)}"><span class="help">불러오는 중…</span></button><div class="gtitle">${escapeHtml(x.title)}</div><div class="gmeta"><span>${escapeHtml(formatGalleryDate(x.createdAt)||'')}</span><span class="grow"></span><button class="iconbtn" style="width:24px;height:24px" data-g-menu="${i}">⋯</button></div></article>`).join('');root.__v35Items=items;root.querySelectorAll('[data-g-view]').forEach(btn=>btn.addEventListener('click',async()=>{const x=items[Number(btn.dataset.gView)];try{openV35Viewer({src:await getRecordImageSrc(x.record,x.index),title:x.title,item:x})}catch(err){v35Toast('이미지 로드 실패: '+err.message,'error',0)}}));root.querySelectorAll('[data-g-menu]').forEach(btn=>btn.addEventListener('click',()=>openV35GalleryMenu(btn,items[Number(btn.dataset.gMenu)])));await Promise.all(items.map(async(x,i)=>{const b=grid.querySelector(`[data-g-view="${i}"]`);if(!b)return;const reuse=prevImgs.get(imageIdOf(x));if(reuse){reuse.alt=x.title;b.replaceChildren(reuse);return}try{const src=await getRecordImageSrc(x.record,x.index);if(b.isConnected){const im=document.createElement('img');im.src=src;im.alt=x.title;b.replaceChildren(im)}}catch(_){b.textContent='불러오기 실패'}}))}
     function openV35GalleryMenu(anchor,item){
         const oldMenu=cspV35Root?.querySelector('.v35-menu');
         oldMenu?.__v35Cleanup?.();
@@ -12909,7 +12960,7 @@ ${v35GaugeHtml({thin:true,percent:b.charCount/b.maxCharacters*100,tone:'ok'})}</
             document.addEventListener('mousedown',onOutside,true);
         },0);
     }
-    async function openV35StudioFromRecord(messageKey,index=0){if(await cspComicOpenRecord(messageKey,index))return;const rec=normalizeSceneRecordHistory(getSceneRecords()[messageKey],messageKey);if(!rec)return;const resolved=await resolveGeneratedPromptSnapshot(rec,getRoomSettings()),src=await getRecordImageSrc(rec,index),markdown=document.querySelector(`.csp-message-generate-btn[data-message-key="${CSS.escape(messageKey)}"]`)?.closest('[data-message-group-id]')?.querySelector('.wrtn-markdown')||null,bubble=markdown?(getMessageGroupContainer(markdown)||markdown):null;cspV35Session=createV35StudioSession({targetBubble:bubble,markdown,plan:resolved.plan||rec.plan,restored:{...resolved,messageKey,imageSrc:src,naiSettings:{...(resolved.naiSettings||rec.naiSettings||{}),model:rec?.naiSettings?.model||getGlobalSettings().naiModel}}});cspV35Session.messageKey=messageKey;cspV35Session.currentHistoryIndex=index;renderV35Studio();v35Toast('과거 이미지 설정을 스튜디오에 불러왔어.','success')}
+    async function openV35StudioFromRecord(messageKey,index=0){if(await cspComicOpenRecord(messageKey,index))return;const rec=normalizeSceneRecordHistory(getSceneRecords()[messageKey],messageKey);if(!rec)return;/* 5.2.8: 고른 기록 칸의 프롬프트를 읽는다(현재 선택 칸이 아니라). */const sel=cspComicClone(rec);sel.currentIndex=index;syncCurrentImageFieldsFromHistory(sel);const resolved=await resolveGeneratedPromptSnapshot(sel,getRoomSettings()),src=await getRecordImageSrc(rec,index),markdown=document.querySelector(`.csp-message-generate-btn[data-message-key="${CSS.escape(messageKey)}"]`)?.closest('[data-message-group-id]')?.querySelector('.wrtn-markdown')||null,bubble=markdown?(getMessageGroupContainer(markdown)||markdown):null;cspV35Session=createV35StudioSession({targetBubble:bubble,markdown,plan:resolved.plan||rec.plan,restored:{...resolved,messageKey,imageSrc:src,naiSettings:{...(resolved.naiSettings||rec.naiSettings||{}),model:rec?.naiSettings?.model||getGlobalSettings().naiModel}}});cspV35Session.messageKey=messageKey;cspV35Session.currentHistoryIndex=index;renderV35Studio();refreshV35Quota();v35Toast('과거 이미지 설정을 스튜디오에 불러왔어.','success')}
     function v35다운로드(src,title='scene-image'){if(!src)return;const a=document.createElement('a');a.href=src;a.download=`${sanitizeFileName(title)}.png`;document.body.appendChild(a);a.click();a.remove()}
     function openV35Viewer({src,title='장면 이미지',item=null}={}){
         const standalone=!cspV35Root;
@@ -12983,7 +13034,7 @@ ${v35GaugeHtml({thin:true,percent:b.charCount/b.maxCharacters*100,tone:'ok'})}</
         b.querySelector('#st-save').onclick=()=>{const next=normalizeVisualContextSettings(getRoomSettings().visualContext||{});next.currentState={...next.currentState,location:b.querySelector('#st-loc').value.trim(),region:b.querySelector('#st-reg').value.trim(),timeOfDay:b.querySelector('#st-time').value.trim(),weather:b.querySelector('#st-weather').value.trim(),lighting:normalizeVisualStringList(b.querySelector('#st-light').value,16,320),environment:normalizeVisualStringList(b.querySelector('#st-env').value,24,400)};saveV35Vc(next)};
         b.querySelector('#st-clear').onclick=()=>{if(!confirm('현재 상태를 비울까요?'))return;const next=normalizeVisualContextSettings(getRoomSettings().visualContext||{});next.currentState=createDefaultCurrentSceneState();saveV35Vc(next);renderV35State(b,next)};
     }
-    function bindV35Keys(){if(window.__cspV35Keys)return;window.__cspV35Keys=true;document.addEventListener('keydown',e=>{if(cspComicHost||!cspV35Root)return;const typing=/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName||'');if(e.key==='Escape'){if(cspV35RefineDialog){e.preventDefault();e.stopPropagation();cspV35RefineDialog.close(null);return}if(cspV35Viewer){if(cspV35Viewer.standalone)closeV35();else{cspV35Root.querySelector('.viewer')?.remove();cspV35Root.classList.remove('viewer-active','viewer-standalone');cspV35Viewer=null}}else if(!typing){if(cspV35Root.dataset.view==='studio')exitV35Studio();else closeV35()}return}if(typing)return;if((e.ctrlKey||e.metaKey)&&e.key==='Enter'&&cspV35Root.dataset.view==='studio'){e.preventDefault();runV35Generation(false)}if(e.key.toLowerCase()==='r'&&cspV35Root.dataset.view==='studio'){e.preventDefault();runV35Generation(true)}if(e.key.toLowerCase()==='a'&&cspV35Root.dataset.view==='studio'){e.preventDefault();runV35Reanalysis()}},true)}
+    function bindV35Keys(){if(window.__cspV35Keys)return;window.__cspV35Keys=true;document.addEventListener('keydown',e=>{if(cspComicHost||!cspV35Root)return;const typing=/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName||'');if(e.key==='Escape'){if(cspV35RefineDialog){e.preventDefault();e.stopPropagation();cspV35RefineDialog.close(null);return}if(cspV35Viewer){if(cspV35Viewer.standalone)closeV35();else{cspV35Root.querySelector('.viewer')?.remove();cspV35Root.classList.remove('viewer-active','viewer-standalone');cspV35Viewer=null}}else if(!typing){if(cspV35Root.dataset.view==='studio')exitV35Studio();else closeV35()}return}if(typing)return;if((e.ctrlKey||e.metaKey)&&e.key==='Enter'&&cspV35Root.dataset.view==='studio'){e.preventDefault();runV35Generation(false)}if(e.ctrlKey||e.metaKey||e.altKey||e.isComposing)return;if(e.key.toLowerCase()==='r'&&cspV35Root.dataset.view==='studio'){e.preventDefault();runV35Generation(true)}if(e.key.toLowerCase()==='a'&&cspV35Root.dataset.view==='studio'){e.preventDefault();runV35Reanalysis()}},true)}
 
 
     // Characters / PC / Reference / Quick-slot desktop UI
@@ -14367,6 +14418,9 @@ ${st.text&&!s.busy?`<div class="v35m-reason ${st.tone}">${esc(st.text)}</div>`:'
         // 실제 수집한 대상(오른쪽 메뉴 / data-message-group-id AI 답변 / 하단 액션바) 변화만 분류해서 반응한다.
         cspScopedObserver.observe(document.body, { childList: true, subtree: true });
         document.addEventListener('scroll', markScrolling, { capture: true, passive: true });
+        window.addEventListener('storage', e => {
+            if (!e.key || e.key === getSceneRecordsKey()) invalidateSceneRecordsCache('');
+        });
 
         window.addEventListener('beforeunload', () => {
             clearTimeout(menuInjectTimer);
