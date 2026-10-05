@@ -3374,6 +3374,13 @@ const ExternalReplay=(()=>{
   function wishHeldJobCount(j){return (j?.draft?.relationshipHeldAdds?.length||0)+(j?.draft?.cognitionHeldAdds?.length||0)+(j?.draft?.heldProtected?.length||0);}
   function wishHeldJobSuffix(j){const n=wishHeldJobCount(j);return n?' (미적용 보류 제안 '+n+'건 포함)':'';}
   function wishHeldPauseMessage(n){return '이번 작업에서 보류 제안이 '+n+'건 생겼습니다. 방금 구간 결과는 저장했습니다. 이어서 실행하면 다음 구간부터 이어집니다. 그 전에 기억·인물·자료를 고치면 작업 기준이 바뀌어 대화를 다시 읽어야 합니다';}
+  // A 검토 item about automatic facts (auto-fact-*) has nothing left to do once one of its facts is gone or archived: a
+  // rebuild drops every automatic fact, and the user may delete or end tracking of one. A commit takes it off as dismissed.
+  function wishHeldFactGone(rec,cog){
+    if(!/^auto-fact-/.test(String(rec?.reason||'')))return false;
+    const p=rec.payload||{};
+    return [p.fact_id,p.target_fact_id,p.new_fact_id].filter(Boolean).some(id=>!(cog?.facts||[]).some(f=>f.id===id&&!f.archived));
+  }
   function wishHeldCommitNotice(staged,parts){
     const queued=parts.reduce((n,p)=>n+p.queued.length,0),suppressed=parts.flatMap(p=>p.suppressed),settled=parts.reduce((n,p)=>n+p.settled.length,0),duplicate=parts.reduce((n,p)=>n+p.duplicate.length,0);
     const total=(staged.relationshipHeldAdds?.length||0)+(staged.cognitionHeldAdds?.length||0),notices=staged.notices||=[];
@@ -5174,25 +5181,33 @@ function applyObserve(cog,speech,data,rp,cutoff,relationshipRows=[],relationship
     // A rebuild or import stages on a seed that dropped every automatic fact, so there an automatic fact was made earlier in
     // the same job: the user has not seen it yet and no 검토 item is made about it. Facts the user already had get one.
     const hadBefore=x=>holdCtx.bundle==='unified'||!x.automatic,cleanups=[],splitFrom=new Map();
-    // A new automatic fact never shares a title with a live fact: the 골라서 one-line form shows only the title.
+    const priorFacts=new Set((cog.facts||[]).map(x=>x.id)),answerRefs=new Set(data.facts_upsert.map(x=>x.ref));
+    // A new automatic fact never shares a title with a live fact: the 골라서 one-line form shows only the title. A trailing
+    // (n) counts on only when the title before it is a fact's title, so a number that belongs to the title stays as written.
     const freshTitle=title=>{
       const taken=t=>next.facts.some(x=>!x.archived&&bodyKey(x.label)===bodyKey(t)),clash=next.facts.filter(x=>!x.archived&&bodyKey(x.label)===bodyKey(title));
       if(!clash.length)return {title,clash};
-      const m=/^(.*\S)\s\((\d{1,2})\)$/.exec(String(title).trim()),base=m?m[1]:String(title).trim();let n=m?Number(m[2])+1:2,t;
+      const clean=String(title).replace(/\s+/g,' ').trim(),m=/^(.*\S) \((\d+)\)$/.exec(clean),counted=!!m&&next.facts.some(x=>bodyKey(x.label)===bodyKey(m[1])),base=counted?m[1]:clean;let n=counted?Number(m[2])+1:2,t;
       do t=base+' ('+(n++)+')';while(taken(t));
       return {title:t,clash};
     };
+    // The old fact of a rewritten ref: the user's own fact gets a 검토 item to end its tracking; one made earlier in the
+    // same rebuild only gets the line.
+    const splitNotice=(from,row,linked)=>{
+      const retire=!from.archived&&hadBefore(from);
+      if(retire)cleanups.push({operation:'retire',fact:from,other:row});
+      const was='「'+String(from.label||'')+'」',now='「'+String(row.label||'')+'」';
+      notices.push(hadBefore(from)
+        ?(linked?'AI가 '+was+' 인지를 다른 내용으로 고쳐 쓰려 했는데, 그 내용은 이미 '+now+' 인지에 있어서 그 인지에 반영했어요.':'AI가 '+was+' 인지를 다른 내용으로 고쳐 쓰려 해서 새 인지('+now+')로 따로 저장했어요.')+' 옛 인지는 그대로 두었어요.'+(retire?' 옛 인지가 더 필요 없으면 [인지 > 검토]에서 추적을 끝내세요.':'')
+        :(linked?'이번 작업 앞 구간에서 만든 '+was+' 인지와 내용이 달라, 같은 내용이 있는 '+now+' 인지에 반영했어요.':'이번 작업 앞 구간에서 만든 '+was+' 인지와 내용이 달라 새 인지('+now+')로 따로 저장했어요.')+' 둘 다 남으니 적용한 뒤 필요 없는 쪽의 추적을 끝내세요.');
+    };
     const newFact=(f,from)=>{
-      const named=freshTitle(f.title),row={id:'cg_'+crypto.randomUUID().replace(/-/g,''),label:named.title,content:f.content,type:'other',automatic:true,archived:false,injectionMode:'auto'};
+      const fresh=freshTitle(f.title),row={id:'cg_'+crypto.randomUUID().replace(/-/g,''),label:fresh.title,content:f.content,type:'other',automatic:true,archived:false,injectionMode:'auto'};
       next.facts.push(row);next.state.catalog.facts.push(row.id);
-      const other=named.clash.find(x=>x!==from&&hadBefore(x));
-      if(from){
-        const retire=!from.archived&&hadBefore(from);
-        if(retire)cleanups.push({operation:'retire',fact:from,other:row});
-        notices.push('AI가 「'+String(from.label||'')+'」 인지를 다른 내용으로 고쳐 쓰려 해서 새 인지(「'+row.label+'」)로 따로 저장했어요. 옛 인지는 그대로 두었어요.'+(retire?' 옛 인지가 더 필요 없으면 [인지 > 검토]에서 추적을 끝내세요.':''));
-      }
+      const other=fresh.clash.find(x=>x!==from&&hadBefore(x));
+      if(from)splitNotice(from,row,false);
       if(other)cleanups.push({operation:'merge',fact:row,other});
-      if(named.clash.length&&(!from||other))notices.push('새 인지(「'+row.label+'」)의 제목이 기존 인지(「'+String((other||named.clash[0]).label||'')+'」)의 제목과 같아서 뒤에 번호를 붙였어요.'+(other?' 같은 사실이면 [인지 > 검토]에서 합칠 수 있어요.':''));
+      if(fresh.clash.length&&(!from||other))notices.push('AI가 새 인지에 「'+String((other||fresh.clash[0]).label||'')+'」 인지와 같은 제목을 붙여서, 구분하려고 새 인지 제목 뒤에 번호를 붙였어요(「'+row.label+'」).'+(other?' 같은 사실이면 [인지 > 검토]에서 합칠 수 있어요.':''));
       return row;
     };
     let preservedSpeech=0,preservedAliases=0;
@@ -5230,8 +5245,20 @@ function applyObserve(cog,speech,data,rp,cutoff,relationshipRows=[],relationship
       if(!row)row=newFact(f);
       // Another body under a stored automatic fact's ref is not written over it: the people who knew the old body would
       // seem to know the new one. The row becomes a new fact; the old one keeps its body, title, knowers and concealments.
-      else if(row.automatic&&bodyKey(row.content)!==bodyKey(f.content)){const old=row;row=newFact(f,old);splitFrom.set(row.id,old);}
-      else if(row.automatic){row.label=f.title;row.content=f.content;}
+      // When a stored automatic fact already has that body (the same slip again after an earlier split), the row goes to
+      // that fact instead of a copy. Not to a fact another row of this answer names or already went to: two rows would
+      // write the same people's knowledge.
+      else if(row.automatic&&bodyKey(row.content)!==bodyKey(f.content)){
+        const old=row,used=new Set(facts.values()),same=next.facts.find(x=>x!==old&&x.automatic&&!x.archived&&priorFacts.has(x.id)&&!answerRefs.has(x.id)&&!used.has(x.id)&&bodyKey(x.content)===bodyKey(f.content));
+        if(same){row=same;splitNotice(old,row,true);}else row=newFact(f,old);
+        splitFrom.set(row.id,old);
+      }
+      // Same body: the title follows the answer unless it would match another live fact's title.
+      else if(row.automatic){
+        const clash=bodyKey(f.title)!==bodyKey(row.label)&&next.facts.find(x=>x!==row&&!x.archived&&bodyKey(x.label)===bodyKey(f.title));
+        if(clash)notices.push('AI가 「'+String(row.label||'')+'」 인지의 제목을 「'+String(clash.label||'')+'」 인지와 같게 바꾸려 해서, 구분할 수 있게 제목은 그대로 두었어요.');else row.label=f.title;
+        row.content=f.content;
+      }
       facts.set(f.ref,row.id);
       if(!Array.isArray(f.knows)||!Array.isArray(f.doesNotKnow))throw Error('인지 관계 배열 오류');
       const knows=f.knows.map(actor),does=f.doesNotKnow.map(actor);
@@ -5286,9 +5313,9 @@ function applyObserve(cog,speech,data,rp,cutoff,relationshipRows=[],relationship
       if(heldFacts.has(f)){heldFacts.get(f).conceal.push({h,t,row:copy(row)});continue;}
       // A row about a rewritten ref goes to the new fact with the rest of the row. The answer may lean on the holder knowing
       // the old body; that does not say the holder knows the new one, so the row is left out instead of failing the answer.
-      const was=splitFrom.get(f);
-      if(was&&row.active&&next.state.knowledge[h]?.[f]!=='aware'){const msg=label+nameOf(h)+'이(가) 새로 따로 저장한 이 인지를 안다는 내용이 답에 없어 이 은폐는 적용하지 않았어요. 옛 인지의 은폐는 그대로예요.';notices.push(msg);fx.left.push(msg);continue;}
-      if(was&&!row.active&&!next.state.concealments.some(x=>x.holderId===h&&x.targetId===t&&x.factId===f)&&next.state.concealments.some(x=>x.holderId===h&&x.targetId===t&&x.factId===was.id&&x.active)){const msg=label+'AI가 이 은폐를 끝냈다고 했지만 은폐는 옛 인지(「'+String(was.label||'')+'」)에 있어 그대로 두었어요. 옛 인지 추적을 끝내면 함께 정리돼요.';notices.push(msg);fx.left.push(msg);continue;}
+      const was=splitFrom.get(f),hid=was&&'숨김 '+nameOf(h)+' → '+nameOf(t)+' · '+(next.facts.find(x=>x.id===f)?.label||row.fact_ref)+': ',onOld=was&&next.state.concealments.some(x=>x.holderId===h&&x.targetId===t&&x.factId===was.id&&x.active);
+      if(was&&row.active&&next.state.knowledge[h]?.[f]!=='aware'){const msg=hid+'숨기는 사람이 이 인지를 안다는 내용이 답에 없어 이 숨김은 넣지 않았어요.'+(onOld?' 옛 인지(「'+String(was.label||'')+'」)의 숨김은 그대로예요.':'');notices.push(msg);fx.left.push(msg);continue;}
+      if(was&&!row.active&&!next.state.concealments.some(x=>x.holderId===h&&x.targetId===t&&x.factId===f)&&onOld){const msg=hid+'AI가 이 숨김을 끝냈다고 했지만 숨김은 옛 인지(「'+String(was.label||'')+'」)에 있어 그대로 두었어요. 옛 인지 추적을 끝내면 함께 정리돼요.';notices.push(msg);fx.left.push(msg);continue;}
       if(row.active&&next.state.knowledge[h]?.[f]!=='aware')throw Error(label+'정보를 모르는 인물은 은폐 주체가 될 수 없습니다. 숨기는 인물을 그 인지의 knows에 넣었는지 확인해 주세요.');
       const old=next.state.concealments.find(x=>x.holderId===h&&x.targetId===t&&x.factId===f);
       const value={holderId:h,targetId:t,factId:f,active:row.active===true,scope:String(row.scope||''),publicName:old?.publicName||''};
@@ -5476,10 +5503,10 @@ function applyObserve(cog,speech,data,rp,cutoff,relationshipRows=[],relationship
     }
     if(staged.cog){next.speechRelations=staged.room.speechRelations;next.relationships=staged.room.relationships;next.relationshipRevision=staged.room.relationshipRevision;next.relationshipBaseline=staged.room.relationshipBaseline||null;}
     next._rev=Number(original._rev||0)+1;next.updatedAt=nowIso();
-    const heldAdds={A:staged.relationshipHeldAdds||[],C:staged.cognitionHeldAdds||[]},hasAdds=heldAdds.A.length+heldAdds.C.length>0,heldParts=[];
+    const heldAdds={A:staged.relationshipHeldAdds||[],C:staged.cognitionHeldAdds||[]},hasAdds=heldAdds.A.length+heldAdds.C.length>0,heldParts=[];let goneHeld=[];
     await new Promise((resolve,reject)=>{
       const stores=[APP.storeName,'cognitionRooms','characterLibraries'];if(staged.relationshipBackup||hasAdds)stores.push(APP.runtimeStoreName);
-      const tx=state.db.transaction(stores,'readwrite');let error,sidecar=null,liveCog=null;
+      const tx=state.db.transaction(stores,'readwrite');let error,sidecar=null,liveCog=null;goneHeld=[];
       const fail=message=>{error=Error(message);tx.abort();};
       const created=staged.packs.filter(p=>!packs.some(old=>old.scopeId===p.scopeId));
       let left=2+packs.length+created.length+(hasAdds?1:0);
@@ -5490,9 +5517,10 @@ function applyObserve(cog,speech,data,rp,cutoff,relationshipRows=[],relationship
           const ar=WishHeld.resolve(before.relationshipHeldResolved||[],a.settled,'auto-matched',Date.now());
           if('relationshipHeld' in next||a.ledger.length)next.relationshipHeld=a.ledger;
           if('relationshipHeldResolved' in next||ar.length)next.relationshipHeldResolved=ar;
-          const c=WishHeld.partition('C',(liveCog?.reviews||[]).filter(r=>WishHeld.isHeld('C',r)),heldAdds.C,liveCog?.heldResolved||[],sidecar?.queue?.C||[],{cog:staged.cog});
+          const liveHeld=(liveCog?.reviews||[]).filter(r=>WishHeld.isHeld('C',r));goneHeld=liveHeld.filter(r=>wishHeldFactGone(r,staged.cog));
+          const c=WishHeld.partition('C',liveHeld.filter(r=>!goneHeld.includes(r)),heldAdds.C,liveCog?.heldResolved||[],sidecar?.queue?.C||[],{cog:staged.cog});
           staged.cog.reviews=[...(staged.cog.reviews||[]).filter(r=>!WishHeld.isHeld('C',r)),...c.ledger];
-          const cr=WishHeld.resolve(liveCog?.heldResolved||[],c.settled,'auto-matched',Date.now());
+          const cr=WishHeld.resolve(goneHeld.length?WishHeld.resolve(liveCog?.heldResolved||[],goneHeld,'dismissed',Date.now()):liveCog?.heldResolved||[],c.settled,'auto-matched',Date.now());
           if('heldResolved' in staged.cog||cr.length)staged.cog.heldResolved=cr;
           if((liveCog?.rev||0)!==(cog.rev||0))staged.cog.rev=Math.max(staged.cog.rev||0,(liveCog.rev||0)+1);
           // 인지 넣는 방식 is a setting the user may switch while the run waits; keep the live choice.
@@ -5510,6 +5538,7 @@ function applyObserve(cog,speech,data,rp,cutoff,relationshipRows=[],relationship
       tx.oncomplete=resolve;tx.onabort=tx.onerror=()=>reject(error||tx.error||Error('통합 저장 실패'));
     });
     wishHeldCommitNotice(staged,heldParts);
+    if(goneHeld.length)(staged.notices||=[]).push('[인지 > 검토]의 인지 정리 제안 '+goneHeld.length+'건은 대상 인지가 지워졌거나 추적이 끝나 목록에서 뺐어요.');
     // A UI edit may occur after put but before oncomplete. Keep those live fields;
     // its queued saveRoom will persist them with the committed revision.
     for(const key of Object.keys(next))if(['_rev','_epoch','updatedAt'].includes(key)||JSON.stringify(original[key])===JSON.stringify(before[key]))original[key]=next[key];
@@ -13937,14 +13966,29 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     const p=r?.payload||{},heldNote=r?.reason==='manual-fact-body-mismatch'?' · AI 제안 본문: '+String(r.proposal?.content||'').slice(0,120):'';
     const actors=new Map((cog?.actors||[]).map(a=>[a.id,a.name]));
     const facts=new Map((cog?.facts||[]).map(f=>[f.id,f.label||f.content]));
-    if(r?.reason==='auto-fact-rewrite')return `AI가 「${facts.get(p.fact_id)||p.fact_title||'정보'}」 인지를 다른 내용으로 고쳐 쓰려 해서, 새 내용은 새 인지(「${facts.get(p.new_fact_id)||p.new_title||'정보'}」)로 따로 저장했어요. 옛 인지가 더 필요 없으면 [추적 종료]를 눌러 추적을 끝내세요. 둘 다 두려면 [이 후보 제외]를 누르세요.`;
-    if(r?.reason==='auto-fact-same-title')return `새 인지(「${facts.get(p.fact_id)||p.fact_title||'정보'}」)의 제목이 기존 인지(「${facts.get(p.target_fact_id)||p.target_title||'정보'}」)의 제목과 같아서 뒤에 번호를 붙였어요. 같은 사실이면 [정보 합치기]를 눌러 새 인지를 기존 인지로 합치세요. 다른 사실이면 [이 후보 제외]를 누르세요.`;
+    // The two 검토 items for automatic facts say what pressing 반영 does, not a button name: the 확인 tab, the 검토 tab and a
+    // rebuild's list show other buttons.
+    if(r?.reason==='auto-fact-rewrite'){
+      const old=facts.get(p.fact_id)||p.fact_title||'정보',made=facts.get(p.new_fact_id)||p.new_title||'정보';
+      if(Array.isArray(cog?.facts)&&!(cog.facts||[]).some(f=>f.id===p.new_fact_id&&!f.archived))return `AI가 「${old}」 인지를 다른 내용으로 고쳐 쓰려 해서 따로 저장했던 새 인지(「${made}」)가 지금은 없어요. 옛 인지는 그대로 두고 이 후보는 제외하세요.`;
+      return `AI가 「${old}」 인지를 다른 내용으로 고쳐 쓰려 해서, 새 내용은 새 인지(「${made}」)로 따로 저장했어요. 옛 인지가 더 필요 없으면 반영해서 추적을 끝내고, 둘 다 두려면 제외하세요. 추적을 끝내면 옛 인지와 그 앎·숨김 기록은 더 쓰이지 않아요.`;
+    }
+    if(r?.reason==='auto-fact-same-title'){
+      const made=facts.get(p.fact_id)||p.fact_title||'정보',other=facts.get(p.target_fact_id)||p.target_title||'정보';
+      return `AI가 새 인지에 「${other}」 인지와 같은 제목을 붙여서, 구분하려고 새 인지 제목 뒤에 번호를 붙였어요(「${made}」). 같은 사실이면 반영해서 합치고, 다른 사실이면 제외하세요. 합치면 새 인지 본문은 보관되고 「${other}」 인지 본문만 남아요. 새 인지를 아는 인물은 「${other}」 인지도 아는 것으로 바뀌어요.`;
+    }
     if(r?.kind==='fact-maintenance')return `${facts.get(p.fact_id)||'정보'} · ${{correct:'내용이 바뀌었는지 확인',merge:'같은 정보끼리 합치기',retire:'더 이상 추적하지 않기'}[p.operation]||'내용 확인'}${p.content?' → '+p.content:p.target_fact_id?' → '+(facts.get(p.target_fact_id)||'다른 정보'):''}${p.reason?' · '+p.reason:''}`;
     if(r?.kind==='knowledge')return `${actors.get(p.actor_id)||'인물'} · ${facts.get(p.fact_id)||p.description||'정보'} · ${v2KnowledgeChangeText(p.before,p.after)}${heldNote}`;
     if(r?.kind==='conflict')return `${actors.get(p.actor_id)||'인물'} · ${facts.get(p.fact_id)||p.description||'정보'} · 어떻게 알게 됐는지 확인 필요`;
     if(r?.kind==='concealment')return `${actors.get(p.holder_id)||'인물'}가 ${actors.get(p.target_id)||'대상'}에게 숨기는 정보가 바뀜 · ${facts.get(p.fact_id)||'정보'}${heldNote}`;
     if(r?.kind==='scene')return `${actors.get(p.actor_id)||'인물'} · ${{arrived:'현장에 들어옴',left:'현장에서 나감',audience_changed:'누가 들었는지 확인 필요'}[p.change]||'현장 상태가 바뀜'}`;
     return String(p.description||r?.reason||'자동으로 확정하기 어려워 확인을 기다리고 있습니다.');
+  }
+  function v2ReviewAcceptText(r,cog){
+    const p=r?.payload||{},facts=new Map((cog?.facts||[]).map(f=>[f.id,f.label||f.content]));
+    if(r?.reason==='auto-fact-rewrite')return {ask:`옛 인지(「${facts.get(p.fact_id)||p.fact_title||'정보'}」)의 추적을 끝낼까요? 새 인지(「${facts.get(p.new_fact_id)||p.new_title||'정보'}」)는 그대로 남아요.`,done:'옛 인지 추적을 끝냈어요.'};
+    if(r?.reason==='auto-fact-same-title'){const other=facts.get(p.target_fact_id)||p.target_title||'정보';return {ask:`새 인지(「${facts.get(p.fact_id)||p.fact_title||'정보'}」)를 「${other}」 인지로 합칠까요? 새 인지 본문은 보관되고, 새 인지를 아는 인물은 「${other}」 인지도 아는 것으로 바뀌어요.`,done:'두 인지를 합쳤어요.'};}
+    return {ask:'이 내용을 인지 기록에 반영할까요?',done:'인지 기록에 반영했습니다.'};
   }
   function v2EvidenceQuote(r){
     const ev=r?.payload?.evidence;
@@ -13954,7 +13998,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     const p=r?.payload||{}, actors=(cog?.actors||[]).filter(a=>!a.archived), facts=(cog?.facts||[]).filter(f=>!f.archived);
     const hasActor=id=>!!id&&actors.some(a=>String(a.id)===String(id));
     const hasFact=id=>!!id&&facts.some(f=>String(f.id)===String(id));
-    if(r?.kind==='fact-maintenance')return {mode:'accept',label:p.operation==='correct'?'내용 수정 반영':p.operation==='merge'?'정보 합치기':p.operation==='retire'?'추적 종료':'반영'};
+    if(r?.kind==='fact-maintenance'&&[p.fact_id,p.target_fact_id,p.new_fact_id].filter(Boolean).every(hasFact))return {mode:'accept',label:p.operation==='correct'?'내용 수정 반영':p.operation==='merge'?'정보 합치기':p.operation==='retire'?'추적 종료':'반영'};
     if(r?.kind==='knowledge'&&hasActor(p.actor_id)&&hasFact(p.fact_id))return {mode:'accept',label:'이대로 반영'};
     if(r?.kind==='conflict'&&p.code==='possible_unearned_knowledge'&&hasActor(p.actor_id)&&hasFact(p.fact_id))return {mode:'accept',label:'알고 있음으로 반영'};
     if(r?.kind==='concealment'&&hasActor(p.holder_id)&&hasActor(p.target_id)&&hasFact(p.fact_id))return {mode:'accept',label:'숨김 상태 반영'};
@@ -14187,7 +14231,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     overlay.querySelector('[data-v2-arm]')?.addEventListener('click',async()=>{const btn=overlay.querySelector('[data-v2-arm]');if(btn?.dataset.busy==='1')return;if(btn){btn.dataset.busy='1';btn.disabled=true;btn.textContent='주입 준비 중…';}notify('🪽 RP Manager 방식으로 주입을 준비합니다…','success',2200);try{await saveRoom(room);await armInjection(room);renderModalIfOpen();}catch(e){notify(e.message,'error',7000,{error:e});}finally{if(btn?.isConnected){delete btn.dataset.busy;btn.disabled=false;btn.textContent='주입 시작';}}});
     const bridge=cogBridge();
     overlay.querySelectorAll('[data-v2-review-dismiss]').forEach(b=>b.onclick=async()=>{try{await bridge?.dismissReview?.(apiChatIdOf(room),b.dataset.v2ReviewDismiss);state.v2Cognition=null;v2ScheduleAsyncRefresh(room);renderModal();}catch(e){notify(e.message,'error',5000,{error:e});}});
-    overlay.querySelectorAll('[data-v2-review-accept]').forEach(b=>b.onclick=async()=>{try{if(!confirm('이 내용을 인지 기록에 반영할까요?'))return;await bridge?.acceptReview?.(apiChatIdOf(room),b.dataset.v2ReviewAccept);state.v2Cognition=null;v2ScheduleAsyncRefresh(room);notify('인지 기록에 반영했습니다.','success',2200);renderModal();}catch(e){notify('반영하지 못했습니다: '+e.message,'warn',6500,{error:e});}});
+    overlay.querySelectorAll('[data-v2-review-accept]').forEach(b=>b.onclick=async()=>{try{const say=v2ReviewAcceptText((state.v2Cognition?.reviews||[]).find(r=>String(r.id)===String(b.dataset.v2ReviewAccept)),state.v2Cognition);if(!confirm(say.ask))return;await bridge?.acceptReview?.(apiChatIdOf(room),b.dataset.v2ReviewAccept);state.v2Cognition=null;v2ScheduleAsyncRefresh(room);notify(say.done,'success',2200);renderModal();}catch(e){notify('반영하지 못했습니다: '+e.message,'warn',6500,{error:e});}});
     overlay.querySelectorAll('[data-v2-review-open]').forEach(b=>b.onclick=()=>{
       const review=(state.v2Cognition?.reviews||[]).find(r=>String(r.id)===String(b.dataset.v2ReviewOpen));
       if(!review){notify('검토 후보가 이미 바뀌었습니다. 화면을 다시 확인해 주세요.','warn',4200);state.v2Cognition=null;v2ScheduleAsyncRefresh(room);return;}
@@ -14828,10 +14872,10 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
         r.facts=r.facts.filter(f=>String(f.id)!==factId);
         scrubState(r.state);
         for(const snap of Object.values(r.snapshots||{})){scrubState(snap?.before);scrubState(snap?.after);}
-        const removed=(r.reviews||[]).filter(review=>WishHeld.isHeld('C',review)&&(String(review.payload?.fact_id||'')===factId||String(review.payload?.target_fact_id||'')===factId));if(removed.length)r.heldResolved=WishHeld.resolve(r.heldResolved||[],removed,'dismissed',Date.now());
+        const removed=(r.reviews||[]).filter(review=>WishHeld.isHeld('C',review)&&(String(review.payload?.fact_id||'')===factId||String(review.payload?.target_fact_id||'')===factId||String(review.payload?.new_fact_id||'')===factId));if(removed.length)r.heldResolved=WishHeld.resolve(r.heldResolved||[],removed,'dismissed',Date.now());
         r.reviews=(r.reviews||[]).filter(review=>{
           const p=review?.payload||{};
-          return String(p.fact_id||'')!==factId&&String(p.target_fact_id||'')!==factId;
+          return String(p.fact_id||'')!==factId&&String(p.target_fact_id||'')!==factId&&String(p.new_fact_id||'')!==factId;
         });
       },rid);
       const value=await readRoom(rid),ctx=cognitionContext(value);publishContext(rid,ctx.text,'인지 정보 완전 삭제');
@@ -14883,7 +14927,15 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
         const live=roomAt(r);
         const hasActor=aid=>live.actors.some(a=>a.id===aid&&!a.archived);
         const hasFact=fid=>live.facts.some(f=>f.id===fid&&!f.archived);
-        if(kind==='fact-maintenance'){applyFactMaintenance(r,c);}
+        if(kind==='fact-maintenance'&&/^auto-fact-/.test(String(check.review.reason||''))){
+          // A 검토 item for a fact the AI rewrote or titled alike: the body check ignores spacing (a later answer may
+          // respace the same body) and both facts stay as automatic as they were, like the 추적 종료 button leaves them.
+          const norm=v=>String(v??'').normalize('NFC').replace(/\s+/g,' ').trim(),f=r.facts.find(x=>x.id===c.fact_id&&!x.archived);
+          if(!f||norm(f.content)!==norm(c.before_content)||[c.target_fact_id,c.new_fact_id].some(id=>id&&!hasFact(id)))throw new Error('그사이 인지가 바뀌거나 없어져 반영하지 않았어요. 이 후보는 제외하고, 필요하면 인물·인지에서 직접 정리해 주세요.');
+          const kept=[f,r.facts.find(x=>x.id===c.target_fact_id)].filter(Boolean).map(x=>[x,x.automatic]);
+          applyFactMaintenance(r,{...c,before_content:f.content});for(const [x,auto] of kept)x.automatic=auto;
+        }
+        else if(kind==='fact-maintenance'){applyFactMaintenance(r,c);}
         else if((kind==='knowledge'||(kind==='conflict'&&c.code==='possible_unearned_knowledge'))&&hasActor(c.actor_id)&&hasFact(c.fact_id)){
           setKnow(r.state,c.actor_id,c.fact_id,kind==='knowledge'?(c.after||'aware'):'aware');
         }else if(kind==='concealment'&&hasActor(c.holder_id)&&hasActor(c.target_id)&&hasFact(c.fact_id)){
@@ -16614,20 +16666,23 @@ function createWishUI(AD) {
     const why={'live-full':'기존 보류를 정리하면 옮길 수 있습니다','adds-too-large':'이번 결과만으로 장부 용량을 넘습니다. 필요 없는 제안을 제외하거나 내보내 주세요','combined':'일부를 정리한 뒤 옮기기를 누르세요'}[group.reason]||'';
     return `<section class="m3-panel m3-held-summary" data-key="held-summary-${domain}"><div class="m3-row"><b class="m3-grow">${esc(title)} ${fmt(n)}건</b>${group.usage>=.5?tag('정리 권장'):''}${domain==='F'&&n?btn('목록 비우기','heldDiscard',{arg:JSON.stringify([domain,'*']),cls:'quiet mini'}):''}</div>${n?'<p class="m3-muted">아직 주입·AI 기억에 반영되지 않은 제안입니다.</p>':''}${m?`<div class="m3-row m3-topgap"><span class="m3-muted m3-grow">대기 ${fmt(m)}건 · 장부 용량 초과로 보관 중(주입·AI 0자)</span>${btn('대기열 보기','heldQueueOpen',{arg:domain,cls:'mini',icon:'list'})}</div>${why?'<p class="m3-muted">'+esc(why)+'</p>':''}`:''}${V.held.error?'<p class="m3-error">대기열 확인 실패 · '+esc(V.held.error)+'</p>':''}</section>`;
   }
-  function heldBody(domain,r){
+  function heldBody(domain,r,cog=V.held?.cog){
     const v = WishHeld.heldView(domain, r), p = v.proposal, rows = [];
     const add = (label, value, cls = '') => { const t = String(value ?? '').trim(); if (t) rows.push(`<div class="wp-hb-row ${cls}"><span>${esc(label)}</span><p>${esc(t)}</p></div>`); };
     if (domain === 'F') { add('종류 · 제목', (L.lore[p.type] || p.type || '자료') + ' · ' + String(p.title || ''), 'is-main'); add('고정 제안', p.anchor ? '켜기' : '끄기'); add('별칭', (p.aliases || []).join(' · ')); add('검색어', (p.keywords || []).join(' · ')); add('제안 전문', p.full); add('짧은 요약', p.compact); add('한 줄 요약', p.micro); }
     else if (domain === 'A') { const c = v.checked || {}, act = { keep: '기존 유지', clear: '해제', replace: '교체' }[c.unresolvedAction] || ''; add('현재 관계 제안', c.current, 'is-main'); add('새 전환', c.milestone); add('남은 쟁점', [act, c.unresolved].filter(Boolean).join(' · ')); add('근거', (c.evidence || []).map(e => { const who = e.role === 'user' ? 'USER' : e.role === 'assistant' ? 'CHAR/서술' : ''; return (who ? who + ' · ' : '') + String(e.quote || ''); }).join('\n\n')); }
-    else { const q = r.payload || {}, body = id => (V.held?.cog?.facts || []).find(f => f.id === id)?.content; add('변경 제안', v2ReviewDescription(r, V.held?.cog), 'is-main');
-      if (r.reason === 'auto-fact-rewrite') { add('옛 인지 본문', p.content); add('새 인지 본문', body(q.new_fact_id)); }
-      else if (r.reason === 'auto-fact-same-title') { add('새 인지 본문', p.content); add('기존 인지 본문', body(q.target_fact_id)); }
+    else { const q = r.payload || {}, auto = /^auto-fact-/.test(String(r.reason || '')), body = id => (cog?.facts || []).find(f => f.id === id)?.content;
+      // Who knows each fact: ending the old one's tracking or merging changes what these people know.
+      const who = id => (cog?.actors || []).filter(a => !a.archived && cog?.state?.knowledge?.[a.id]?.[id] === 'aware').map(a => a.name).join(' · ');
+      add(auto ? '설명' : '변경 제안', v2ReviewDescription(r, cog), 'is-main');
+      if (r.reason === 'auto-fact-rewrite') { add('옛 인지 본문', p.content); add('옛 인지를 아는 인물', who(q.fact_id)); add('새 인지 본문', body(q.new_fact_id)); add('새 인지를 아는 인물', who(q.new_fact_id)); }
+      else if (r.reason === 'auto-fact-same-title') { add('새 인지 본문', p.content); add('새 인지를 아는 인물', who(q.fact_id)); add('기존 인지 본문', body(q.target_fact_id)); add('기존 인지를 아는 인물', who(q.target_fact_id)); }
       else add(r.kind === 'speech' ? '호칭·말투 제안' : '인지 본문 제안', r.kind === 'speech' ? [p.address, p.register, p.note].filter(Boolean).join('\n') : p.content); if (r.group) add('제안 묶음', r.group); }
-    const k = 'held-raw-' + r.id;
-    return `<div class="wp-hb">${rows.join('')}</div><details class="m3-fold2 wp-hb-raw" data-open="${esc(k)}"${S.openSet.has(k) ? ' open' : ''}><summary>원본 제안 전체${ic('chev')}</summary>${S.openSet.has(k) ? `<div class="m3-fb"><pre>${esc(JSON.stringify(p, null, 2))}</pre></div>` : ''}</details>`;
+    const k = 'held-raw-' + r.id, raw = /^auto-fact-/.test(String(r.reason || '')) ? r.payload || {} : p;
+    return `<div class="wp-hb">${rows.join('')}</div><details class="m3-fold2 wp-hb-raw" data-open="${esc(k)}"${S.openSet.has(k) ? ' open' : ''}><summary>원본 제안 전체${ic('chev')}</summary>${S.openSet.has(k) ? `<div class="m3-fb"><pre>${esc(JSON.stringify(raw, null, 2))}</pre></div>` : ''}</details>`;
   }
   function heldRow(domain,r,key,options={}){
-    const v=WishHeld.heldView(domain,r),open=S.openSet.has(key),orphan=WishHeldUI.orphan(domain,r),message=WishHeldUI.message(state.currentRoom,r),missing=message==='기준 메시지 없음';
+    const jobCog=options.job?.draft?.cog,v=WishHeld.heldView(domain,r),open=S.openSet.has(key),orphan=WishHeldUI.orphan(domain,r,state.currentRoom,jobCog||undefined),message=WishHeldUI.message(state.currentRoom,r),missing=message==='기준 메시지 없음';
     let actions='';const busy=options.dialog?.busy||options.dialog?.draft?.busy||options.dialog?.heldBusy;
     if(options.job){actions=btn('확인 완료','heldJobDone',{arg:JSON.stringify([options.dialog.id,domain,r.id]),cls:'quiet mini',icon:'check',dis:busy});}
     else if(!options.queue){
@@ -16637,7 +16692,7 @@ function createWishUI(AD) {
     }
     const group=V.held?.domains?.[domain],existing=options.job&&group?.live.some(x=>WishHeld.same(domain,x,r));
     const title=`<span class="m3-held-title"><b>${esc(v.targetText||v.proposal.title||'보류 제안')}</b><small>${esc(v.reasonLabel)}</small></span>`;
-    return `<article class="m3-held-row" data-key="${esc(key)}">${fold(key,title,open?`<div class="m3-held-meta"><span>${esc(Number.isFinite(Number(v.at))?new Date(v.at).toLocaleString('ko-KR'):'날짜 없음')}</span><span>${esc(v.sourceLabel||'출처 없음')}</span>${orphan?'<span>대상 없음</span>':''}${existing?'<span>이미 장부에 있음</span>':''}</div><p class="m3-muted">${esc(message)}${domain==='C'&&missing?' · 제외 후 직접 편집':''}</p>${heldBody(domain,r)}`:'')}<div class="m3-row m3-card-actions">${actions}</div></article>`;
+    return `<article class="m3-held-row" data-key="${esc(key)}">${fold(key,title,open?`<div class="m3-held-meta"><span>${esc(Number.isFinite(Number(v.at))?new Date(v.at).toLocaleString('ko-KR'):'날짜 없음')}</span><span>${esc(v.sourceLabel||'출처 없음')}</span>${orphan?'<span>대상 없음</span>':''}${existing?'<span>이미 장부에 있음</span>':''}</div><p class="m3-muted">${esc(message)}${domain==='C'&&missing?' · 제외 후 직접 편집':''}</p>${heldBody(domain,r,jobCog||V.held?.cog)}`:'')}<div class="m3-row m3-card-actions">${actions}</div></article>`;
   }
   function heldList(domain,rows,key,options={}){
     if(!rows?.length)return '';const ordered=[...rows].sort((a,b)=>Number(b.at||0)-Number(a.at||0)),limit=WishHeldUI.limit(key),slice=ordered.slice(0,limit);
@@ -18476,7 +18531,7 @@ ${open ? `<div class="wp-err-body"><div class="wp-err-row"><span>원인</span><p
       if(domain==='A')return !WishRelationships.heldRow(rec,r.relationships||[]);
       if(domain==='F')return !(rec.target?.protectedIds||[]).some(id=>loreIds.has(id));
       if(rec.kind==='speech')return !(r.speechRelations||[]).some(x=>x.speaker===rec.payload?.speaker&&x.target===rec.payload?.target);
-      const p=rec.payload||{},fid=p.fact_id||p.target_fact_id;if(fid&&!(cog.facts||[]).some(f=>f.id===fid&&!f.archived))return true;
+      const p=rec.payload||{},fids=rec.kind==='fact-maintenance'?[p.fact_id,p.target_fact_id,p.new_fact_id].filter(Boolean):[p.fact_id||p.target_fact_id].filter(Boolean);if(fids.some(fid=>!(cog.facts||[]).some(f=>f.id===fid&&!f.archived)))return true;
       return [p.actor_id,p.holder_id,p.target_id].filter(Boolean).some(id=>!(cog.actors||[]).some(a=>a.id===id&&!a.archived));
     }
     async function change(r,domain,records,action,jobCreatedAt){
@@ -18754,7 +18809,7 @@ function model(r){
  cog:{selectMode:cg.selectMode==='pick'?'pick':'all',auto:cfg.auto!==false,every:cs.autoEvery||1,budget:cfg.budget||1000,scope:cfg.initialScope||'recent',initial:cfg.initialTurns||12,extra:cfg.promptExtra||''},pol:{state:Number(p.currentStateEvery)>0&&!!slot('currentState')?.enabled,cog:Number(p.cognitionEvery)>0?'all':'off',log:Number(p.logEvery)>0&&!!slot('logSummary')?.enabled,lore:Number(p.loreEvery)>0&&lc.enabled!==false,char:Number(p.characterEvery)>0,extra:Number(p.extraEvery)>0,threads:Number(p.threadsEvery??1)>0},autoChar:r.autoCharacterDetection,
  actors:(cg.actors||[]).filter(a=>!a.archived).map(a=>({...a,aliases:a.aliases||[],pc:a.isPlayer,present:(cg.state?.present||[]).includes(a.id)})),
  facts:WUIReadFactRows(cg,r.pending),
- reviews:(cg.reviews||[]).slice().reverse().map(rv=>({id:rv.id,kind:v2ReviewLabel(rv),desc:v2ReviewDescription(rv,cg),quote:v2EvidenceQuote(rv),accept:v2ReviewNeedsInspect(rv,cg)?'':'이대로 반영',original:rv})),
+ reviews:(cg.reviews||[]).slice().reverse().map(rv=>({id:rv.id,kind:v2ReviewLabel(rv),desc:v2ReviewDescription(rv,cg),quote:v2EvidenceQuote(rv),accept:v2ReviewNeedsInspect(rv,cg)?'':rv.kind==='fact-maintenance'?v2ReviewAction(rv,cg).label:'이대로 반영',original:rv})),
 
  lore:{enabled:lc.enabled!==false&&Number(p.loreEvery)>0,sem:lc.semanticEnabled,max:lc.maxEntries,dens:lc.budgetChars<=2600?'light':lc.budgetChars>=7600?'rich':'balanced',lastSel:{lore:r.lastLoreSearch?.matchedLore||0,logs:r.lastLoreSearch?.matchedLogs||0,sem:r.lastLoreSearch?.semanticUsed},auto:{enabled:la.enabled&&!la.paused,interval:la.intervalTurns,read:la.readTurns,pending:la.committedTurns||0,last:la.lastError||la.lastStatus||dateLabel(la.lastRunAt)},packs:visibleLorePacksForRoom(r).filter(pk=>!pk.ownerChatId||String(pk.ownerChatId)===String(r.chatId)||(r.activeLorePackIds||[]).includes(pk.scopeId)).map(pk=>({id:pk.scopeId,name:wishLoreDisplayName(pk,r),desc:pk.description,copyOrigin:pk.copyOrigin||null,originLabel:pk.copyOrigin?wishLoreOriginLabel(pk):'',ownerLabel:wishLoreOwnerLabel(pk,r),active:(r.activeLorePackIds||[]).includes(pk.scopeId),auto:pk.autoManaged,ownerChatId:String(pk.ownerChatId||''),ownerApiChatId:String(pk.ownerApiChatId||''),ownerCurrent:!!String(pk.ownerChatId||'')&&String(pk.ownerChatId||'')===String(r.chatId||''),entries:(pk.entries||[]).map(e=>({...e,on:e.enabled,emb:!!e.embedding&&e.embedding.sourceHash===loreEntrySourceHashCached(e)&&e.embedding?.model===lc.embeddingModel&&Number(e.embedding?.dimensions)===Number(lc.embeddingDimensions),auto:e.autoManaged,prot:e.userProtected,speech:e.speechRule?{...e.speechRule,reg:e.speechRule.register}:null,full:loreTextAtLevel(e,'full'),micro:loreTextAtLevel(e,'micro'),compact:loreTextAtLevel(e,'compact')}))}))},
  ai:{...ai,model:getAiSelectedModel(ai),dsModel:getAiSelectedModel(ai)},presets:WUICache.presets.items||[],};
