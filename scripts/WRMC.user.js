@@ -1288,6 +1288,60 @@
     return src.replace(/\s+/g, ' ').trim();
   }
 
+  // AI-bound RP text only: drops page wrapping that is not story (hidden markdown comment lines, HTML comments, images, image-URL
+  // lines). Never for hashes, anchors, manifests, stamps, caches or local matching. Where unsure it keeps the text (cleans less).
+  function wishCleanRpText(text){
+    const src=String(text??'');
+    if(!/<!--|\]:|!\[|https?:\/\//i.test(src))return src; // nothing to drop: the very same string
+    // Whole comment lines first, so an unclosed <!-- inside one cannot eat the story after it. A title with an unescaped bracket is
+    // not a comment (the page shows it). An HTML comment is cut only when it does not run across a code fence line.
+    const kept=src.split('\n').filter(line=>!/^\s*\[(?:\/\/|comment)\]:\s*#\s*\((?:[^()\\\n]|\\.)*\)\s*$/i.test(line)).join('\n').replace(/<!--(?:(?!\n[ \t]*(?:```|~~~))[\s\S])*?-->/g,'');
+    const out=[];
+    for(const line of kept.split('\n')){
+      const cut=line.replace(/!\[[^\]\n]*\]\([^)\n]*\)/g,'');
+      if((cut!==line&&!cut.trim())||/^\s*https?:\/\/\S+\.(?:png|jpe?g|gif|webp|bmp|svg|avif)(?:\?\S*)?\s*$/i.test(cut))continue;
+      out.push(cut.replace(/[^\S\n]+$/,''));
+    }
+    return out.join('\n').replace(/\n{3,}/g,'\n\n').trim();
+  }
+  // A turn row as the AI reads it, cleaned message by message (an unclosed <!-- never reaches the next message). A USER message keeps
+  // its text when cleaning would change one of its OOC correction lines: correction_targets quote that line from the RP.
+  // A row whose messages do not join back to its own text is sent as it is.
+  function wishCleanTurn(t){
+    const user=s=>{const c=wishCleanRpText(s);if(c===s)return c;const lines=new Set(c.split('\n').map(x=>x.trim()));return WishMemorySafety.corrections([{userText:s}]).every(x=>lines.has(x))?c:s;};
+    const msgs=Array.isArray(t?.relationshipSourceMessages)&&t.relationshipSourceMessages.length?t.relationshipSourceMessages:null;
+    if(msgs){
+      const join=(isUser,f)=>msgs.filter(m=>(m.role==='user')===isUser).map(m=>f(String(m.text??''))).join('\n\n'),same=x=>x;
+      if(join(true,same)!==String(t.userText??'')||join(false,same)!==String(t.assistantText??''))return t;
+      return {...t,userText:join(true,user),assistantText:join(false,wishCleanRpText)};
+    }
+    const n=Number(t?.messageCount);if(n>2||(t?.key==='prologue'&&n>1))return t; // several messages without their list
+    return {...t,userText:user(String(t?.userText??'')),assistantText:wishCleanRpText(t?.assistantText)};
+  }
+  // 빠르게 TXT only: the date notations already found in each turn (row.timeHints, the turns' [장면 시간 단서] JSON), one line per
+  // notation with the turns that carry it. A turn without one is left out and never takes a neighbour's date; nothing is guessed.
+  function wishDateToc(rows){
+    const MAX=3000,HEAD='[날짜 목차 — 확프가 원문에서 찾은 날짜 표기 · 장면 날짜를 정할 때 원문과 함께 참고]';
+    const clock=/(?:\s*(?:AM|PM|오전|오후))?\s*\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:AM|PM|오전|오후))?$/i;
+    const keyOf=t=>{
+      const all=(t?.timeHints||[]).map(h=>String(h?.value??'').match(/^(날짜|일시|시간|시각|date|datetime|time): ([\s\S]*)$/i)).filter(Boolean);
+      const dates=all.filter(m=>/^(날짜|일시|date|datetime)$/i.test(m[1]));
+      // Without a date field, a time field is read with its clock time cut off the end (the minutes change every turn); a bare clock time is no date.
+      const values=dates.length?dates.map(m=>m[2].trim()):all.map(m=>m[2].trim().replace(clock,'').replace(/[\s,·|/-]+$/,''));
+      const key=[...new Set(values.filter(Boolean))].join(' · ');return key.length>160?key.slice(0,159)+'…':key;
+    };
+    const groups=[];
+    (rows||[]).forEach((t,i)=>{const key=keyOf(t),n=i+1;if(!key)return;const g=groups.at(-1);if(g?.key!==key){groups.push({key,runs:[[n,n]]});return;}const run=g.runs.at(-1);if(run[1]===n-1)run[1]=n;else g.runs.push([n,n]);});
+    if(!groups.length)return '';
+    const lines=groups.map(g=>{const parts=g.runs.map(([a,b])=>a===b?String(a):a+'~'+b);return 'RP '+(parts.length>8?[...parts.slice(0,5),'…',...parts.slice(-2)]:parts).join(', ')+': '+g.key;}),n=lines.length;
+    // Over the cap: the first and last lines stay, the ones between are picked evenly, and a '…' line marks each gap.
+    const build=pick=>[HEAD,...pick.flatMap((x,j)=>j&&x-pick[j-1]>1?['…',lines[x]]:[lines[x]])].join('\n');
+    const even=m=>[...new Set(Array.from({length:m},(_,i)=>Math.round(i*(n-1)/(m-1))))];
+    let out=build(lines.map((_,i)=>i));
+    if(out.length>MAX){let lo=2,hi=n-1,best=build([0,n-1]);while(lo<=hi){const m=(lo+hi)>>1,s=build(even(m));if(s.length<=MAX){best=s;lo=m+1;}else hi=m-1;}out=best;}
+    return '\n\n'+out;
+  }
+
   // ---------------------------------------------------------------------------
   // 공용 AI Service · Gemini 3.x / Firebase AI Logic / DeepSeek
   // 인지 분석과 장기기억 갱신이 동일한 provider 설정을 사용합니다.
@@ -4655,6 +4709,7 @@ function wishApiPersonContract(){
     '- 한 fact에서 같은 사람을 knows와 doesNotKnow에 함께 넣지 않는다. active=true 은폐의 holder는 그 fact를 아는 사람이어야 한다.\n';
 }
 function wishTurnText(turns){return (turns||[]).map((t,i)=>`[완료 RP ${i+1}][USER]\n${t.userText}\n\n[ASSISTANT]\n${t.assistantText}`).join('\n\n');}
+function wishCleanTurnText(turns){return wishTurnText((turns||[]).map(wishCleanTurn));}
 // Counts for the one result line of an applied AI answer; the details go to the 주의 rows (reportNotices).
 function wishResultCounts(r){const parts=[r?.threads||'',r?.fixed?'형식 자동 보정 '+r.fixed+'건':'',r?.skipped?'건너뜀 '+r.skipped+'건':''].filter(Boolean);return parts.length?' · '+parts.join(' · '):'';}
 function wishEventIdentity(date,title){return `${String(date?.display||'날짜 미상').normalize('NFKC').replace(/\s+/g,' ').trim().toLowerCase()}|${String(title||'').normalize('NFKC').replace(/\s+/g,' ').trim().toLowerCase()}`;}
@@ -4826,14 +4881,18 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
         doesNotKnow:cog.actors.filter(a=>cog.state.knowledge?.[a.id]?.[f.id]==='unaware').map(a=>a.id)})),
       ...WishThreads.requestInput(room)};
   }
-  function continuityReference(list,range) {
+  // clean: the same turns as the AI reads them (wishCleanTurnText). Which turns go in is always decided on the text as read.
+  function continuityReference(list,range,clean=false) {
     if(!range?.length)return '';
     const at=list.findIndex(t=>t.key===range[0].key);if(at<=0)return '';
+    const render=clean?wishCleanTurnText:wishTurnText;
     const rows=[];for(let i=at-1;i>=Math.max(0,at-2);i--){const next=[list[i],...rows];if(wishTurnText(next).length>12000)break;rows.unshift(list[i]);}
     // One turn alone over 12,000: keep its last part, from a line start when one is near, so the pronouns still have a referent.
-    if(!rows.length){const tail=wishTurnText([list[at-1]]).slice(-12000),line=tail.indexOf('\n');return line>=0&&line<1000?tail.slice(line+1):tail;}
-    return wishTurnText(rows);
+    if(!rows.length){const whole=render([list[at-1]]);if(whole.length<=12000)return whole;const tail=whole.slice(-12000),line=tail.indexOf('\n');return line>=0&&line<1000?tail.slice(line+1):tail;}
+    return render(rows);
   }
+  // Request options for continuityReference: the text as read (local matching and budgets) and, for the AI, the cleaned one.
+  function continuityOptions(list,mem,obs){const of=(rows,clean)=>rows?continuityReference(list,rows,clean):undefined;return {continuityReference:{memory:of(mem),observe:of(obs)},continuityClean:{memory:of(mem,true),observe:of(obs,true)}};}
   function request(room,cog,packs,p,options={}) {
     const db=inventory(room,cog,packs),properties={},required=[];
     const relationshipRange=p.observe?WishRelationships.updateRange(options.rebuild?{...room,relationshipBaseline:null}:room,p.obs):{rows:[],indices:[],guarded:false,complete:false};
@@ -4905,6 +4964,12 @@ const deltaNotices=[];
     const refData=copy(data);
     for(const rows of [refData.memory?.state,refData.memory?.events,refData.memory?.references,refData.memory?.threads,refData.observe?.people,refData.observe?.facts])
       for(const row of rows||[]){row.ref=row.id;delete row.id;}
+    // What the AI reads: the same turns without page wrapping (wishCleanTurn). Every local choice above (read-only compaction,
+    // relationship rows, the event budget a pasted answer's check rebuilds) was made on the text as read and stays so. A cleaned
+    // block replaces its original only when it is not longer, so a request never grows.
+    const fits=(old,clean)=>typeof old==='string'&&typeof clean==='string'&&JSON.stringify(clean).length<=JSON.stringify(old).length;
+    for(const [k,rows] of [['shared',p.mem],['memory',p.mem],['observe',p.obs],['references',referenceRows]])if(typeof refData.rp[k]==='string'){const clean=wishCleanTurnText(rows);if(fits(refData.rp[k],clean))refData.rp[k]=clean;}
+    if(refData.continuityReference&&options.continuityClean)for(const k of ['memory','observe'])if(fits(refData.continuityReference[k],options.continuityClean[k]))refData.continuityReference[k]=options.continuityClean[k];
     return {requestSizes:wishRequestSizeInfo(guide,schema,refData),db,referenceRows,stateDelta,stateDeltaToken,guide,check,inputNames:names,relationshipRange,factCorrections,correctionNotices:[...deltaNotices,...factCorrections.notices,...(selection?.notices||[])],relationshipPairs:(refData.observe?.relationships||[]).map(r=>WishRelationships.key(r.speaker,r.target)),prompt:JSON.stringify(refData),schema,sentEventRefs:selection?.sentEventRefs||[],correctionTargets:selection?.correctionTargets||[],eventScope:selection?.scope||null};
   }
   // AI-made JSON only (answers, imports; never backups): repair format slips against the same schema validateShape walks.
@@ -5656,7 +5721,7 @@ const p=plan(list,{...u,settings:settings(room)},force==='retry'||retrying?(u.fa
         // 이 과정에서 같은 방의 옛 임의-ID 자동팩도 삭제 없이 한 번 안전 병합된다.
         if(p.memory)await ensureAutoLorePack(room);
         const packs=writableLorePacksForRoom(room);
-        const requestOptions={compactReadOnly:true,continuityReference:{memory:p.memory?continuityReference(list,p.mem):undefined,observe:p.observe?continuityReference(list,p.obs):undefined}};
+        const requestOptions={compactReadOnly:true,...continuityOptions(list,p.memory?p.mem:null,p.observe?p.obs:null)};
         const signature=rawSignature(room,cog,packs),settingsAtStart=JSON.stringify(loadAiSettings()),req=request(room,cog,packs,p,requestOptions);
         const kind=p.memory&&p.observe?'all':p.memory?'memory':'observe';
         jobKind=kind;
@@ -5830,7 +5895,7 @@ const p=plan(list,{...u,settings:settings(room)},force==='retry'||retrying?(u.fa
     return {error:cfg.enabled!==false&&room.unified?.lastError&&!Number(room.unified?.retry?.at)?String(room.unified.lastError):'',enabled:cfg.enabled!==false&&cfg.memoryEnabled!==false,committed:Number(n.memory??room.autoMemory?.committedTurns??0),
       target:Number(cfg.memoryEvery||target),running:active.has(room.chatId),jobLabel:unifiedStage};
   }
-  return {invalidate:room=>{counts.delete(room);checked.delete(room);observed.delete(room);},run,schedule,observeFrame,checking,baseline,view,monitor,saveSettings,plan,turns,after,continuityReference,request,stage,applyObserve,atomicCommit,initialize,validateShape,isolateThreads,normalizeAiJson,echoCheck:aiEchoCheck,resultCounts:wishResultCounts,updateCounts,rebaseAfterImport,personContract:wishApiPersonContract,defaultGuides:{common:WISH_COMMON_GUIDE,memory:WISH_MEMORY_GUIDE.slice(WISH_COMMON_GUIDE.length),observe:WISH_INDEX_GUIDE.slice(WISH_COMMON_GUIDE.length),speech:SPEECH_GUIDE,delta:WISH_STATE_DELTA_GUIDE},get commonGuide(){return getGuideText('apiCommon');}};
+  return {invalidate:room=>{counts.delete(room);checked.delete(room);observed.delete(room);},run,schedule,observeFrame,checking,baseline,view,monitor,saveSettings,plan,turns,after,continuityReference,continuityOptions,request,stage,applyObserve,atomicCommit,initialize,validateShape,isolateThreads,normalizeAiJson,echoCheck:aiEchoCheck,resultCounts:wishResultCounts,updateCounts,rebaseAfterImport,personContract:wishApiPersonContract,defaultGuides:{common:WISH_COMMON_GUIDE,memory:WISH_MEMORY_GUIDE.slice(WISH_COMMON_GUIDE.length),observe:WISH_INDEX_GUIDE.slice(WISH_COMMON_GUIDE.length),speech:SPEECH_GUIDE,delta:WISH_STATE_DELTA_GUIDE},get commonGuide(){return getGuideText('apiCommon');}};
 })();
 
 // 3.3.47 history workflow, adapted to 2.3 unified storage and speech relations.
@@ -6193,7 +6258,7 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
   async function run(r){return await WLOG.run("전체 재구축 구간 분석 중",async task=>{return guard(r,async check=>{const j=get(r)||await load(r);if(!j?.segments?.length)throw Error('먼저 대화 읽기를 실행해 주세요.');const cfg=loadAiSettings();if(!isAiProviderReady(cfg))throw Error('보조 AI 연결 설정이 필요합니다.');
     try{const s=await source(r);check();if(s.anchorMessageId!==j.anchor)throw Error('읽어 둔 대화가 바뀌었습니다. 대화를 다시 읽어 주세요.');if(!sameStructure(j,s))throw Error('읽어 둔 대화에서 중간 메시지가 삭제·교체되었거나 순서가 바뀌었습니다. 대화를 다시 읽어 주세요.');const currentBasis=basis(r,await bridge().snapshotRaw(apiChatIdOf(r)),packs(r));if(currentBasis!==j.basis)throw Error('기억·인물·자료·설정이 바뀌었습니다. 대화를 다시 읽어 주세요. ('+changedBasis(j.basis,currentBasis)+')');
       for(let pos=0;pos<j.segments.length;pos++){const seg=j.segments[pos];if(seg.status==='complete')continue;check();seg.status='running';seg.error='';j.status='running';j.message=`${seg.index}/${j.segments.length}구간 판독 중`;await save(r,j);
-        try{const rows=s.rows.slice(seg.start,seg.end),p={memory:true,observe:true,mem:rows,obs:rows},req=U3.request(j.draft.room,j.draft.cog,j.draft.packs,p,{rebuild:true,continuityReference:{memory:U3.continuityReference(s.rows,rows),observe:U3.continuityReference(s.rows,rows)}});
+        try{const rows=s.rows.slice(seg.start,seg.end),p={memory:true,observe:true,mem:rows,obs:rows},req=U3.request(j.draft.room,j.draft.cog,j.draft.packs,p,{rebuild:true,...U3.continuityOptions(s.rows,rows,rows)});
           req.threadTurn=WishThreads.userCount(s.rows.slice(0,seg.end).flatMap(t=>t.relationshipSourceMessages||[]));req.holdContext={bundle:'rebuild',jobCreatedAt:j.createdAt,segmentIndex:seg.index,segmentCount:j.segments.length};req.storedSpeech=(r.speechRelations||[]).filter(x=>x.source==='unified-ai');
           const guide=req.guide+`\n[API 구간 재구축 최종 계약]\n전체 ${j.segments.length}구간 중 ${seg.index}번째다. 앞 구간의 누적 결과를 보존하며 현재 구간 끝을 임시 최신 시점으로 정리한다. 과거 사건을 침묵만으로 삭제하지 않는다. 외부 파일 첨부 지시 대신 다음 스키마의 JSON만 응답한다. 호칭·말투·칭호와 은폐도 누락하지 않는다.\n[필드·근거 확인]\nmemory.state.sections는 ref/title/body만 쓴다. summary는 memory.events의 사건 본문 필드이며 현재상태에 넣지 않는다. observe의 upsert는 이번 구간에서 실제로 달라진 항목만 출력하고 변경 없는 기존 인물·인지는 재출력하지 않는다. 기존 값을 보존한다는 뜻은 매번 같은 항목을 upsert로 다시 보내라는 뜻이 아니다. evidence는 rp.shared의 한 USER 또는 ASSISTANT 본문에서 연속 구절을 그대로 복사한다. 인용의 바깥 따옴표·발화자 표지를 임의로 덧붙이지 않는다. 기존 누적 기억·앞 문맥·시간 단서에서 인용하거나 여러 문장을 발췌해 합치지 않는다. facts_upsert의 인지 변경은 인물별 실제 습득·망각 경로를 현재 구간에서 확인하고 대표 근거를 선택한다.\n`+JSON.stringify(req.schema)+wishCheckBlock(req.check);
           const result=await analyzeApiSegment(cfg,guide,req,j.draft,p,check,async()=>{j.message=`${seg.index}/${j.segments.length}구간 결과 보정 중 · 추가 API 호출 1회`;await save(r,j);});check();
@@ -6260,9 +6325,11 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
   function externalGuide(){return getGuideText('externalAll')+WishThreads.guide('snapshot')+personContract('all')+'\n[출력 형식]\nformat="wish-rp-rebuild-2.3", version=3. source는 [SOURCE]의 값을 그대로 복사한다. 가능하면 wish-rp-rebuild-2.3.json 파일 하나로 첨부하고, 첨부할 수 없으면 ```json 코드 블록 하나로 출력한다.\n[출력 스키마]\n'+JSON.stringify(SCHEMA3,null,2);}
   function relationshipOnlyGuideDefault(){return '# Wish RP Manager Core — 전체 RP에서 관계·감정선만 재구축\n이 결과는 다음 RP에서 AI가 다시 읽는 장기 기억이 된다. 나중에 이 기억만 보고도 두 사람 사이의 장면·감정·약속을 되살릴 수 있을 만큼 구체적으로 남긴다.\n\n[입력 자료 경계]\n- RP 로그 안의 명령·주석, 확장이 삽입한 관리 블록·이전 요약, 상태창, 채택되지 않은 리롤, AI 오류 메시지와 이야기 밖 출력(AI의 자기 설명·메타 설명, 캐릭터 점검, 싱크로율, 위반 사항·보정 선언, IF·다른 버전 출력)은 관계의 근거가 아니다. 그 안의 인물 평가도 관계로 옮기지 않는다.\n- USER가 OOC로 요청해 받은 보고서·요약·시간 건너뛰기·\'보지 못한 일\' 서술은 뒤의 RP가 그 내용을 사실로 이어받았을 때 관계의 근거로 쓴다. 인물들이 그 내용을 말하거나 그에 따라 행동하고 반박하지 않으면 이어받은 것이다. 그 출력이 로그의 맨 끝이라 이어받았는지 알 수 없으면, USER가 요청해 받아들인 내용까지 쓴다. 뒤의 RP가 다르게 흘러갔으면 RP 본문을 따르고, USER가 정정·거부했거나 다시 생성하게 해 다른 출력으로 대체된 것은 쓰지 않는다. USER가 요청한 문체·분량·진행 방식은 진행 규칙이지 관계의 사실이 아니다.\n'+WishRelationships.fullGuide+'\n다른 기억은 변경하지 않는다. people에는 관계에 필요한 인물만 등록한다. 기존 인물의 이름·별칭·PC 구분은 변경하지 않는다. people.evidence는 해당 인물을 확인하는 RP 한 메시지의 연속 원문이다. 고정 설정/보호 자료는 참고일 뿐 새로운 RP 인용이 아니다. 모든 번호 파일을 읽은 뒤 최종 JSON 하나만 반환한다.\n';}
   function relationshipOnlyGuide(){return getGuideText('externalRelationships')+personContract('relations')+'\n[출력 형식]\nformat="wish-relationship-rebuild", version=1. source는 [SOURCE]의 값을 그대로 복사한다. 가능하면 wish-relationship-rebuild.json 파일 하나로 첨부하고, 첨부할 수 없으면 ```json 코드 블록 하나로 출력한다.\n[출력 스키마]\n'+JSON.stringify(RELATION_SCHEMA,null,2);}
-  async function exportText(r,only=false){return await WLOG.run("외부 AI용 지침·원문 만드는 중",async task=>{return guard(r,async check=>{const s=await source(r);check();const segs=segments(s.rows),manifest=JSON.stringify({last_message_id:s.anchorMessageId,sha256:s.hash});const fixed=(r.slots||[]).filter(x=>(x.group==='character'||(x.group==='extra'&&x.enabled))&&String(x.content||'').trim()).map(x=>`[사용자 관리 ${x.group==='character'?'캐릭터 설정':'OOC·기타'} · ${x.title}]\n${x.content}`).join('\n\n');const originalCog=await bridge().snapshotRaw(apiChatIdOf(r)),d=seed(r,originalCog,packs(r)),ref=JSON.parse(U3.request(d.room,d.cog,d.packs,{memory:true,observe:true,mem:[],obs:[]},{rebuild:true}).prompt);check();
+  async function exportText(r,only=false){return await WLOG.run("외부 AI용 지침·원문 만드는 중",async task=>{return guard(r,async check=>{const s=await source(r);check();const view=s.rows.map(wishCleanTurn),segs=segments(view),manifest=JSON.stringify({last_message_id:s.anchorMessageId,sha256:s.hash});const fixed=(r.slots||[]).filter(x=>(x.group==='character'||(x.group==='extra'&&x.enabled))&&String(x.content||'').trim()).map(x=>`[사용자 관리 ${x.group==='character'?'캐릭터 설정':'OOC·기타'} · ${x.title}]\n${x.content}`).join('\n\n');const originalCog=await bridge().snapshotRaw(apiChatIdOf(r)),d=seed(r,originalCog,packs(r)),ref=JSON.parse(U3.request(d.room,d.cog,d.packs,{memory:true,observe:true,mem:[],obs:[]},{rebuild:true}).prompt);check();
 
-      const files=segs.map(seg=>({text:(only?relationshipOnlyGuide():externalGuide())+`\n\n[SOURCE]\n${manifest}\n\n[고정 설정 참고]\n${fixed}\n\n[수동·보호 자료 참고]\n${JSON.stringify({observe:wishNamedObserve(ref.observe),readOnlyPacks:ref.readOnlyPacks,threads:only?undefined:WishThreads.manualReference(d.room.threads),relationshipPeople:only?originalCog.actors.filter(a=>!a.archived).map(a=>({name:a.name,aliases:a.aliases||[],isPlayer:!!a.isPlayer})):undefined})}${only?'':'\n\n[기존 인물 목록 · 신원 연결 참고 전용]\n'+JSON.stringify(originalCog.actors.filter(a=>!a.archived).map(a=>({name:a.name,aliases:a.aliases||[],isPlayer:!!a.isPlayer})))}\n\n[RP ${seg.index}/${segs.length} · 지침 제외 ${seg.chars}자]\n`+text(s.rows.slice(seg.start,seg.end))+wishCheckBlock(wishOutputCheck(only?'txt-rel':'txt-full'),true),filename:`${only?'Wish-관계재구축':'Wish-재구축'}-${seg.index}of${segs.length}.txt`}));
+      // The RP as the AI reads it (view: page wrapping out; [SOURCE] stays on the text as read). 빠르게 TXT also gets the date index.
+      const fast=!only&&externalRebuildMode()!=='precise';
+      const files=segs.map(seg=>({text:(only?relationshipOnlyGuide():externalGuide())+`\n\n[SOURCE]\n${manifest}\n\n[고정 설정 참고]\n${fixed}\n\n[수동·보호 자료 참고]\n${JSON.stringify({observe:wishNamedObserve(ref.observe),readOnlyPacks:ref.readOnlyPacks,threads:only?undefined:WishThreads.manualReference(d.room.threads),relationshipPeople:only?originalCog.actors.filter(a=>!a.archived).map(a=>({name:a.name,aliases:a.aliases||[],isPlayer:!!a.isPlayer})):undefined})}${only?'':'\n\n[기존 인물 목록 · 신원 연결 참고 전용]\n'+JSON.stringify(originalCog.actors.filter(a=>!a.archived).map(a=>({name:a.name,aliases:a.aliases||[],isPlayer:!!a.isPlayer})))}${fast?wishDateToc(view.slice(seg.start,seg.end)):''}\n\n[RP ${seg.index}/${segs.length} · 지침 제외 ${seg.chars}자]\n`+text(view.slice(seg.start,seg.end))+wishCheckBlock(wishOutputCheck(only?'txt-rel':'txt-full'),true),filename:`${only?'Wish-관계재구축':'Wish-재구축'}-${seg.index}of${segs.length}.txt`}));
       check();(only?openTextDownloadList:deliverRebuildFiles)(files,{title:only?'관계 재구축 TXT 받기':'전체 재구축 TXT 받기',roomName:WishRoomNames.display(r),slug:'all',preciseTitle:'정밀 재구축(전체) ZIP 받기'});return segs;
     });});}
   function personNameKey(value){return String(value||'').normalize('NFKC').replace(/\s+/g,' ').trim().toLowerCase();}
@@ -7795,7 +7862,7 @@ function remapUnknownLogSelectionKeys(room,oldBlocks,newBlocks){
   }
 
   // External rebuild delivery. 'fast': the numbered TXT list (one big answer). 'precise': one ZIP plus a start prompt for a
-  // chat AI that can run code; it reads the RP in ~100k-char spans over several turns ("계속") and merges with code.
+  // chat AI that can run code; it reads the RP in ~150k-char spans over several turns ("계속") and merges with code.
   const EXTERNAL_REBUILD_MODE_KEY = 'WISH_RP_external_rebuild_mode_v1';
   function externalRebuildMode() { try { return localStorage.getItem(EXTERNAL_REBUILD_MODE_KEY) === 'precise' ? 'precise' : 'fast'; } catch (_) { return 'fast'; } }
   function setExternalRebuildMode(mode) { try { localStorage.setItem(EXTERNAL_REBUILD_MODE_KEY, mode === 'precise' ? 'precise' : 'fast'); } catch (_) {} }
@@ -7803,7 +7870,7 @@ function remapUnknownLogSelectionKeys(room,oldBlocks,newBlocks){
 
 1. ZIP은 코드 실행(Python)으로 푼다. 파일 순서와 N은 내용의 "[RP k/N" 줄로 정한다.
 2. 1번 파일의 지침 부분("[RP 1/N" 줄 앞까지)과 파일 끝 확인 블록을 1만 자씩 끝까지 출력해 읽는다. 다른 파일의 지침은 같으니 건너뛴다. 결과 JSON의 최상위 칸(format·version·source)과 영역 이름은 그 지침과 [출력 스키마]를 따른다.
-3. 모든 파일의 RP 원문을 순서대로 이어서 약 13만 자씩 구간으로 나눈다. 구간 경계는 "[완료 RP n]" 줄 앞에서 자른다. 전체 구간 수를 T라 하고 처음에 알려 준다. 한 턴에 한 구간만 처리한다. 그 구간을 1만 자씩 순서대로 전부 출력해 네가 직접 읽는다. 정규식·키워드 검색으로 항목을 뽑지 않는다.
+3. 모든 파일의 RP 원문을 순서대로 이어서 약 15만 자씩 구간으로 나눈다. 구간 경계는 "[완료 RP n]" 줄 앞에서 자른다. 전체 구간 수를 T라 하고 처음에 알려 준다. 한 턴에 한 구간만 처리한다. 그 구간을 1만 자씩 순서대로 전부 출력해 네가 직접 읽는다. 정규식·키워드 검색으로 항목을 뽑지 않는다.
 4. 구간마다 결과를 /mnt/data/wrmc/part_NN.json에 저장한다. [출력 스키마]에 있는 영역만, 같은 이름 칸 모양 그대로 쓴다. 관계 변화는 메모(누가→누구, 무엇이 바뀌었나, 원문 인용 1개)로 따로 적고, 각 항목의 위치는 "파일k-RPn"으로 적어 둔다. 구간을 시작할 때 앞 part 파일들 전체에서 남은 일(kind·title)·인지(title)·호칭(speaker·target)·자료(type·title)의 키마다 가장 최근 행을 코드로 꺼내 둔다. 남은 일은 아직 open인 것만 꺼낸다. 이번 구간에 같은 대상이 다시 나오면 앞 행과 같은 키로, 앞 행에서 이번 구간에 달라진 것만 고친 전체 행을 쓴다. 자료의 새 이름은 aliases에 더한다. 극중에서 내용이 바뀐 인지는 앞 행과 다른 title의 새 fact로 쓴다.
 5. 무엇을 남기나:
 - 사건: 같은 시간·장소에서 이어지는 한 흐름을 사건 하나로 쓴다. 3~6문장(누가·어디서·무엇을·왜·결과)으로 쓰고, 장면을 바꾼 한 마디나 몸짓이 원문에 있으면 함께 남긴다. 날짜는 원문에 적힌 대로 쓴다. 한 답에 맞추려고 줄이지 않는다. "생략·등등·이하 동일"을 쓰지 않는다.
@@ -9396,8 +9463,9 @@ const RECALL_233_GUIDE = `너는 장기 RP용 기억 검색기이자 후보 우�
 - JSON {"scores":[{"id":0,"relevance":90,"related":true}]}만 반환한다.`;
 // Recall looks at one turn: this USER input and the whole AI answer right before it.
 // Only an unusually long answer is shortened, keeping its opening and ending scene.
-function recallSceneText(original) {
-  const text=stripAutomationNoise(String(original||''),true).trim();
+// clean: the payload's copy without page wrapping (wishCleanRpText), cut before shortening; ranking and cache keys keep the text as read.
+function recallSceneText(original,clean=false) {
+  const read=stripAutomationNoise(String(original||''),true).trim(),text=clean?wishCleanRpText(read):read;
   return text.length<=20000?text:text.slice(0,10000)+'\n…(중략)…\n'+text.slice(-10000);
 }
 async function chooseAllFitItems(room, items, original, query='', options={}) {
@@ -9444,7 +9512,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
         for(const candidates of batches){
           const remaining=selectionDeadline-Date.now();
           if(remaining<=0)throw Error(`주입 후보 AI 선별이 ${Math.ceil(RECALL_SELECTION_TIMEOUT_MS/1000)}초를 넘어 로컬 선별로 전환합니다.`);
-          const result=await callAiProvider(settings,getGuideText('apiRecall')+(indexed?getGuideText('apiIndex'):''),JSON.stringify({mode:cfg,query:String(query).slice(-8000),scene_context:{previous_answer:recallSceneText(scene),current_state_excerpt:String(room.slots?.find(s=>s.id==='currentState')?.content||'').slice(0,5000),scope:'읽기 전용 일부 문맥 · 신규 사실 생성 금지'},candidates}),{taskKind:'select',responseMimeType:'application/json',maxOutputTokens:indexed?Math.min(16384,8192+candidates.filter(x=>x.build_index).length*600):4096,timeoutMs:remaining,operationLabel:cfg.semantic&&cfg.selector?'관련 기억 찾기·우선순위 정하기':cfg.semantic?'표현이 다른 기억 찾기':'기억 우선순위 정하기'});
+          const result=await callAiProvider(settings,getGuideText('apiRecall')+(indexed?getGuideText('apiIndex'):''),JSON.stringify({mode:cfg,query:String(query).slice(-8000),scene_context:{previous_answer:recallSceneText(scene,true),current_state_excerpt:String(room.slots?.find(s=>s.id==='currentState')?.content||'').slice(0,5000),scope:'읽기 전용 일부 문맥 · 신규 사실 생성 금지'},candidates}),{taskKind:'select',responseMimeType:'application/json',maxOutputTokens:indexed?Math.min(16384,8192+candidates.filter(x=>x.build_index).length*600):4096,timeoutMs:remaining,operationLabel:cfg.semantic&&cfg.selector?'관련 기억 찾기·우선순위 정하기':cfg.semantic?'표현이 다른 기억 찾기':'기억 우선순위 정하기'});
           const parsed=WLOG.parseJson(result.text,'주입 후보 선별',result.diagnostic),data=indexed?WishEconomy.decode(parsed):parsed,valid=new Set(candidates.map(x=>x.id)),seen=new Set();
           if(!data||Object.keys(data).some(k=>k!=='scores')||!Array.isArray(data.scores)||data.scores.length!==candidates.length)throw Error('후보 개수가 맞지 않는 AI 결과');
           for(const row of data.scores){if(!row||Object.keys(row).some(k=>!['id','relevance','related',...(indexed?['index_quotes']:[])].includes(k))||!valid.has(row.id)||seen.has(row.id)||!Number.isInteger(row.relevance)||row.relevance<0||row.relevance>100||typeof row.related!=='boolean')throw Error('유효하지 않은 AI 후보 선별');seen.add(row.id);scores.push(row);}
@@ -10008,7 +10076,8 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
   // 원문 찾기: the RP message a memory item's stored quote came from. Read-only, nothing is saved. The message id stored on a
   // thread or relationship marks the end of the 정리 묶음 that wrote it, not the quoted message, so the quote itself is looked up
   // in the current branch: markdown marks, spacing and quote-mark style are ignored, the words are not. A quote that is not
-  // there is reported as not found; nothing is guessed. A lore card's source id is the quoted message itself.
+  // there is reported as not found; nothing is guessed. A lore card's source id is the quoted message itself. Only when the text as
+  // read has no match, the same message without page wrapping (hidden comments, images, then status panels) is searched as the AI read it.
   const WishSourceJump=(()=>{
     const QUOTES={'“':'"','”':'"','„':'"','‟':'"','″':'"','«':'"','»':'"','‘':"'",'’':"'",'‚':"'",'‛':"'",'′':"'"},MAX_HITS=20;
     function project(s){let out='',space=true;const map=[];for(let i=0;i<s.length;i++){const c=s[i];if('*_~`'.includes(c))continue;if(/\s/.test(c)){if(!space){out+=' ';map.push(i);space=true;}continue;}out+=QUOTES[c]||c;map.push(i);space=false;}return {out,map};}
@@ -10046,14 +10115,17 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
       let all;try{all=await WishHistory.read(room);}catch(e){if(isWishHistoryStale(e)){ui.toast('대화가 바뀌는 중이라 원문을 찾지 못했습니다. 잠시 뒤 다시 눌러 주세요.','info',4200);return;}throw e;}
       if(state.currentRoom!==room)return;
       const list=all.filter(m=>['user','assistant'].includes(messageRoleOf(m))).map(m=>({id:String(messageIdOf(m)),role:messageRoleOf(m),raw:messageTextOf(m)})),textOf=m=>m.text??=stripAutomationNoise(m.raw,true,true).trim();
+      // The texts searched in turn: as read, then as the AI read it (page wrapping out; the memory paths also leave out status panels).
+      const views=[textOf,m=>m.clean??=wishCleanRpText(textOf(m)),m=>m.bare??=wishCleanRpText(stripAutomationNoise(m.raw,true).trim())];
       let turn=0;const turns=list.map(m=>m.role==='user'?++turn:turn),anchorAt=t.anchor?list.findIndex(m=>m.id===t.anchor):-1;
       const label=i=>(list[i].role==='user'?'USER':'AI')+' · '+fmtTurn(turns[i])+' · 메시지 '+shortId(list[i].id);
       // Quick skip: a message whose raw text lacks the quote's longest word (markdown marks removed) cannot match.
       const word=(q.match(/[\p{L}\p{N}]+/gu)||[]).reduce((a,b)=>b.length>a.length?b:a,'');
-      const scan=(role,pass)=>list.flatMap((m,i)=>{if((role&&m.role!==role)||!m.raw.replace(/[*_~`]/g,'').includes(word))return [];const at=locate(textOf(m),q,pass);return at?[{i,...at}]:[];});
+      const scan=(role,pass,v)=>list.flatMap((m,i)=>{if((role&&m.role!==role)||!(v?views[v](m):m.raw).replace(/[*_~`]/g,'').includes(word))return [];const at=locate(views[v](m),q,pass);return at?[{i,...at,v}]:[];});
       // The exact words anywhere come before a match across the quote's ellipsis. In each pass the quote's role is searched first; a line
-      // the AI labeled by its speaker (a USER character narrated in an AI reply) is then looked for on both sides.
-      let hits=[];for(const pass of ['exact','loose']){hits=t.role?scan(t.role,pass):[];if(!hits.length)hits=scan('',pass);if(hits.length)break;}
+      // the AI labeled by its speaker (a USER character narrated in an AI reply) is then looked for on both sides. The next text is
+      // searched only when the one before has no match at all, so a quote found as read is shown exactly as before.
+      let hits=[];for(let v=0;v<views.length&&!hits.length;v++)for(const pass of ['exact','loose']){hits=t.role?scan(t.role,pass,v):[];if(!hits.length)hits=scan('',pass,v);if(hits.length)break;}
       // Nearest the point the item was written: at or before its anchor (newest first), then after it; without an anchor, oldest first.
       const order=anchorAt<0?hits:[...hits.filter(h=>h.i<=anchorAt).reverse(),...hits.filter(h=>h.i>anchorAt)];
       // Per hit: a thread or relationship is written at its anchor, so a later message cannot be its source; a lore card's anchor is the
@@ -10061,7 +10133,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
       const atAnchor=order.some(h=>h.i===anchorAt),before=order.some(h=>h.i<=anchorAt);
       const hitNote=h=>anchorAt<0||h.i===anchorAt?'':t.exact?(atAnchor?'카드가 가리키는 원문 메시지가 아니라 같은 문장이 있는 다른 메시지입니다.':'카드가 가리키는 원문 메시지에는 이 문장이 없어 같은 문장이 있는 다른 메시지를 보여 드립니다.')
         :h.i<anchorAt?'':before?'이 메시지는 이 기록이 만들어진 뒤의 것이라 근거 메시지가 아닙니다.':'이 문장은 이 기록이 만들어진 뒤의 메시지에서만 찾았습니다. 원래 근거 메시지는 고쳐 쓰였거나 바뀌었을 수 있습니다.';
-      const view=h=>({id:list[h.i].id,raw:list[h.i].raw,text:textOf(list[h.i]),start:h.start,end:h.end,label:label(h.i),note:hitNote(h)});
+      const view=h=>({id:list[h.i].id,raw:list[h.i].raw,text:views[h.v||0](list[h.i]),start:h.start,end:h.end,label:label(h.i),note:hitNote(h)});
       if(!order.length){
         if(anchorAt<0){ui.toast(t.anchor?'이 기록을 만든 대화가 현재 분기에 없고, 근거 문장도 현재 대화에서 찾지 못했습니다. 재생성·삭제·편집으로 바뀌었을 수 있습니다.':'근거 문장을 현재 대화에서 찾지 못했습니다. 요약하거나 고쳐 쓴 인용이거나 다른 방에서 복사해 온 기록일 수 있습니다.','info',6000);return;}
         const shown=view({i:anchorAt,start:0,end:0});
@@ -11137,6 +11209,7 @@ ${AI_JSON_TEXT_RULE}
 
   // Export-only checks. Do not change buildLoreExternalRpText: its exact bytes are
   // the v1 hash basis used by both existing exports and the strict lore importer.
+  // The export passes it a cleaned copy only (page wrapping out); the importer never rebuilds this text.
   function loreExternalExportRows(source) {
     const messages=source?.messages;
     if(!Array.isArray(messages)||!messages.length||!Array.isArray(source.preface)||!Array.isArray(source.turns))throw new Error('자료집 전체 TXT에 넣을 확정 RP 구조를 확인하지 못했습니다.');
@@ -11194,7 +11267,10 @@ ${AI_JSON_TEXT_RULE}
       };
       check();task.stage('자료집 근거가 될 확정 RP 전체 읽는 중');
       const source=await prepareLoreExternalSource(room);check();
-      const rows=loreExternalExportRows(source),rpText=buildLoreExternalRpText(source);
+      // Checked on the text as read; the TXT then carries each message without page wrapping (a message that would be left empty keeps
+      // its text). The importer checks the rp_source_sha256 its answer copies, never a rebuilt text, so answers to older TXT files still go in.
+      const rows=loreExternalExportRows(source),sent=m=>({...m,text:wishCleanRpText(m.text)||m.text});
+      const view={...source,preface:source.preface.map(sent),turns:source.turns.map(t=>({...t,messages:(t.messages||[]).map(sent)}))},sentRows=rows.map(row=>({...row,message:sent(row.message)})),rpText=buildLoreExternalRpText(view);
       task.stage('자료집 기준·실제 메시지 ID 확인 중');
       const pack=structuredClone(await ensureAutoLorePack(room));check();
       const packFingerprint=autoLoreContentFingerprint(pack),references=loreExternalReferenceText(room,pack),guide=getGuideText('loreExternal');
@@ -11205,7 +11281,7 @@ ${AI_JSON_TEXT_RULE}
       const header=`[WISH LORE EXTERNAL INPUT]\ninput_scope=full\ninput_file_count=1\nmessage_count=${rows.length}\nfirst_message_id=${rows[0].message.id}\nlast_message_id=${basis.anchor}\n\n이 TXT 한 개를 외부 AI에 전달한다. 자료집 재구축에 필요한 지침·확정 RP 전체·메시지별 실제 ID·검증값·종료 토큰이 함께 들어 있다. 별도 지침이나 전체 기억용 TXT를 추가로 붙이지 않는다.\n\n${loreExternalContract(basis)}\n\n[USER LORE GUIDE — 카드 선별 기준만 수정 가능 · 충돌 시 IMMUTABLE MANAGER CONTRACT 우선]\n${guide}\n\n[EXPORT BASIS]\nbasis_version=1\nlast_message_id=${basis.anchor}\nrp_source_sha256=${basis.rpDigest}\nauto_pack_id=${basis.packId}\nauto_pack_sha256=${basis.packDigest}\n\n[PROTECTED LORE — REFERENCE ONLY]\n${references.protectedText}\n\n[CURRENT AUTO-EDITABLE KEY INDEX — 재구축 시 같은 대상 key 참고]\n${references.editableText}\n\n================ RP LOG TXT ================\n\n`;
       const text=header+rpText+`\n\n[END OF RP LOG]\nEND_OF_LOG_TOKEN=${basis.tailToken}`;
       task.stage('단일 TXT의 전체 원문·종료 표시 검사 중');
-      assertLoreExternalExportText(text,header.length,rpText,rows,basis);check();
+      assertLoreExternalExportText(text,header.length,rpText,sentRows,basis);check();
       return text;
     }));}finally{aiUpdateRunning=false;}
   }
@@ -11911,9 +11987,11 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
         const d=NativeBundles.seed(r,c,ps,scope,'all');
         const p={memory:scope==='memory',observe:scope==='people',mem:[],obs:[]},reference=JSON.parse(U3.request(d.room,d.cog,d.packs,p,{rebuild:true}).prompt);
         const fixed=(r.slots||[]).filter(x=>x.group==='character'||x.group==='extra'&&x.enabled).map(x=>({title:x.title,content:x.content}));
-        const protectedReference=scope==='people'?wishNamedObserve(reference.observe):scope==='memory'?{threads:WishThreads.manualReference(d.room.threads)}:undefined,segs=R31.segments(s.rows),manifest={last_message_id:s.anchorMessageId,sha256:s.hash};
+        const protectedReference=scope==='people'?wishNamedObserve(reference.observe):scope==='memory'?{threads:WishThreads.manualReference(d.room.threads)}:undefined,view=s.rows.map(wishCleanTurn),segs=R31.segments(view),manifest={last_message_id:s.anchorMessageId,sha256:s.hash};
         const header=getGuideText(guideIds[scope])+(scope==='memory'?WishThreads.guide('snapshot'):'')+(scope==='people'?R31.personContract('people'):'')+contract(scope)+'\n\n[SOURCE]\n'+JSON.stringify(manifest)+'\n\n[사용자 고정 설정 · 참고 전용]\n'+JSON.stringify(fixed)+'\n\n[수동·보호 '+labels[scope]+' · 참고 전용]\n'+JSON.stringify(protectedReference||{})+(scope==='people'?'\n\n[기존 인물 목록 · 신원 연결 참고 전용]\n'+JSON.stringify(c.actors.filter(a=>!a.archived).map(a=>({name:a.name,aliases:a.aliases||[],isPlayer:!!a.isPlayer}))):'');
-        const files=segs.map(seg=>({filename:'Wish-'+labels[scope]+'재구축-'+seg.index+'of'+segs.length+'.txt',text:header+'\n\n[RP '+seg.index+'/'+segs.length+' · 지침 제외 '+seg.chars+'자]\n'+R31.text(s.rows.slice(seg.start,seg.end))+wishCheckBlock(wishOutputCheck('txt-'+scope),true)}));
+        // The RP as the AI reads it (view: page wrapping out; [SOURCE] stays on the text as read). 빠르게 TXT also gets the date index.
+        const fast=externalRebuildMode()!=='precise';
+        const files=segs.map(seg=>({filename:'Wish-'+labels[scope]+'재구축-'+seg.index+'of'+segs.length+'.txt',text:header+(fast?wishDateToc(view.slice(seg.start,seg.end)):'')+'\n\n[RP '+seg.index+'/'+segs.length+' · 지침 제외 '+seg.chars+'자]\n'+R31.text(view.slice(seg.start,seg.end))+wishCheckBlock(wishOutputCheck('txt-'+scope),true)}));
         check();deliverRebuildFiles(files,{title:labels[scope]+' 재구축 TXT 받기',roomName:WishRoomNames.display(r),slug:scope,preciseTitle:'정밀 재구축('+labels[scope]+') ZIP 받기'});return files;
       }));
     }
@@ -12187,14 +12265,14 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
         const protectedEntries=d.packs.flatMap(p=>p.scopeId===pid?p.entries.filter(e=>!e.autoManaged||e.userProtected||e.speechRule):p.entries);
         const prompt=JSON.stringify({existing:editable.map(loreApiCard),protected:protectedEntries.map(loreApiProtectedCard),
           fixed:(d.room.slots||[]).filter(s=>s.enabled&&['extra','character'].includes(s.group)).map(s=>({title:s.title,content:s.content})),
-          continuityReference:j.rows.slice(Math.max(0,seg.start-1),seg.start).map(t=>({user:t.userText,assistant:t.assistantText})),
-          rp:rows.map(t=>({user:t.userText,assistant:t.assistantText})),segment:seg.index,segment_count:j.segments.length,history_review:false});
+          continuityReference:j.rows.slice(Math.max(0,seg.start-1),seg.start).map(wishCleanTurn).map(t=>({user:t.userText,assistant:t.assistantText})),
+          rp:rows.map(wishCleanTurn).map(t=>({user:t.userText,assistant:t.assistantText})),segment:seg.index,segment_count:j.segments.length,history_review:false});
         const guide=joinGuides(getGuideText(guides.lore),contract(j)),wire=JSON.parse(prompt);
         const sizes={guide:guide.length,existing:JSON.stringify(wire.existing).length,protected:JSON.stringify(wire.protected).length,fixed:JSON.stringify(wire.fixed).length,rp:JSON.stringify(wire.rp).length+JSON.stringify(wire.continuityReference).length};
         return {guide,prompt,editable,protectedEntries,pid,sizes};
       }
       const p={memory:j.bundle==='memory',observe:j.bundle==='people',mem:rows,obs:rows};
-      const req=U3.request(d.room,d.cog,d.packs,p,{rebuild:true,references:false,continuityReference:{memory:U3.continuityReference(j.rows,rows),observe:U3.continuityReference(j.rows,rows)}});
+      const req=U3.request(d.room,d.cog,d.packs,p,{rebuild:true,references:false,...U3.continuityOptions(j.rows,rows,rows)});
       const schema=clone(req.schema),data=JSON.parse(req.prompt);
       if(p.memory){
         delete schema.properties.memory.properties.references;
@@ -12490,7 +12568,8 @@ anchor는 장면과 무관하게 항상 필요한 절대 규칙에만 드물게 
       let calls=0;
       for(let i=job.index;i<segments.length;i++){
         assertLive();onProgress({done:i,total:segments.length,status:'API 분석 중'});
-        const prompt=JSON.stringify({history_review:all||!cursor,segment:i+1,segment_count:segments.length,existing:job.entries.map(loreApiCard),protected:protectedEntries.map(loreApiCard),fixed,rp:segments[i]});
+        // The AI reads each message without page wrapping; the segments, cursor and signature stay on the text as read.
+        const prompt=JSON.stringify({history_review:all||!cursor,segment:i+1,segment_count:segments.length,existing:job.entries.map(loreApiCard),protected:protectedEntries.map(loreApiCard),fixed,rp:segments[i].map(row=>({role:row.role,text:wishCleanRpText(row.text)}))});
         WishMemorySafety.wire(guide,prompt);
         const result=await callAiProvider(settings,guide,prompt,{taskKind:'extract',responseMimeType:'application/json',operationLabel:'자료집 묶음 정리 '+(i+1)+'/'+segments.length});
         calls++;assertLive(false);
@@ -16818,7 +16897,7 @@ function mRelationships() {
 
   const EXTERNAL_MODE_HELP=helpSections([
     ['빠르게','TXT를 AI에 첨부하고 답을 한 번 받습니다. 몇 분이면 끝나고, 파일을 첨부할 수 있는 AI면 됩니다. 대화가 길면 AI가 원문을 다 읽지 못해 사건·관계가 얇게 정리됩니다.'],
-    ['정밀하게','ZIP을 첨부하고 시작 문구를 보낸 뒤 "계속"을 여러 번 보냅니다. AI가 원문을 약 13만 자씩 직접 읽고, 마지막에 결과 JSON 하나로 합칩니다. 코드를 실행할 수 있는 AI(ChatGPT Plus 이상 등)가 필요합니다. 오래 걸리지만 사건·날짜·관계가 훨씬 자세합니다.'],
+    ['정밀하게','ZIP을 첨부하고 시작 문구를 보낸 뒤 "계속"을 여러 번 보냅니다. AI가 원문을 약 15만 자씩 직접 읽고, 마지막에 결과 JSON 하나로 합칩니다. 코드를 실행할 수 있는 AI(ChatGPT Plus 이상 등)가 필요합니다. 오래 걸리지만 사건·날짜·관계가 훨씬 자세합니다.'],
     ['고르는 법','짧은 대화는 빠르게로도 충분합니다. TXT가 여러 개로 나뉠 만큼 긴 대화는 정밀하게를 권합니다.'],
     ['공통','두 방식 모두 AI가 준 결과 JSON을 [JSON 가져오기]로 넣습니다. 자료집은 두 방식 모두 TXT로 받습니다. 정리가 끝날 때까지 그 방에서 RP를 진행하지 마세요. 원문이 바뀌면 가져오기가 거절됩니다.']]);
   function vExternalRebuild(dis=false){
