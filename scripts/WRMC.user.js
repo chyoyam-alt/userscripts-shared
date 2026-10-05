@@ -3306,9 +3306,9 @@ const ExternalReplay=(()=>{
       return value;
     }
     function heldView(domain,rec){
-      const reasons={'trajectory-limit':'핵심 전환 이력 길이 상한','context-missing':'요청에 기존 관계 전문 없음','manual-fact-body-mismatch':'수동 인지와 다른 본문','manual-speech-protected':'수동 호칭 보호','protected-id':'보호 자료 ID와 충돌','protected-title':'보호 자료 제목과 충돌'};
+      const reasons={'trajectory-limit':'핵심 전환 이력 길이 상한','context-missing':'요청에 기존 관계 전문 없음','manual-fact-body-mismatch':'수동 인지와 다른 본문','manual-speech-protected':'수동 호칭 보호','auto-fact-rewrite':'AI가 다른 내용으로 고쳐 쓰려 한 인지','auto-fact-same-title':'제목이 같은 새 인지','protected-id':'보호 자료 ID와 충돌','protected-title':'보호 자료 제목과 충돌'};
       const source=rec.source||{},sourceLabel=String(source.bundle||'')+(source.segmentIndex!=null&&source.segmentCount!=null?' · 구간 '+source.segmentIndex+'/'+source.segmentCount:'');
-      const target=domain==='C'?rec.payload||{}:rec.target||{},targetText=domain==='A'?[target.speaker,target.target].filter(Boolean).join(' → '):domain==='F'?String(target.protectedTitle||target.protectedIds?.join(', ')||''):target.speaker||target.target?[target.speaker,target.target].filter(Boolean).join(' → '):String(target.fact_id||target.target_fact_id||rec.proposal?.title||'');
+      const target=domain==='C'?rec.payload||{}:rec.target||{},targetText=domain==='A'?[target.speaker,target.target].filter(Boolean).join(' → '):domain==='F'?String(target.protectedTitle||target.protectedIds?.join(', ')||''):target.speaker||target.target?[target.speaker,target.target].filter(Boolean).join(' → '):String(target.fact_title||target.fact_id||target.target_fact_id||rec.proposal?.title||'');
       return {id:rec.id,domain,reason:rec.reason,reasonLabel:reasons[rec.reason]||String(rec.reason||'보류 제안'),at:rec.at,sourceLabel,sourceMessageId:String(rec.sourceMessageId||''),targetText,target:structuredClone(target),proposal:structuredClone(rec.proposal||{}),checked:rec.checked?structuredClone(rec.checked):undefined,sig:rec.sig};
     }
     return {HELD_JOB_MAX,HELD_TOTAL_MAX,HELD_BYTES_MAX,HELD_RESOLVED_MAX,stableJson,keyJson,seal,sealStaged,same,isHeld,estimate,partition,resolve,readSidecar,updateSidecar,txSidecar,heldView,uniq,restSig};
@@ -5145,7 +5145,7 @@ const deltaNotices=[];
       if(value.trim().length>max)throw Error('호칭·말투 '+speaker+' → '+target+': AI '+label+'이 '+max+'자 상한을 넘었습니다('+value.trim().length+'자). 뒤를 자르지 않고 이번 결과 적용을 중단했습니다.');
     }
   }
-    function wishHoldManualFactRows(next,heldFacts,heldSpeech,cutoff,holdCtx,notices,bodyKey,cogHeld){
+    function wishHoldManualFactRows(next,heldFacts,heldSpeech,cutoff,holdCtx,notices,bodyKey,cogHeld,cleanups=[]){
     const source={bundle:holdCtx.bundle||'unified',jobCreatedAt:holdCtx.jobCreatedAt??null,segmentIndex:holdCtx.segmentIndex??null,segmentCount:holdCtx.segmentCount??null};
     const keys=new Set(cogHeld.map(r=>WishHeld.keyJson('C',r)));
     const add=(kind,reason,payload,proposal,group)=>{const item={id:'hold_'+crypto.randomUUID(),kind,reason,source:{...source},sourceMessageId:String(cutoff||''),at:Date.now(),...(group?{group}:{}),payload,proposal:copy(proposal)},key=WishHeld.keyJson('C',item);if(keys.has(key))return false;keys.add(key);cogHeld.push(item);return true;};
@@ -5157,6 +5157,12 @@ const deltaNotices=[];
       for(const {h,t,row} of conceal){const old=next.state.concealments.find(c=>c.holderId===h&&c.targetId===t&&c.factId===factId);if(row.active===false&&!old)continue;if(add('concealment',reason,{holder_id:h,target_id:t,fact_id:factId,before_active:old?.active===true,after_active:row.active===true,scope:String(row.scope||'')},f,group)){count++;cn++;}}
       if(count)notices.push('수동 인지 「'+String(fact.label||factId)+'」: AI가 같은 ID에 다른 본문(「'+body.slice(0,120)+'」)을 냈습니다. 다른 사실을 가리켰을 수 있어 이 인지의 앎/모름 '+kn+'건·은폐 '+cn+'건을 적용하지 않고 [인지 > 검토]에 보류했습니다. 같은 사실이면 반영, 다른 사실이면 제외 후 새 인지로 등록해 주세요.');
     }
+    // A fact applyObserve stored apart (retire the old one) or numbered for its title (merge it into the other): applied
+    // with the 정보 유지보수 rules (applyFactMaintenance), which recheck the body and refuse a knowledge or concealment conflict.
+    for(const {operation,fact,other} of cleanups){
+      const retire=operation==='retire',payload=retire?{operation,fact_id:fact.id,before_content:fact.content,fact_title:String(fact.label||''),new_fact_id:other.id,new_title:String(other.label||'')}:{operation,fact_id:fact.id,target_fact_id:other.id,before_content:fact.content,fact_title:String(fact.label||''),target_title:String(other.label||'')};
+      add('fact-maintenance',retire?'auto-fact-rewrite':'auto-fact-same-title',payload,{title:String(fact.label||''),content:fact.content});
+    }
     for(const {speaker,target,proposal:r} of heldSpeech){const description='수동 호칭 '+speaker+' → '+target+': AI 제안 호칭 「'+String(r.address||'')+'」·말투 '+String(r.register||'')+'·설명 '+String(r.note||'').slice(0,200);if(add('speech','manual-speech-protected',{speaker,target,description},r))notices.push('수동 호칭 '+speaker+' → '+target+': 자동 변경 제안을 적용하지 않고 [인지 > 검토]에 보관했습니다');}
   }
 
@@ -5165,6 +5171,30 @@ function applyObserve(cog,speech,data,rp,cutoff,relationshipRows=[],relationship
     const next=copy(cog),relations=copy(speech||[]),people=new Map(),facts=new Map();
     const notices=relationshipOptions.notices||[],holdCtx=relationshipOptions.hold||{bundle:'unified'},cogHeld=relationshipOptions.cogHeld||[],heldFacts=new Map(),heldSpeech=[],fx=relationshipOptions.fix||{fixed:0,drops:[],left:[]};
     const bodyKey=s=>String(s||'').normalize('NFC').replace(/\s+/g,' ').trim();
+    // A rebuild or import stages on a seed that dropped every automatic fact, so there an automatic fact was made earlier in
+    // the same job: the user has not seen it yet and no 검토 item is made about it. Facts the user already had get one.
+    const hadBefore=x=>holdCtx.bundle==='unified'||!x.automatic,cleanups=[],splitFrom=new Map();
+    // A new automatic fact never shares a title with a live fact: the 골라서 one-line form shows only the title.
+    const freshTitle=title=>{
+      const taken=t=>next.facts.some(x=>!x.archived&&bodyKey(x.label)===bodyKey(t)),clash=next.facts.filter(x=>!x.archived&&bodyKey(x.label)===bodyKey(title));
+      if(!clash.length)return {title,clash};
+      const m=/^(.*\S)\s\((\d{1,2})\)$/.exec(String(title).trim()),base=m?m[1]:String(title).trim();let n=m?Number(m[2])+1:2,t;
+      do t=base+' ('+(n++)+')';while(taken(t));
+      return {title:t,clash};
+    };
+    const newFact=(f,from)=>{
+      const named=freshTitle(f.title),row={id:'cg_'+crypto.randomUUID().replace(/-/g,''),label:named.title,content:f.content,type:'other',automatic:true,archived:false,injectionMode:'auto'};
+      next.facts.push(row);next.state.catalog.facts.push(row.id);
+      const other=named.clash.find(x=>x!==from&&hadBefore(x));
+      if(from){
+        const retire=!from.archived&&hadBefore(from);
+        if(retire)cleanups.push({operation:'retire',fact:from,other:row});
+        notices.push('AI가 「'+String(from.label||'')+'」 인지를 다른 내용으로 고쳐 쓰려 해서 새 인지(「'+row.label+'」)로 따로 저장했어요. 옛 인지는 그대로 두었어요.'+(retire?' 옛 인지가 더 필요 없으면 [인지 > 검토]에서 추적을 끝내세요.':''));
+      }
+      if(other)cleanups.push({operation:'merge',fact:row,other});
+      if(named.clash.length&&(!from||other))notices.push('새 인지(「'+row.label+'」)의 제목이 기존 인지(「'+String((other||named.clash[0]).label||'')+'」)의 제목과 같아서 뒤에 번호를 붙였어요.'+(other?' 같은 사실이면 [인지 > 검토]에서 합칠 수 있어요.':''));
+      return row;
+    };
     let preservedSpeech=0,preservedAliases=0;
     next.state.catalog||={actors:[],facts:[]};next.state.knowledge||={};next.state.concealments||=[];
     const seen=new Set();
@@ -5197,7 +5227,10 @@ function applyObserve(cog,speech,data,rp,cutoff,relationshipRows=[],relationship
       let row=next.facts.find(x=>x.id===f.ref);const manualRow=!!row&&!row.automatic;
       if(!row&&!/^NEW_FACT_/.test(f.ref))throw Error('인지 REF 오류: '+f.ref+' 「'+String(f.title||'')+'」 · 입력의 ref나 NEW_FACT_* 표시만 쓸 수 있습니다.');
       if(!manualRow&&(!String(f.content||'').trim()||!String(f.title||'').trim()))throw Error('인지 제목·본문이 없습니다: '+f.ref+(f.title?' 「'+f.title+'」':''));
-      if(!row){row={id:'cg_'+crypto.randomUUID().replace(/-/g,''),label:f.title,content:f.content,type:'other',automatic:true,archived:false,injectionMode:'auto'};next.facts.push(row);next.state.catalog.facts.push(row.id);}
+      if(!row)row=newFact(f);
+      // Another body under a stored automatic fact's ref is not written over it: the people who knew the old body would
+      // seem to know the new one. The row becomes a new fact; the old one keeps its body, title, knowers and concealments.
+      else if(row.automatic&&bodyKey(row.content)!==bodyKey(f.content)){const old=row;row=newFact(f,old);splitFrom.set(row.id,old);}
       else if(row.automatic){row.label=f.title;row.content=f.content;}
       facts.set(f.ref,row.id);
       if(!Array.isArray(f.knows)||!Array.isArray(f.doesNotKnow))throw Error('인지 관계 배열 오류');
@@ -5251,12 +5284,17 @@ function applyObserve(cog,speech,data,rp,cutoff,relationshipRows=[],relationship
       const h=actor(row.holder_ref),t=actor(row.target_ref),f=facts.get(row.fact_ref)||row.fact_ref,label='은폐 '+nameOf(h)+' → '+nameOf(t)+' · '+(next.facts.find(x=>x.id===f)?.label||row.fact_ref)+': ';
       if(h===t||!next.facts.some(x=>x.id===f))throw Error(label+(h===t?'숨기는 인물과 상대가 같습니다.':'fact_ref '+row.fact_ref+'가 이번 답이나 입력의 인지가 아닙니다.'));
       if(heldFacts.has(f)){heldFacts.get(f).conceal.push({h,t,row:copy(row)});continue;}
+      // A row about a rewritten ref goes to the new fact with the rest of the row. The answer may lean on the holder knowing
+      // the old body; that does not say the holder knows the new one, so the row is left out instead of failing the answer.
+      const was=splitFrom.get(f);
+      if(was&&row.active&&next.state.knowledge[h]?.[f]!=='aware'){const msg=label+nameOf(h)+'이(가) 새로 따로 저장한 이 인지를 안다는 내용이 답에 없어 이 은폐는 적용하지 않았어요. 옛 인지의 은폐는 그대로예요.';notices.push(msg);fx.left.push(msg);continue;}
+      if(was&&!row.active&&!next.state.concealments.some(x=>x.holderId===h&&x.targetId===t&&x.factId===f)&&next.state.concealments.some(x=>x.holderId===h&&x.targetId===t&&x.factId===was.id&&x.active)){const msg=label+'AI가 이 은폐를 끝냈다고 했지만 은폐는 옛 인지(「'+String(was.label||'')+'」)에 있어 그대로 두었어요. 옛 인지 추적을 끝내면 함께 정리돼요.';notices.push(msg);fx.left.push(msg);continue;}
       if(row.active&&next.state.knowledge[h]?.[f]!=='aware')throw Error(label+'정보를 모르는 인물은 은폐 주체가 될 수 없습니다. 숨기는 인물을 그 인지의 knows에 넣었는지 확인해 주세요.');
       const old=next.state.concealments.find(x=>x.holderId===h&&x.targetId===t&&x.factId===f);
       const value={holderId:h,targetId:t,factId:f,active:row.active===true,scope:String(row.scope||''),publicName:old?.publicName||''};
       if(old)Object.assign(old,value);else if(value.active)next.state.concealments.push(value);
     }
-    wishHoldManualFactRows(next,heldFacts,heldSpeech,cutoff,holdCtx,notices,bodyKey,cogHeld);
+    wishHoldManualFactRows(next,heldFacts,heldSpeech,cutoff,holdCtx,notices,bodyKey,cogHeld,cleanups);
     next.lastAnalysis=cutoff;next.tip=cutoff;next.pending=[];next.historyPolicy='stable-user-v1';next.scan=true;
     next.scan={at:Date.now(),scope:'unified',latest:cutoff,requests:1};
     next.scanJob=null;next.analysisPaused=false;next.rev=(cog.rev||0)+1;next.updated=Date.now();
@@ -13899,6 +13937,8 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     const p=r?.payload||{},heldNote=r?.reason==='manual-fact-body-mismatch'?' · AI 제안 본문: '+String(r.proposal?.content||'').slice(0,120):'';
     const actors=new Map((cog?.actors||[]).map(a=>[a.id,a.name]));
     const facts=new Map((cog?.facts||[]).map(f=>[f.id,f.label||f.content]));
+    if(r?.reason==='auto-fact-rewrite')return `AI가 「${facts.get(p.fact_id)||p.fact_title||'정보'}」 인지를 다른 내용으로 고쳐 쓰려 해서, 새 내용은 새 인지(「${facts.get(p.new_fact_id)||p.new_title||'정보'}」)로 따로 저장했어요. 옛 인지가 더 필요 없으면 [추적 종료]를 눌러 추적을 끝내세요. 둘 다 두려면 [이 후보 제외]를 누르세요.`;
+    if(r?.reason==='auto-fact-same-title')return `새 인지(「${facts.get(p.fact_id)||p.fact_title||'정보'}」)의 제목이 기존 인지(「${facts.get(p.target_fact_id)||p.target_title||'정보'}」)의 제목과 같아서 뒤에 번호를 붙였어요. 같은 사실이면 [정보 합치기]를 눌러 새 인지를 기존 인지로 합치세요. 다른 사실이면 [이 후보 제외]를 누르세요.`;
     if(r?.kind==='fact-maintenance')return `${facts.get(p.fact_id)||'정보'} · ${{correct:'내용이 바뀌었는지 확인',merge:'같은 정보끼리 합치기',retire:'더 이상 추적하지 않기'}[p.operation]||'내용 확인'}${p.content?' → '+p.content:p.target_fact_id?' → '+(facts.get(p.target_fact_id)||'다른 정보'):''}${p.reason?' · '+p.reason:''}`;
     if(r?.kind==='knowledge')return `${actors.get(p.actor_id)||'인물'} · ${facts.get(p.fact_id)||p.description||'정보'} · ${v2KnowledgeChangeText(p.before,p.after)}${heldNote}`;
     if(r?.kind==='conflict')return `${actors.get(p.actor_id)||'인물'} · ${facts.get(p.fact_id)||p.description||'정보'} · 어떻게 알게 됐는지 확인 필요`;
@@ -16579,7 +16619,10 @@ function createWishUI(AD) {
     const add = (label, value, cls = '') => { const t = String(value ?? '').trim(); if (t) rows.push(`<div class="wp-hb-row ${cls}"><span>${esc(label)}</span><p>${esc(t)}</p></div>`); };
     if (domain === 'F') { add('종류 · 제목', (L.lore[p.type] || p.type || '자료') + ' · ' + String(p.title || ''), 'is-main'); add('고정 제안', p.anchor ? '켜기' : '끄기'); add('별칭', (p.aliases || []).join(' · ')); add('검색어', (p.keywords || []).join(' · ')); add('제안 전문', p.full); add('짧은 요약', p.compact); add('한 줄 요약', p.micro); }
     else if (domain === 'A') { const c = v.checked || {}, act = { keep: '기존 유지', clear: '해제', replace: '교체' }[c.unresolvedAction] || ''; add('현재 관계 제안', c.current, 'is-main'); add('새 전환', c.milestone); add('남은 쟁점', [act, c.unresolved].filter(Boolean).join(' · ')); add('근거', (c.evidence || []).map(e => { const who = e.role === 'user' ? 'USER' : e.role === 'assistant' ? 'CHAR/서술' : ''; return (who ? who + ' · ' : '') + String(e.quote || ''); }).join('\n\n')); }
-    else { add('변경 제안', v2ReviewDescription(r, V.held?.cog), 'is-main'); add(r.kind === 'speech' ? '호칭·말투 제안' : '인지 본문 제안', r.kind === 'speech' ? [p.address, p.register, p.note].filter(Boolean).join('\n') : p.content); if (r.group) add('제안 묶음', r.group); }
+    else { const q = r.payload || {}, body = id => (V.held?.cog?.facts || []).find(f => f.id === id)?.content; add('변경 제안', v2ReviewDescription(r, V.held?.cog), 'is-main');
+      if (r.reason === 'auto-fact-rewrite') { add('옛 인지 본문', p.content); add('새 인지 본문', body(q.new_fact_id)); }
+      else if (r.reason === 'auto-fact-same-title') { add('새 인지 본문', p.content); add('기존 인지 본문', body(q.target_fact_id)); }
+      else add(r.kind === 'speech' ? '호칭·말투 제안' : '인지 본문 제안', r.kind === 'speech' ? [p.address, p.register, p.note].filter(Boolean).join('\n') : p.content); if (r.group) add('제안 묶음', r.group); }
     const k = 'held-raw-' + r.id;
     return `<div class="wp-hb">${rows.join('')}</div><details class="m3-fold2 wp-hb-raw" data-open="${esc(k)}"${S.openSet.has(k) ? ' open' : ''}><summary>원본 제안 전체${ic('chev')}</summary>${S.openSet.has(k) ? `<div class="m3-fb"><pre>${esc(JSON.stringify(p, null, 2))}</pre></div>` : ''}</details>`;
   }
