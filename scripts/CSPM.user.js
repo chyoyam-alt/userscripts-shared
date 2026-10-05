@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         🎨 Crack Scene Painter Mobile (크랙 장면 삽화 · 모바일)
 // @namespace    crack-scene-painter
-// @version      5.2.6
+// @version      5.2.7
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/CSPM.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/CSPM.user.js
-// @description  크랙 AI 삽화 + 만화 콘티. 번개 오른쪽 말풍선에서 컷 분할·전용 지침·NAI V5 만화 생성.
+// @description  크랙 AI 삽화 + 만화 콘티. 5.2.7: 방 이동 저장 보호, 메시지 부분 갱신, 중복 본문 탐색 감소.
 // @match        https://crack.wrtn.ai/*
 // @grant        GM_xmlhttpRequest
 // @connect      generativelanguage.googleapis.com
@@ -72,13 +72,15 @@
     let imageDbPromise = null;
     let sceneRecordsCacheRoomId = '';
     let sceneRecordsCacheValue = null;
+    const cspSceneRecordOwners = new WeakMap();
+    let cspMessagePass = null;
     let menuInjectTimer = 0;
     let messageInjectTimer = 0;
     let injectTimer = 0;
     let galleryRowCountTimer = 0;
     let cspIsScrolling = false;
     let cspScrollIdleTimer = 0;
-    let cspPendingScrollPass = false;
+    let cspPendingScrollMenu = false;
     // v4.24.13: 새로고침 렉 방지용 저장 이미지 복원 분산 큐
     let cspRestoreQueue = new Map();
     // v4.24.14: 같은 markdown DOM의 중복 복원 예약은 key 계산 전 WeakSet으로 컷한다.
@@ -1057,6 +1059,20 @@
         };
     }
 
+    function captureCspWorkTarget(markdown = null, messageKey = '') {
+        return { roomId: getRoomId(), markdown, messageKey: messageKey || (markdown ? getMessageKey(markdown) : ''), text: markdown ? cleanMarkdownText(markdown) : '' };
+    }
+
+    function isCurrentCspWorkTarget(target) {
+        if (!target || target.roomId !== getRoomId()) return false;
+        const markdown = target.markdown;
+        return !markdown || (markdown.isConnected && getMessageKey(markdown) === target.messageKey && cleanMarkdownText(markdown) === target.text);
+    }
+
+    function assertCurrentCspWorkTarget(target) {
+        if (!isCurrentCspWorkTarget(target)) throw new Error('대화방이나 대상 답변이 바뀌었어요. 원래 메시지에서 다시 열어줘.');
+    }
+
     function getRoomId() {
         const match = location.pathname.match(/\/stories\/[^/]+\/episodes\/([^/?#]+)/);
         if (match) return match[1];
@@ -1071,8 +1087,8 @@
         return `${CSP_PREFIX}_room_settings_${getRoomId()}`;
     }
 
-    function getSceneRecordsKey() {
-        return `${CSP_PREFIX}_scene_records_${getRoomId()}`;
+    function getSceneRecordsKey(roomId = getRoomId()) {
+        return `${CSP_PREFIX}_scene_records_${roomId}`;
     }
 
     function safeJsonParse(value, fallback) {
@@ -2652,14 +2668,15 @@ director.lightingIntent:
         }
     }
 
-    function getSceneRecords() {
-        const roomId = getRoomId();
-        if (sceneRecordsCacheRoomId === roomId && sceneRecordsCacheValue && typeof sceneRecordsCacheValue === 'object') {
-            return sceneRecordsCacheValue;
+    function getSceneRecords(roomId = getRoomId()) {
+        if (sceneRecordsCacheRoomId === roomId && sceneRecordsCacheValue && typeof sceneRecordsCacheValue === 'object') return sceneRecordsCacheValue;
+        const records = getLocalJsonStorage(getSceneRecordsKey(roomId), {});
+        cspSceneRecordOwners.set(records, roomId);
+        if (roomId === getRoomId()) {
+            sceneRecordsCacheRoomId = roomId;
+            sceneRecordsCacheValue = records;
         }
-        sceneRecordsCacheRoomId = roomId;
-        sceneRecordsCacheValue = getLocalJsonStorage(getSceneRecordsKey(), {});
-        return sceneRecordsCacheValue;
+        return records;
     }
 
     function invalidateSceneRecordsCache(roomId = getRoomId()) {
@@ -2669,20 +2686,20 @@ director.lightingIntent:
         }
     }
 
-    function makePromptArchiveId(messageKey, suffix = '') {
-        const base = `${getRoomId()}::prompt_detail::${messageKey}`;
+    function makePromptArchiveId(messageKey, suffix = '', roomId = getRoomId()) {
+        const base = `${roomId}::prompt_detail::${messageKey}`;
         const cleanSuffix = String(suffix || '').trim().replace(/[^a-zA-Z0-9_:-]+/g, '_');
         return cleanSuffix ? `${base}::${cleanSuffix}` : base;
     }
 
-    function ensureHistoryPromptArchiveId(messageKey, item = {}) {
+    function ensureHistoryPromptArchiveId(messageKey, item = {}, roomId = getRoomId()) {
         if (!item || typeof item !== 'object') return '';
         if (item.promptArchiveId) return item.promptArchiveId;
         const stamp = Number(item.createdAt || 0) || Date.now();
         const imageTail = String(item.imageId || item.imageUrl || '')
             .replace(/[^a-zA-Z0-9]+/g, '_')
             .slice(-24);
-        item.promptArchiveId = makePromptArchiveId(messageKey, `history_${stamp}_${imageTail || Math.random().toString(36).slice(2, 8)}`);
+        item.promptArchiveId = makePromptArchiveId(messageKey, `history_${stamp}_${imageTail || Math.random().toString(36).slice(2, 8)}`, roomId);
         return item.promptArchiveId;
     }
 
@@ -2752,10 +2769,10 @@ director.lightingIntent:
         return compact;
     }
 
-    function buildPromptArchivePayload(record = {}) {
+    function buildPromptArchivePayload(record = {}, roomId = getRoomId()) {
         return {
             version: 1,
-            roomId: getRoomId(),
+            roomId,
             mode: record.mode || 'nai',
             plan: compactPlanForStorage(record.plan || {}),
             basePrompt: record.basePrompt || '',
@@ -2774,10 +2791,10 @@ director.lightingIntent:
         return hasGeneratedPromptSnapshot(record);
     }
 
-    function fireAndForgetStorePromptArchive(messageKey, record = {}, archiveIdOverride = '') {
+    function fireAndForgetStorePromptArchive(messageKey, record = {}, archiveIdOverride = '', roomId = getRoomId()) {
         if (!messageKey || !hasPromptArchivePayload(record)) return '';
-        const archiveId = archiveIdOverride || record.promptArchiveId || makePromptArchiveId(messageKey);
-        const payload = buildPromptArchivePayload(Object.assign({}, record, { promptArchiveId: archiveId }));
+        const archiveId = archiveIdOverride || record.promptArchiveId || makePromptArchiveId(messageKey, '', roomId);
+        const payload = buildPromptArchivePayload(Object.assign({}, record, { promptArchiveId: archiveId }), roomId);
         try {
             promptArchiveMemoryCache.set(archiveId, payload);
         } catch (_) {}
@@ -2802,6 +2819,7 @@ director.lightingIntent:
 
     function compactSceneRecordForStorage(messageKey, record, options = {}) {
         if (!record || typeof record !== 'object') return null;
+        const roomId = options.roomId || getRoomId();
 
         normalizeSceneRecordHistory(record, messageKey);
 
@@ -2810,7 +2828,7 @@ director.lightingIntent:
                 if (!item) return;
                 // data/blob URL은 localStorage에 넣지 않는다. 새 이미지와 기존 이미지 마이그레이션은 IndexedDB가 담당한다.
                 if (String(item.imageUrl || '').startsWith('data:')) {
-                    item.imageId = item.imageId || makeHistoryImageId(messageKey);
+                    item.imageId = item.imageId || makeHistoryImageId(messageKey, roomId);
                     delete item.imageUrl;
                 }
                 if (String(item.imageUrl || '').startsWith('blob:')) delete item.imageUrl;
@@ -2823,7 +2841,7 @@ director.lightingIntent:
         }
 
         if (String(record.imageUrl || '').startsWith('data:')) {
-            record.imageId = record.imageId || makeStoredImageId(messageKey);
+            record.imageId = record.imageId || makeStoredImageId(messageKey, roomId);
             delete record.imageUrl;
         }
         if (String(record.imageUrl || '').startsWith('blob:')) delete record.imageUrl;
@@ -2831,11 +2849,11 @@ director.lightingIntent:
         const currentHistoryItem = getCurrentHistoryItem(record);
         let archiveId = currentHistoryItem?.promptArchiveId || record.promptArchiveId || '';
         if (hasPromptArchivePayload(record)) {
-            archiveId = ensureHistoryPromptArchiveId(messageKey, currentHistoryItem || record) || archiveId || makePromptArchiveId(messageKey);
+            archiveId = ensureHistoryPromptArchiveId(messageKey, currentHistoryItem || record, roomId) || archiveId || makePromptArchiveId(messageKey, '', roomId);
             // v4.24.13: 새로고침 복원 저장에서는 prompt archive 재기록을 건너뛴다.
             // 기존 archiveId는 compact 기록에 그대로 남겨 리롤 히스토리별 프롬프트 보존은 유지한다.
             if (!options.skipPromptArchiveWrite) {
-                archiveId = fireAndForgetStorePromptArchive(messageKey, record, archiveId) || archiveId;
+                archiveId = fireAndForgetStorePromptArchive(messageKey, record, archiveId, roomId) || archiveId;
             }
             if (currentHistoryItem && archiveId) currentHistoryItem.promptArchiveId = archiveId;
             if (archiveId) record.promptArchiveId = archiveId;
@@ -2873,23 +2891,30 @@ director.lightingIntent:
         return next;
     }
 
-    function cleanupPrunedSceneRecords(originalRecords, keptRecords) {
+    function cleanupPrunedSceneRecords(originalRecords, keptRecords, roomId = getRoomId()) {
         const keptKeys = new Set(Object.keys(keptRecords || {}));
         Object.entries(originalRecords || {}).forEach(([messageKey, record]) => {
             if (keptKeys.has(messageKey)) return;
             Promise.all([
-                deleteAllHistoryImages(record, makeStoredImageId(messageKey)),
+                deleteAllHistoryImages(record, makeStoredImageId(messageKey, roomId)),
                 deleteRecordPromptArchives(record)
             ]).catch(err => console.warn('[Crack Scene Painter] pruned record cleanup failed:', err));
         });
     }
 
     function saveSceneRecords(records, options = {}) {
-        const compact = stripLargeImageFields(records || {}, options);
-        sceneRecordsCacheRoomId = getRoomId();
-        sceneRecordsCacheValue = compact;
+        const roomId = options.roomId || cspSceneRecordOwners.get(records) || getRoomId();
+        const compact = stripLargeImageFields(records || {}, { ...options, roomId });
+        cspSceneRecordOwners.set(compact, roomId);
+        const cache = value => {
+            if (roomId !== getRoomId() && sceneRecordsCacheRoomId !== roomId) return;
+            sceneRecordsCacheRoomId = roomId;
+            sceneRecordsCacheValue = value;
+            cspSceneRecordOwners.set(value, roomId);
+        };
+        cache(compact);
         try {
-            setLocalJsonStorage(getSceneRecordsKey(), compact);
+            setLocalJsonStorage(getSceneRecordsKey(roomId), compact);
         } catch (err) {
             console.warn('[Crack Scene Painter] localStorage save failed, pruning scene records:', err);
             const entries = Object.entries(compact).sort(([, a], [, b]) => {
@@ -2902,9 +2927,9 @@ director.lightingIntent:
             for (const keepCount of [20, 12, 8, 5, 3, 1, 0]) {
                 const pruned = keepCount > 0 ? Object.fromEntries(entries.slice(-keepCount)) : {};
                 try {
-                    setLocalJsonStorage(getSceneRecordsKey(), pruned);
-                    sceneRecordsCacheValue = pruned;
-                    cleanupPrunedSceneRecords(compact, pruned);
+                    setLocalJsonStorage(getSceneRecordsKey(roomId), pruned);
+                    cache(pruned);
+                    cleanupPrunedSceneRecords(compact, pruned, roomId);
                     saved = true;
                     showToast(`⚠️ 저장공간이 부족해서 이 방 삽화 기록을 최근 ${keepCount}개만 보관했어요.`);
                     break;
@@ -2917,25 +2942,25 @@ director.lightingIntent:
 
             if (!saved) {
                 try {
-                    localStorage.removeItem(getSceneRecordsKey());
+                    localStorage.removeItem(getSceneRecordsKey(roomId));
                 } catch (_) {}
-                sceneRecordsCacheValue = {};
-                cleanupPrunedSceneRecords(compact, {});
+                cache({});
+                cleanupPrunedSceneRecords(compact, {}, roomId);
                 showToast('⚠️ 삽화 기록 저장 실패: 브라우저 저장공간이 가득 찼어요. 저장소 관리를 실행해줘.');
             }
         }
-        updateGalleryRowCount();
+        if (roomId === getRoomId()) updateGalleryRowCount();
     }
 
 
-    function makeStoredImageId(messageKey) {
-        return `${getRoomId()}::${messageKey}`;
+    function makeStoredImageId(messageKey, roomId = getRoomId()) {
+        return `${roomId}::${messageKey}`;
     }
 
     const CSP_MAX_IMAGE_HISTORY = 3;
 
-    function makeHistoryImageId(messageKey) {
-        return `${makeStoredImageId(messageKey)}::${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    function makeHistoryImageId(messageKey, roomId = getRoomId()) {
+        return `${makeStoredImageId(messageKey, roomId)}::${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     }
 
     function clampHistoryIndex(record) {
@@ -3076,12 +3101,12 @@ director.lightingIntent:
         return '';
     }
 
-    async function appendSceneHistoryImage(messageKey, record, imageUrl) {
+    async function appendSceneHistoryImage(messageKey, record, imageUrl, roomId = getRoomId()) {
         normalizeSceneRecordHistory(record, messageKey);
         const item = { createdAt: Date.now(), outputKind: record.plan?.outputKind || 'illustration' };
 
         if (String(imageUrl || '').startsWith('data:')) {
-            item.imageId = makeHistoryImageId(messageKey);
+            item.imageId = makeHistoryImageId(messageKey, roomId);
             await putStoredImage(item.imageId, imageUrl);
         } else if (String(imageUrl || '').startsWith('blob:')) {
             // blob URL은 새로고침 후 깨지므로 기록하지 않습니다.
@@ -3110,10 +3135,10 @@ director.lightingIntent:
         return item;
     }
 
-    async function commitGeneratedImageReroll({ messageKey, record, imageUrl, plan, promptState, settings, box = null, img = null, mode = 'nai' }) {
+    async function commitGeneratedImageReroll({ messageKey, record, imageUrl, plan, promptState, settings, box = null, img = null, mode = 'nai', roomId = getRoomId() }) {
         if (!messageKey || !record) throw new Error('리롤 기록을 찾지 못했어요.');
         if (!imageUrl) throw new Error('리롤 이미지 결과가 비어 있어요.');
-        const currentHistoryItem = await appendSceneHistoryImage(messageKey, record, imageUrl);
+        const currentHistoryItem = await appendSceneHistoryImage(messageKey, record, imageUrl, roomId);
         const finalPlan = Object.assign({}, plan || record.plan || {});
         const finalCharPrompts = Array.isArray(promptState?.charPrompts) ? promptState.charPrompts : [];
 
@@ -3131,9 +3156,12 @@ director.lightingIntent:
         if (currentHistoryItem) currentHistoryItem.outputKind = finalPlan.outputKind || 'illustration';
         record.createdAt = Date.now();
 
-        const records = getSceneRecords();
+        const records = getSceneRecords(roomId);
         records[messageKey] = record;
-        saveSceneRecords(records);
+        saveSceneRecords(records, { roomId });
+        if (roomId !== getRoomId()) return currentHistoryItem;
+        if (box && !box.isConnected) box = null;
+        if (img && !img.isConnected) img = null;
 
         const targetImg = img || box?.querySelector?.('img');
         if (targetImg && imageUrl) targetImg.src = imageUrl;
@@ -5036,9 +5064,10 @@ director.lightingIntent:
         return `text_${hashText(text.slice(0, 4000))}`;
     }
 
-    function migrateLegacyMessageRecord(records, markdown) {
+    function migrateLegacyMessageRecord(records, markdown, checkLegacy = true) {
         const key = getMessageKey(markdown);
         if (!records || records[key]) return { key, record: records?.[key] || null, migrated: false };
+        if (!checkLegacy) return { key, record: null, migrated: false };
         const legacyKey = getLegacyMessageKey(markdown);
         if (!legacyKey || !records[legacyKey]) return { key, record: null, migrated: false };
         records[key] = records[legacyKey];
@@ -7586,7 +7615,20 @@ director.lightingIntent:
     }
 
 
+    function readCspMessagePart(kind, node, read) {
+        if (!cspMessagePass || !node) return read();
+        const cache = cspMessagePass[kind] || (cspMessagePass[kind] = new WeakMap());
+        if (cache.has(node)) return cache.get(node);
+        const value = read();
+        cache.set(node, value);
+        return value;
+    }
+
     function getDirectMarkdown(bubble) {
+        return readCspMessagePart('markdown', bubble, () => resolveCspGetDirectMarkdown(bubble));
+    }
+
+    function resolveCspGetDirectMarkdown(bubble) {
         if (!bubble) return null;
         if (isMainMarkdown(bubble)) return bubble;
 
@@ -7609,6 +7651,10 @@ director.lightingIntent:
     }
 
     function getFooter(bubble, options = {}) {
+        return readCspMessagePart(options.skipMarkdownFallback ? 'directFooter' : 'footer', bubble, () => resolveCspGetFooter(bubble, options));
+    }
+
+    function resolveCspGetFooter(bubble, options = {}) {
         if (!bubble) return null;
         if (isFooterLike(bubble) && bubble.querySelector('button[aria-label="메시지 옵션"]')) return bubble;
 
@@ -7708,6 +7754,10 @@ director.lightingIntent:
     }
 
     function isAssistantMessageGroup(group) {
+        return readCspMessagePart('assistant', group, () => resolveCspIsAssistantMessageGroup(group));
+    }
+
+    function resolveCspIsAssistantMessageGroup(group) {
         if (!group || !group.matches?.('[data-message-group-id]')) return false;
         if (isComposerNode(group) || isSuggestionNode(group) || isChatListNode(group)) return false;
         if (group.querySelector('.bg-surface_chat_secondary')) return false;
@@ -10751,9 +10801,11 @@ ${JSON.stringify(safePlan, null, 2)}
         return await blobToDataUrl(extractedBlob);
     }
 
-    async function insertFinalSceneImage({ markdown, imageUrl, plan, mode, basePrompt, baseNegative, finalPrompt, finalNegative, charPrompts, referenceInfo, naiSettings }) {
-        const messageKey = getMessageKey(markdown);
-        const result = insertSceneImageIntoMarkdown(markdown, imageUrl, plan.insertAfterParagraph, {
+    async function insertFinalSceneImage({ markdown, imageUrl, plan, mode, basePrompt, baseNegative, finalPrompt, finalNegative, charPrompts, referenceInfo, naiSettings, workTarget = captureCspWorkTarget(markdown) }) {
+        const roomId = workTarget.roomId;
+        const messageKey = workTarget.messageKey;
+        const canInsert = isCurrentCspWorkTarget(workTarget);
+        const result = canInsert ? insertSceneImageIntoMarkdown(markdown, imageUrl, plan.insertAfterParagraph, {
             mode,
             messageKey,
             captionHtml: buildCaption(plan, plan.insertAfterParagraph, mode, {
@@ -10764,7 +10816,7 @@ ${JSON.stringify(safePlan, null, 2)}
                 referenceInfo,
                 naiSettings
             }, messageKey)
-        });
+        }) : { ok: true, index: Math.max(0, Number(plan.insertAfterParagraph) || 0), box: null };
 
         if (!result.ok) throw new Error('AI 답변의 문단을 찾지 못했어요.');
 
@@ -10784,10 +10836,14 @@ ${JSON.stringify(safePlan, null, 2)}
             createdAt: Date.now()
         };
 
-        const currentHistoryItem = await appendSceneHistoryImage(messageKey, record, imageUrl);
-        const nextRecords = getSceneRecords();
+        const currentHistoryItem = await appendSceneHistoryImage(messageKey, record, imageUrl, roomId);
+        const nextRecords = getSceneRecords(roomId);
         nextRecords[messageKey] = record;
-        saveSceneRecords(nextRecords);
+        saveSceneRecords(nextRecords, { roomId });
+        if (!isCurrentCspWorkTarget(workTarget) || !result.box?.isConnected) {
+            showToast('🖼️ 생성한 삽화를 원래 방의 갤러리에 저장했어요.');
+            return;
+        }
         try { if (plan?.outputKind !== 'comic') commitCurrentSceneStateFromPlan(plan); } catch (stateErr) { console.warn('[Crack Scene Painter] Visual Context state commit skipped:', stateErr); }
         refreshImageHistoryControls(messageKey, result.box, record);
         markSceneButtons(messageKey, true);
@@ -10927,6 +10983,7 @@ ${JSON.stringify(safePlan, null, 2)}
             return;
         }
 
+        const workTarget = captureCspWorkTarget(markdown);
         const key = button?.getAttribute('data-message-key') || getMessageKey(markdown);
         debugLog('image analysis requested', { key });
         button?.setAttribute('data-csp-loading', 'true');
@@ -10945,6 +11002,7 @@ ${JSON.stringify(safePlan, null, 2)}
 
         try {
             const plan = await generateScenePlanWithGemini(bubble, markdown);
+            assertCurrentCspWorkTarget(workTarget);
             debugLog('Gemini scene plan ready', {
                 key,
                 insertAfterParagraph: plan?.insertAfterParagraph,
@@ -10971,8 +11029,10 @@ ${JSON.stringify(safePlan, null, 2)}
 
 
     async function runSpeedModeGeneration({ bubble, markdown, button }) {
+        const workTarget = captureCspWorkTarget(markdown);
         const messageKey = button?.getAttribute('data-message-key') || getMessageKey(markdown);
-        const activeTask = cspSpeedModeTasks.get(messageKey);
+        const taskKey = `${workTarget.roomId}:${messageKey}`;
+        const activeTask = cspSpeedModeTasks.get(taskKey);
 
         // 생성 중 같은 ⚡을 다시 누르면 즉시 취소 요청.
         if (activeTask) {
@@ -10996,9 +11056,10 @@ ${JSON.stringify(safePlan, null, 2)}
         const naiSettings = Object.assign({}, getDefaultGlobalSettings().naiSettings, global.naiSettings || {});
         const controller = new AbortController();
         const task = { controller, startedAt: Date.now() };
-        cspSpeedModeTasks.set(messageKey, task);
+        cspSpeedModeTasks.set(taskKey, task);
 
         const syncButtons = (loading, title) => {
+            if (workTarget.roomId !== getRoomId()) return;
             document.querySelectorAll(`.csp-message-speed-btn[data-message-key="${CSS.escape(messageKey)}"]`).forEach(btn => {
                 if (loading) btn.setAttribute('data-csp-loading', 'true');
                 else btn.removeAttribute('data-csp-loading');
@@ -11012,6 +11073,7 @@ ${JSON.stringify(safePlan, null, 2)}
             syncButtons(true, '퀵 생성 중 · 다시 누르면 취소');
 
             const plan = await generateScenePlanWithGemini(bubble, markdown, { signal: controller.signal });
+            assertCurrentCspWorkTarget(workTarget);
             throwIfCspAborted(controller.signal);
 
             const roomCharacters = (room.characters || []).filter(hasCharacterSlotContent);
@@ -11045,6 +11107,7 @@ ${JSON.stringify(safePlan, null, 2)}
 
             throwIfCspAborted(controller.signal);
             await insertFinalSceneImage({
+                workTarget,
                 markdown,
                 imageUrl: generatedImageUrl,
                 plan,
@@ -11059,7 +11122,7 @@ ${JSON.stringify(safePlan, null, 2)}
             });
 
             throwIfCspAborted(controller.signal);
-            markSceneButtons(messageKey, true);
+            if (isCurrentCspWorkTarget(workTarget)) markSceneButtons(messageKey, true);
         } catch (err) {
             const cancelled = controller.signal.aborted || /작업이 취소됐어요/.test(String(err?.message || ''));
             if (cancelled) {
@@ -11071,8 +11134,8 @@ ${JSON.stringify(safePlan, null, 2)}
                 showToast('⚠️ 퀵 생성 실패: ' + reason);
             }
         } finally {
-            if (cspSpeedModeTasks.get(messageKey) === task) {
-                cspSpeedModeTasks.delete(messageKey);
+            if (cspSpeedModeTasks.get(taskKey) === task) {
+                cspSpeedModeTasks.delete(taskKey);
                 syncButtons(false, '퀵 생성: 분석 후 바로 NAI 생성');
             }
         }
@@ -11117,7 +11180,8 @@ ${JSON.stringify(safePlan, null, 2)}
         if (cspRestoreQueuedMarkdowns.has(markdown)) return;
         const key = knownKey || getMessageKey(markdown);
         if (!key) return;
-        cspRestoreQueue.set(key, { markdown, key });
+        const roomId = getRoomId();
+        cspRestoreQueue.set(`${roomId}:${key}`, { markdown, key, roomId });
         cspRestoreQueuedMarkdowns.add(markdown);
         if (!cspRestoreFirstEnqueueAt) cspRestoreFirstEnqueueAt = Date.now();
         scheduleSceneRestoreFlush();
@@ -11150,7 +11214,7 @@ ${JSON.stringify(safePlan, null, 2)}
                 const markdown = item?.markdown;
                 const key = item?.key || '';
                 if (markdown) cspRestoreQueuedMarkdowns.delete(markdown);
-                if (!markdown || !markdown.isConnected) continue;
+                if (!markdown || !markdown.isConnected || item.roomId !== getRoomId()) continue;
                 if (markdown.querySelector('.csp-generated-scene-image')) continue;
                 try {
                     await reapplySavedScene(markdown, null, null, key);
@@ -11170,7 +11234,10 @@ ${JSON.stringify(safePlan, null, 2)}
     }
 
     async function reapplySavedScene(markdown, recordOverride = null, recordsOverride = null, knownKey = '') {
+        if (!markdown?.isConnected) return;
+        const roomId = getRoomId();
         const key = knownKey || getMessageKey(markdown);
+        const targetValid = () => roomId === getRoomId() && markdown.isConnected && getMessageKey(markdown) === key;
         const records = recordsOverride || getSceneRecords();
         const record = recordOverride || records[key];
         if (!record) return;
@@ -11183,10 +11250,16 @@ ${JSON.stringify(safePlan, null, 2)}
         normalizeSceneRecordHistory(record, key);
         if (getSceneRecordRestoreSignature(record) !== beforeSignature) dirty = true;
 
+        const normalizedSignature = getSceneRecordRestoreSignature(record);
         let imageUrl = await getRecordImageSrc(record);
+        if (!targetValid()) return;
+        if (getSceneRecordRestoreSignature(record) !== normalizedSignature || (!recordOverride && getSceneRecords()[key] !== record)) {
+            if (getSceneRecords()[key]) enqueueSceneRestore(markdown, key);
+            return;
+        }
         if (String(imageUrl || '').startsWith('blob:')) {
             delete records[key];
-            saveSceneRecords(records, { skipPromptArchiveWrite: true });
+            saveSceneRecords(records, { skipPromptArchiveWrite: true, roomId });
             return;
         }
 
@@ -11197,6 +11270,11 @@ ${JSON.stringify(safePlan, null, 2)}
         if (String(imageUrl || '').startsWith('data:') && currentItem && !currentItem.imageId) {
             const imageId = makeHistoryImageId(key);
             await putStoredImage(imageId, imageUrl);
+            if (!targetValid() || getSceneRecordRestoreSignature(record) !== normalizedSignature || (!recordOverride && getSceneRecords()[key] !== record)) {
+                try { await deleteStoredImage(imageId); } catch (_) {}
+                if (targetValid() && getSceneRecords()[key]) enqueueSceneRestore(markdown, key);
+                return;
+            }
             currentItem.imageId = imageId;
             delete currentItem.imageUrl;
             syncCurrentImageFieldsFromHistory(record);
@@ -11205,7 +11283,7 @@ ${JSON.stringify(safePlan, null, 2)}
 
         if (dirty) {
             records[key] = record;
-            saveSceneRecords(records, { skipPromptArchiveWrite: true });
+            saveSceneRecords(records, { skipPromptArchiveWrite: true, roomId });
         }
 
         insertSceneImageIntoMarkdown(markdown, imageUrl, record.paragraphIndex, {
@@ -11247,7 +11325,16 @@ ${JSON.stringify(safePlan, null, 2)}
     }
 
     function injectMessageButtons(scopes = null) {
-        const scopeList = Array.isArray(scopes) ? scopes.filter(scope => scope?.isConnected) : [];
+        const requested = Array.isArray(scopes) ? scopes : null;
+        const scopeSet = new Set((requested || []).filter(scope => scope?.isConnected).map(scope => getMessageGroupContainer(scope) || scope));
+        const scopeList = Array.from(scopeSet).filter(scope => {
+            for (let parent = scope.parentElement; parent; parent = parent.parentElement) if (scopeSet.has(parent)) return false;
+            return true;
+        });
+        if (requested && !scopeList.length) return;
+        const previousPass = cspMessagePass;
+        cspMessagePass = {};
+        try {
         if (scopeList.length) scopeList.forEach(scope => cleanupNonAssistantMessageButtons(scope));
         else cleanupNonAssistantMessageButtons();
         if (!isEnabled()) return;
@@ -11257,7 +11344,9 @@ ${JSON.stringify(safePlan, null, 2)}
         });
         const bubbles = Array.from(bubbleSet).sort(compareDocumentOrder);
         const records = getSceneRecords();
-        const hasSceneRecords = Object.keys(records || {}).length > 0;
+        const recordKeys = Object.keys(records || {});
+        const hasSceneRecords = recordKeys.length > 0;
+        const hasLegacyRecords = recordKeys.some(key => !key.startsWith('msg_') && !key.startsWith('text_'));
         let migratedRecords = false;
 
         bubbles.forEach(bubble => {
@@ -11279,7 +11368,7 @@ ${JSON.stringify(safePlan, null, 2)}
             let existingRecord = null;
             if (hasSceneRecords || !hasNormalButton || !hasSpeedButton || !hasComicButton) {
                 if (hasSceneRecords) {
-                    const resolved = migrateLegacyMessageRecord(records, markdown);
+                    const resolved = migrateLegacyMessageRecord(records, markdown, hasLegacyRecords);
                     key = resolved.key;
                     existingRecord = resolved.record;
                     migratedRecords = migratedRecords || resolved.migrated;
@@ -11319,6 +11408,7 @@ ${JSON.stringify(safePlan, null, 2)}
         });
 
         if (migratedRecords) saveSceneRecords(records, { skipPromptArchiveWrite: true });
+        } finally { cspMessagePass = previousPass; }
     }
 
 
@@ -11581,15 +11671,16 @@ ${JSON.stringify(safePlan, null, 2)}
                 const element = getMutationElement(scope);
                 if (element) cspPendingMessageScopes.add(element);
             });
-        } else {
+        } else if (scopes === null) {
             cspMessageFullScanPending = true;
         }
-        if (messageInjectScheduled) return;
+        if (cspIsScrolling || messageInjectScheduled || (!cspMessageFullScanPending && !cspPendingMessageScopes.size)) return;
         messageInjectScheduled = true;
         clearTimeout(messageInjectTimer);
         messageInjectTimer = setTimeout(() => {
             requestAnimationFrame(() => {
                 messageInjectScheduled = false;
+                if (cspIsScrolling) return;
                 const nextScopes = cspMessageFullScanPending ? null : Array.from(cspPendingMessageScopes);
                 cspMessageFullScanPending = false;
                 cspPendingMessageScopes.clear();
@@ -11612,6 +11703,7 @@ ${JSON.stringify(safePlan, null, 2)}
     }
 
     function mutationOwnsOnlyCspNodes(mutation) {
+        if (isScenePainterNode(mutation.target)) return true;
         const changed = [...Array.from(mutation.addedNodes || []), ...Array.from(mutation.removedNodes || [])]
             .map(getMutationElement)
             .filter(Boolean);
@@ -11633,12 +11725,14 @@ ${JSON.stringify(safePlan, null, 2)}
     }
 
     function collectAssistantMutationScopes(mutation) {
+        const target = getMutationElement(mutation.target);
+        const targetGroup = target?.closest?.('[data-message-group-id]');
+        if (targetGroup) return isScenePainterNode(target) ? [] : [targetGroup];
         const scopes = new Set();
         const addedNodes = Array.from(mutation.addedNodes || [])
             .map(getMutationElement)
             .filter(Boolean);
 
-        const target = getMutationElement(mutation.target);
         const targetScope = target?.closest?.('[data-message-group-id], .wrtn-markdown');
         if (targetScope && !isScenePainterNode(targetScope)) scopes.add(targetScope);
 
@@ -11646,7 +11740,7 @@ ${JSON.stringify(safePlan, null, 2)}
             if (isScenePainterNode(node) || isComposerNode(node) || isChatListNode(node) || isSuggestionNode(node)) return;
 
             const group = node.matches?.('[data-message-group-id]') ? node : node.closest?.('[data-message-group-id]');
-            if (group) scopes.add(group);
+            if (group) { scopes.add(group); return; }
             getMessageGroupCandidates(node).forEach(item => scopes.add(item));
 
             queryAllIncludingRoot(node, '.wrtn-markdown').forEach(markdown => {
@@ -11662,45 +11756,27 @@ ${JSON.stringify(safePlan, null, 2)}
         clearTimeout(cspScrollIdleTimer);
         cspScrollIdleTimer = setTimeout(() => {
             cspIsScrolling = false;
-            if (cspPendingScrollPass) {
-                cspPendingScrollPass = false;
-                scheduleMessageInject(0);
-                scheduleMenuInject(0);
-            }
+            if (cspMessageFullScanPending || cspPendingMessageScopes.size) scheduleMessageInject(0, cspMessageFullScanPending ? null : Array.from(cspPendingMessageScopes));
+            if (cspPendingScrollMenu) { cspPendingScrollMenu = false; scheduleMenuInject(0); }
         }, 220);
     }
 
     function handleObservedMutations(mutations) {
-        if (cspIsScrolling) {
-            cspPendingScrollPass = true;
-            return;
-        }
-
         let needMenu = false;
-        let needMessages = false;
-        let requireFullMessageScan = false;
         const messageScopes = new Set();
-        const scanLimit = Math.min(mutations.length, 80);
-
-        for (let i = 0; i < scanLimit; i++) {
-            const mutation = mutations[i];
+        for (const mutation of mutations) {
             if (mutationOwnsOnlyCspNodes(mutation)) continue;
+            const target = getMutationElement(mutation.target);
+            const group = target?.closest?.('[data-message-group-id]');
+            if (group) { messageScopes.add(group); continue; }
             if (!needMenu && mutationTouchesMenuArea(mutation)) needMenu = true;
-            const scopes = collectAssistantMutationScopes(mutation);
-            if (scopes.length) {
-                needMessages = true;
-                scopes.forEach(scope => messageScopes.add(scope));
-            }
+            collectAssistantMutationScopes(mutation).forEach(scope => messageScopes.add(scope));
         }
-
-        // 대량 mutation은 전부 훑지 않고 메시지 패스 1회로 접는다.
-        if (mutations.length > scanLimit) {
-            needMessages = true;
-            requireFullMessageScan = true;
+        if (needMenu) {
+            if (cspIsScrolling) cspPendingScrollMenu = true;
+            else scheduleMenuInject();
         }
-
-        if (needMenu) scheduleMenuInject();
-        if (needMessages) scheduleMessageInject(180, requireFullMessageScan ? null : Array.from(messageScopes));
+        if (messageScopes.size) scheduleMessageInject(180, Array.from(messageScopes));
     }
 
     const cspScopedObserver = new MutationObserver(handleObservedMutations);
@@ -11718,6 +11794,7 @@ ${JSON.stringify(safePlan, null, 2)}
             injectScheduled = false;
             cspMessageFullScanPending = false;
             cspPendingMessageScopes.clear();
+            cspPendingScrollMenu = false;
             scheduleInject(0);
         });
     }
@@ -12174,13 +12251,13 @@ ${JSON.stringify(safePlan, null, 2)}
     }
 
     function createV35StudioSession({targetBubble,markdown,plan,restored=null}={}){
-        const g=getGlobalSettings(),room=getRoomSettings();const nai={...getDefaultNaiSettings(),...(g.naiSettings||{}),...(restored?.naiSettings||{})};const p={...(restored?.plan||plan||{})};let ps=restored?.promptState?{...restored.promptState}:buildFinalPromptFromPlan(p,room);if(restored?.promptState?.charPrompts)ps=applySavedCharPromptsToPromptState(ps,restored.promptState.charPrompts);const model=normalizeNaiModel(restored?.naiSettings?.model||restored?.model||g.naiModel);return{targetBubble,markdown,messageKey:markdown?getMessageKey(markdown):(restored?.messageKey||''),room,plan:p,promptState:ps,generation:{...nai,model,ucPreset:getNaiUcPresetForModel(nai,model)},advanced:!!getV35UiState().studio.advanced,status:'idle',statusMessage:'',error:'',currentImageSrc:restored?.imageSrc||'',currentHistoryIndex:null,promptDirty:false,negativeDirty:false,characterDirty:false,quota:null,naiAccount:null}}
+        const g=getGlobalSettings(),room=getRoomSettings();const nai={...getDefaultNaiSettings(),...(g.naiSettings||{}),...(restored?.naiSettings||{})};const p={...(restored?.plan||plan||{})};let ps=restored?.promptState?{...restored.promptState}:buildFinalPromptFromPlan(p,room);if(restored?.promptState?.charPrompts)ps=applySavedCharPromptsToPromptState(ps,restored.promptState.charPrompts);const model=normalizeNaiModel(restored?.naiSettings?.model||restored?.model||g.naiModel);return{workTarget:captureCspWorkTarget(markdown,restored?.messageKey||''),targetBubble,markdown,messageKey:markdown?getMessageKey(markdown):(restored?.messageKey||''),room,plan:p,promptState:ps,generation:{...nai,model,ucPreset:getNaiUcPresetForModel(nai,model)},advanced:!!getV35UiState().studio.advanced,status:'idle',statusMessage:'',error:'',currentImageSrc:restored?.imageSrc||'',currentHistoryIndex:null,promptDirty:false,negativeDirty:false,characterDirty:false,quota:null,naiAccount:null}}
     function v35SourceLabel(value='') {
         const key=String(value||'').trim().replace(/[ _-]/g,'').toLowerCase();
         return ({target:'현재 장면',recent:'최근 대화',state:'현재 상태',world:'세계관 설정',visuallore:'시각 설정',inferred:'장면 추론',context:'장면 정보'})[key] || String(value||'장면 정보');
     }
     function v35ContextRows(plan={}){const vc=plan.visualContext||{},rows=[];const add=(ic,val,src)=>{const v=typeof val==='string'?val.trim():'';if(v)rows.push({ic,v,src:String(src||'CONTEXT').toUpperCase()})};add('📍',vc.location?.value||vc.location||plan.globalContext?.locationPrompt,vc.location?.basis||'RECENT');add('🌍',vc.region?.value||vc.region,vc.region?.basis||'WORLD');add('🌙',vc.time?.value||vc.timeOfDay?.value||vc.timeOfDay||plan.globalContext?.timePrompt,vc.time?.basis||vc.timeOfDay?.basis||'STATE');add('🌧',vc.weather?.value||vc.weather,vc.weather?.basis||'RECENT');(Array.isArray(vc.lighting)?vc.lighting:[]).slice(0,3).forEach(x=>add('💡',typeof x==='string'?x:(x?.value||x?.text),typeof x==='string'?'STATE':(x?.basis||'STATE')));(Array.isArray(vc.environment)?vc.environment:[]).slice(0,3).forEach(x=>add('🏛',typeof x==='string'?x:(x?.value||x?.text),typeof x==='string'?'시각 설정':(x?.basis||'시각 설정')));if(!rows.length){add('📍',plan.globalContext?.locationPrompt,'CONTEXT');add('🌙',plan.globalContext?.timePrompt,'CONTEXT');add('🏛',plan.globalContext?.atmospherePrompt,'CONTEXT')}return rows}
-    function openV35Studio(args){cspV35Session=createV35StudioSession(args||{});if(cspV35Session.messageKey){const rec=normalizeSceneRecordHistory(getSceneRecords()[cspV35Session.messageKey],cspV35Session.messageKey);if(rec?.history?.length){cspV35Session.currentHistoryIndex=clampHistoryIndex(rec);getRecordImageSrc(rec,cspV35Session.currentHistoryIndex).then(src=>{if(cspV35Session){cspV35Session.currentImageSrc=src;if(cspV35Root?.dataset.view==='studio')renderV35Studio()}}).catch(()=>{})}}renderV35Studio();refreshV35MobileQuota()}
+    function openV35Studio(args){cspV35Session=createV35StudioSession(args||{});const session=cspV35Session;if(cspV35Session.messageKey){const rec=normalizeSceneRecordHistory(getSceneRecords()[cspV35Session.messageKey],cspV35Session.messageKey);if(rec?.history?.length){cspV35Session.currentHistoryIndex=clampHistoryIndex(rec);getRecordImageSrc(rec,cspV35Session.currentHistoryIndex).then(src=>{if(cspV35Session===session&&isCurrentCspWorkTarget(session.workTarget)){session.currentImageSrc=src;if(cspV35Root?.dataset.view==='studio')renderV35Studio()}}).catch(()=>{})}}renderV35Studio();refreshV35MobileQuota()}
     function v35SamplerOptions(cur){const vals=['k_euler_ancestral','k_euler','k_dpmpp_2s_ancestral','k_dpmpp_2m','k_dpmpp_sde','ddim_v3'];cur=String(cur||'k_euler_ancestral');if(!vals.includes(cur))vals.unshift(cur);return vals.map(v=>`<option value="${escapeHtml(v)}" ${v===cur?'selected':''}>${escapeHtml(v)}</option>`).join('')}
     function v35NoiseOptions(cur){const vals=['karras','native','exponential','polyexponential'];cur=String(cur||'karras');if(!vals.includes(cur))vals.unshift(cur);return vals.map(v=>`<option value="${escapeHtml(v)}" ${v===cur?'selected':''}>${escapeHtml(v)}</option>`).join('')}
     function v35GalleryItems(){
@@ -12192,23 +12269,29 @@ ${JSON.stringify(safePlan, null, 2)}
         if(cspComicSession) return cspComicRun(cspComicSession,()=>cspComicGenerate(cspComicSession,reroll),'NAI가 만화를 생성 중…');
         const s=cspV35Session;
         if(!s||['generating','decoding'].includes(s.status))return;
-        const beforeRecord=s.messageKey?normalizeSceneRecordHistory(getSceneRecords()[s.messageKey],s.messageKey):null;
+        const workTarget=s.workTarget;
+        if(!isCurrentCspWorkTarget(workTarget)){v35Toast('대화방이나 답변이 바뀌었어요. 원래 메시지에서 다시 열어줘.','error',0);return;}
+        const roomId=workTarget.roomId;
+        const renderCurrent=()=>{if(cspV35Session===s&&roomId===getRoomId())renderV35Studio();};
+        const beforeRecord=s.messageKey?normalizeSceneRecordHistory(getSceneRecords(roomId)[s.messageKey],s.messageKey):null;
         if(beforeRecord&&isSceneHistoryFull(beforeRecord)){v35Toast(`이 장면 기록이 ${CSP_MAX_IMAGE_HISTORY}장까지 찼어. 기록의 ⋯ 메뉴에서 하나 지운 뒤 생성해줘.`,'error',0);return}
-        s.error='';s.status='prompting';s.statusMessage='프롬프트 구성 중…';renderV35Studio();
+        s.error='';s.status='prompting';s.statusMessage='프롬프트 구성 중…';renderCurrent();
         try{
             const req=v35PromptRequest();
-            if(!req.finalNegative&&!confirm('현재 Negative / UC가 비어 있어요. 그대로 생성할까요?')){s.status='idle';renderV35Studio();return}
-            s.status='generating';s.statusMessage='NovelAI 이미지 생성 중…';renderV35Studio();
+            if(!req.finalNegative&&!confirm('현재 Negative / UC가 비어 있어요. 그대로 생성할까요?')){s.status='idle';renderCurrent();return}
+            s.status='generating';s.statusMessage='NovelAI 이미지 생성 중…';renderCurrent();
             const naiSettings={...s.generation,model:v35Model()};
             if(reroll)naiSettings.seed=cspFreshRerollSeed(naiSettings.seed);
             const src=await generateImageWithNai({...req,settings:naiSettings});
-            s.status='decoding';s.statusMessage='이미지 불러오는 중…';renderV35Studio();
+            s.currentImageSrc=src;
+            s.status='decoding';s.statusMessage='이미지 불러오는 중…';renderCurrent();
             await v35Decode(src);
 
-            const records=getSceneRecords();
+            const records=getSceneRecords(roomId);
             const existing=s.messageKey?normalizeSceneRecordHistory(records[s.messageKey],s.messageKey):null;
             if(existing){
                 await commitGeneratedImageReroll({
+                    roomId,
                     messageKey:s.messageKey,
                     record:existing,
                     imageUrl:src,
@@ -12219,19 +12302,19 @@ ${JSON.stringify(safePlan, null, 2)}
                 });
             }else{
                 if(!s.markdown)throw new Error('원래 채팅 메시지를 찾지 못해 새 삽화를 삽입할 수 없어요. Gallery에서 현재 방의 기록을 다시 열어줘.');
-                await insertFinalSceneImage({markdown:s.markdown,imageUrl:src,plan:{...s.plan},mode:'nai',...req,referenceInfo:getAppliedReferenceSummary(req.charPrompts,naiSettings.model),naiSettings});
+                await insertFinalSceneImage({workTarget,markdown:s.markdown,imageUrl:src,plan:{...s.plan},mode:'nai',...req,referenceInfo:getAppliedReferenceSummary(req.charPrompts,naiSettings.model),naiSettings});
                 s.messageKey=s.messageKey||getMessageKey(s.markdown);
             }
 
             s.currentImageSrc=src;
-            const rec=s.messageKey?normalizeSceneRecordHistory(getSceneRecords()[s.messageKey],s.messageKey):null;
+            const rec=s.messageKey?normalizeSceneRecordHistory(getSceneRecords(roomId)[s.messageKey],s.messageKey):null;
             s.currentHistoryIndex=rec?clampHistoryIndex(rec):null;
-            s.status='ready';s.statusMessage='';s.error='';renderV35Studio();
-            refreshV35MobileQuota({ force: true });
+            s.status='ready';s.statusMessage='';s.error='';renderCurrent();
+            if(cspV35Session===s&&roomId===getRoomId())refreshV35MobileQuota({ force: true });
             v35Toast(reroll?'리롤 완료':'이미지 생성 완료','success');
         }catch(err){
             console.error('[CSP v4.35] generation failed',err);
-            s.status='idle';s.statusMessage='';s.error='생성 실패 · '+(err?.message||err);renderV35Studio();
+            s.status='idle';s.statusMessage='';s.error='생성 실패 · '+(err?.message||err);renderCurrent();
             v35Toast('NAI 생성 실패: '+(err?.message||err),'error',0);
         }
     }
