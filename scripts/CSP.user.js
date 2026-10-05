@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🎨 Crack Scene Painter (크랙 장면 삽화)
 // @namespace    crack-scene-painter
-// @version      5.2.5
+// @version      5.2.6
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/CSP.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/CSP.user.js
 // @description  크랙 AI 삽화 + 만화 콘티. 번개 오른쪽 말풍선에서 컷 분할·전용 지침·NAI V5 만화 생성.
@@ -16,6 +16,7 @@
 // @connect      api.novelai.net
 // @connect      crack-api.wrtn.ai
 // @connect      raw.githubusercontent.com
+// @connect      content-firebaseappcheck.googleapis.com
 // @require      https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js
 // @run-at       document-idle
 // ==/UserScript==
@@ -30,6 +31,7 @@
         'googleApiKey',
         'deepseekApiKey',
         'firebaseConfigJson',
+        'firebaseAppCheckDebugToken',
         'naiApiKey'
     ]);
     const ENABLED_KEY = `${CSP_PREFIX}_enabled`;
@@ -534,6 +536,54 @@
         });
     }
 
+    // App Check: 디버그 토큰을 Firebase 교환 서버에서 App Check 토큰으로 바꿔 AI 요청에 싣는다.
+    // 같은 버전의 firebase-app.js에 등록돼야 하므로 SDK 버전을 맞춰 불러오고, 백그라운드 갱신 없이 AI 요청 때만 교환한다.
+    const firebaseAppChecks = new Map();
+
+    async function loadFirebaseAppCheckModule(version = '12.5.0') {
+        const safeVersion = String(version || '12.5.0').trim() || '12.5.0';
+        try {
+            const appCheckModule = await import(`https://www.gstatic.com/firebasejs/${encodeURIComponent(safeVersion)}/firebase-app-check.js`);
+            if (!appCheckModule?.initializeAppCheck || !appCheckModule?.CustomProvider || !appCheckModule?.getToken) {
+                throw new Error('firebase-app-check.js 모듈에서 initializeAppCheck/CustomProvider/getToken을 찾지 못했어요.');
+            }
+            return appCheckModule;
+        } catch (err) {
+            throw new Error(`Firebase App Check SDK 로드 실패: ${err.message || err}. SDK 버전(${safeVersion})을 확인해줘.`);
+        }
+    }
+
+    async function exchangeFirebaseAppCheckDebugToken(firebaseConfig, debugToken) {
+        const { projectId, appId, apiKey } = firebaseConfig;
+        const data = await gmRequestJson({
+            method: 'POST',
+            url: `https://content-firebaseappcheck.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}:exchangeDebugToken?key=${encodeURIComponent(apiKey)}`,
+            headers: { 'Content-Type': 'application/json' },
+            data: { debug_token: debugToken }
+        });
+        const token = String(data?.token || '');
+        if (!token) throw new Error('App Check 서버가 토큰을 주지 않았어요.');
+        const ttl = String(data?.ttl || '').match(/^([\d.]+)s$/);
+        const ttlMs = (ttl ? Number(ttl[1]) : 3600) * 1000;
+        // 만료 5분 전에 SDK가 새로 받도록 남은 시간을 줄여서 알려준다(짧은 TTL은 절반만 사용).
+        return { token, expireTimeMillis: Date.now() + Math.max(ttlMs / 2, ttlMs - 300000) };
+    }
+
+    async function ensureFirebaseAppCheck(app, firebaseConfig, debugToken, sdkVersion) {
+        if (firebaseAppChecks.has(app.name)) return firebaseAppChecks.get(app.name);
+        const missing = ['apiKey', 'projectId', 'appId'].filter(key => !String(firebaseConfig?.[key] || '').trim());
+        if (missing.length) throw new Error(`App Check를 쓰려면 Firebase Config에 ${missing.join('·')} 값이 있어야 해요.`);
+        const appCheckModule = await loadFirebaseAppCheckModule(sdkVersion);
+        if (firebaseAppChecks.has(app.name)) return firebaseAppChecks.get(app.name);
+        const appCheck = appCheckModule.initializeAppCheck(app, {
+            provider: new appCheckModule.CustomProvider({ getToken: () => exchangeFirebaseAppCheckDebugToken(firebaseConfig, debugToken) }),
+            isTokenAutoRefreshEnabled: false
+        });
+        const entry = { appCheck, getToken: appCheckModule.getToken };
+        firebaseAppChecks.set(app.name, entry);
+        return entry;
+    }
+
     async function callFirebaseAiLogicGenerateContent(geminiRequest, payload) {
         const firebaseConfig = parseFirebaseConfigInput(geminiRequest.firebaseConfigJson);
         if (!firebaseConfig || typeof firebaseConfig !== 'object') {
@@ -544,10 +594,26 @@
         const sdkVersion = String(geminiRequest.firebaseSdkVersion || '12.5.0').trim() || '12.5.0';
 
         const firebase = await loadFirebaseAiModules(sdkVersion);
-        const appName = `csp-firebase-${hashTiny(getFirebaseConfigSummary(firebaseConfig))}`;
+        const debugToken = String(geminiRequest.firebaseAppCheckDebugToken || '').trim();
+        // App Check는 앱마다 한 번만 붙일 수 있으므로 토큰이 바뀌면 다른 이름의 앱으로 새로 연다.
+        const appName = `csp-firebase-${hashTiny(getFirebaseConfigSummary(firebaseConfig))}${debugToken ? `-ac${hashTiny(debugToken)}` : ''}`;
         const app = firebase.getApps().some(existing => existing.name === appName)
             ? firebase.getApp(appName)
             : firebase.initializeApp(firebaseConfig, appName);
+
+        if (debugToken) {
+            // getAI보다 먼저 붙여야 AI 요청에 App Check 토큰이 실린다. 교환 실패는 원인 그대로 먼저 알린다.
+            const appCheck = await ensureFirebaseAppCheck(app, firebaseConfig, debugToken, sdkVersion);
+            try {
+                await appCheck.getToken(appCheck.appCheck, false);
+            } catch (err) {
+                const message = String(err?.message || err || '').replace(/\s+/g, ' ').trim();
+                const hint = /\b(400|403|404)\b/.test(message)
+                    ? ' · Firebase 콘솔 > App Check > 앱 메뉴 > 디버그 토큰 관리에 이 토큰이 등록돼 있는지, Firebase Config가 같은 프로젝트·앱인지 확인해줘.'
+                    : '';
+                throw new Error(`Firebase App Check 토큰 확인 실패: ${message || '알 수 없는 오류'}${hint}`);
+            }
+        }
 
         const ai = firebase.getAI(app, {
             backend: new firebase.VertexAIBackend(location)
@@ -577,7 +643,11 @@
             };
         } catch (err) {
             const message = String(err?.message || err || '').replace(/\s+/g, ' ').trim();
-            throw new Error(`Firebase AI Logic 호출 실패: ${message || '알 수 없는 오류'}`);
+            const status = Number(err?.customData?.status) || 0;
+            const appCheckHint = (status === 401 || status === 403 || /\b40[13]\b/.test(message)) && /app.?check|unauthenticated|attestation/i.test(message)
+                ? (debugToken ? ' · App Check 디버그 토큰이 콘솔에 등록돼 있는지 확인해줘.' : ' · Firebase가 App Check를 요구해요. 설정의 App Check 디버그 토큰 칸을 채워줘.')
+                : '';
+            throw new Error(`Firebase AI Logic 호출 실패: ${message || '알 수 없는 오류'}${appCheckHint}`);
         }
     }
 
@@ -862,6 +932,7 @@
                 firebaseConfigJson,
                 firebaseLocation,
                 firebaseSdkVersion,
+                firebaseAppCheckDebugToken: String(global?.firebaseAppCheckDebugToken || '').trim(),
                 headers: {}
             };
         }
@@ -2134,6 +2205,7 @@ director.lightingIntent:
             deepseekModel: 'deepseek-v4-flash',
             geminiThinkingMode: 'auto',
             firebaseConfigJson: '',
+            firebaseAppCheckDebugToken: '',
             firebaseLocation: 'global',
             firebaseSdkVersion: '12.5.0',
             naiApiKey: '',
@@ -13262,6 +13334,7 @@ ${v35GaugeHtml({thin:true,percent:b.charCount/b.maxCharacters*100,tone:'ok'})}</
             googleApiKey:h.querySelector('#s-google-key')?.value.trim()||(preserveSecrets?g.googleApiKey:''),
             deepseekApiKey:h.querySelector('#s-deep-key')?.value.trim()||(preserveSecrets?g.deepseekApiKey:''),
             firebaseConfigJson:h.querySelector('#s-firebase')?.value.trim()||(preserveSecrets?g.firebaseConfigJson:''),
+            firebaseAppCheckDebugToken:h.querySelector('#s-fappcheck')?.value.trim()||(preserveSecrets?g.firebaseAppCheckDebugToken:''),
             naiApiKey:h.querySelector('#s-nai-key')?.value.trim()||(preserveSecrets?g.naiApiKey:'')
         }
     }
@@ -13270,7 +13343,7 @@ ${v35GaugeHtml({thin:true,percent:b.charCount/b.maxCharacters*100,tone:'ok'})}</
         const providerPanel=provider==='deepseek'
             ? `<div class="section"><div class="section-title">🧠 DeepSeek <span class="badge ${g.deepseekApiKey?'ok':''}">${g.deepseekApiKey?'● 설정됨':'○ 미설정'}</span></div><div class="field"><label>모델</label><select class="select" id="s-deep-model">${buildDeepSeekModelOptionsHtml(g.deepseekModel)}</select></div><div class="field"><label>API 키</label><input class="input" id="s-deep-key" type="password" placeholder="${g.deepseekApiKey?'저장됨 · 변경할 때만 입력':'DeepSeek API Key'}"></div></div>`
             : provider==='firebase'
-                ? `<div class="section"><div class="section-title">🔥 Firebase AI Logic <span class="badge ${g.firebaseConfigJson?'ok':''}">${g.firebaseConfigJson?'● 설정됨':'○ 미설정'}</span></div><div class="grid2"><div class="field"><label>모델</label><select class="select" id="s-google-model">${buildGeminiModelOptionsHtml(g.googleModel)}</select></div><div class="field"><label>추론</label><select class="select" id="s-thinking"><option value="auto" ${g.geminiThinkingMode==='auto'?'selected':''}>자동</option><option value="fast" ${g.geminiThinkingMode==='fast'?'selected':''}>빠름</option><option value="normal" ${g.geminiThinkingMode==='normal'?'selected':''}>보통</option><option value="deep" ${g.geminiThinkingMode==='deep'?'selected':''}>깊게</option></select></div></div><div class="field"><label>Firebase 설정</label><textarea class="ta compact" id="s-firebase" placeholder="${g.firebaseConfigJson?'저장됨 · 변경할 때만 입력':'firebaseConfig'}"></textarea></div><div class="grid2"><div class="field"><label>리전</label><input class="input" id="s-floc" value="${escapeHtml(g.firebaseLocation||'global')}"></div><div class="field"><label>SDK</label><input class="input" id="s-fsdk" value="${escapeHtml(g.firebaseSdkVersion||'12.5.0')}"></div></div></div>`
+                ? `<div class="section"><div class="section-title">🔥 Firebase AI Logic <span class="badge ${g.firebaseConfigJson?'ok':''}">${g.firebaseConfigJson?'● 설정됨':'○ 미설정'}</span></div><div class="grid2"><div class="field"><label>모델</label><select class="select" id="s-google-model">${buildGeminiModelOptionsHtml(g.googleModel)}</select></div><div class="field"><label>추론</label><select class="select" id="s-thinking"><option value="auto" ${g.geminiThinkingMode==='auto'?'selected':''}>자동</option><option value="fast" ${g.geminiThinkingMode==='fast'?'selected':''}>빠름</option><option value="normal" ${g.geminiThinkingMode==='normal'?'selected':''}>보통</option><option value="deep" ${g.geminiThinkingMode==='deep'?'selected':''}>깊게</option></select></div></div><div class="field"><label>Firebase 설정</label><textarea class="ta compact" id="s-firebase" placeholder="${g.firebaseConfigJson?'저장됨 · 변경할 때만 입력':'firebaseConfig'}"></textarea></div><div class="field"><label>App Check 디버그 토큰</label><input class="input" id="s-fappcheck" type="password" autocomplete="off" spellcheck="false" placeholder="${g.firebaseAppCheckDebugToken?'저장됨 · 변경할 때만 입력':'123a4567-b89c-12d3-e456-789012345678'}"></div><div class="grid2"><div class="field"><label>리전</label><input class="input" id="s-floc" value="${escapeHtml(g.firebaseLocation||'global')}"></div><div class="field"><label>SDK</label><input class="input" id="s-fsdk" value="${escapeHtml(g.firebaseSdkVersion||'12.5.0')}"></div></div></div>`
                 : `<div class="section"><div class="section-title">✨ Google Gemini <span class="badge ${g.googleApiKey?'ok':''}">${g.googleApiKey?'● 설정됨':'○ 미설정'}</span></div><div class="grid2"><div class="field"><label>모델</label><select class="select" id="s-google-model">${buildGeminiModelOptionsHtml(g.googleModel)}</select></div><div class="field"><label>추론</label><select class="select" id="s-thinking"><option value="auto" ${g.geminiThinkingMode==='auto'?'selected':''}>자동</option><option value="fast" ${g.geminiThinkingMode==='fast'?'selected':''}>빠름</option><option value="normal" ${g.geminiThinkingMode==='normal'?'selected':''}>보통</option><option value="deep" ${g.geminiThinkingMode==='deep'?'selected':''}>깊게</option></select></div></div><div class="field"><label>API 키</label><input class="input" id="s-google-key" type="password" placeholder="${g.googleApiKey?'저장됨 · 변경할 때만 입력':'Gemini API Key'}"></div></div>`;
 
         h.innerHTML=`<h2 class="page-title">🔌 연결</h2><div class="page-desc">장면 분석 API와 NovelAI 인증을 관리해.</div>
@@ -13296,7 +13369,7 @@ ${v35GaugeHtml({thin:true,percent:b.charCount/b.maxCharacters*100,tone:'ok'})}</
         const status=h.querySelector('#s-conn-status');
         h.querySelector('#s-test-scene').onclick=async e=>{const b=e.currentTarget,old=b.textContent;b.disabled=true;b.textContent='확인 중…';status.textContent='장면 분석 API 연결 확인 중…';try{const draft=v35ConnectionDraft(h);saveGlobalSettings(draft);const req=getGeminiGenerateContentRequestConfig(draft),data=await requestGeminiGenerateContent(req,{contents:[{role:'user',parts:[{text:'Reply with exactly: OK'}]}],generationConfig:buildGeminiConnectionTestGenerationConfig(req)});if(!extractTextFromGeminiResponseData(data))throw new Error('응답 본문이 비어 있어요.');const providerName=req.provider==='deepseek'?'DeepSeek':req.provider==='firebase'?'Firebase AI Logic':'Google Gemini';status.textContent=`● 연결 정상 · ${providerName} · ${req.model}`;v35Toast(`${providerName} 연결 정상`,'success')}catch(err){status.textContent='! 연결 실패 · '+(err?.message||err);v35Toast(status.textContent,'error',0)}finally{b.disabled=false;b.textContent=old}};
         h.querySelector('#s-test-nai').onclick=async e=>{const b=e.currentTarget,old=b.textContent;b.disabled=true;b.textContent='확인 중…';status.textContent='NovelAI 연결 확인 중…';try{const draft=v35ConnectionDraft(h);saveGlobalSettings(draft);const result=await fetchNaiAnlasBalance(draft.naiApiKey||'');status.textContent=`● NAI 정상 · ${Number(result.total||0).toLocaleString()} Anlas`;v35Toast('NovelAI 연결 정상','success')}catch(err){status.textContent='! NAI 연결 실패 · '+(err?.message||err);v35Toast(status.textContent,'error',0)}finally{b.disabled=false;b.textContent=old}};
-        h.querySelector('#s-clear-creds').onclick=()=>{if(!confirm('Google / DeepSeek / Firebase / NovelAI 인증정보를 모두 삭제할까요?'))return;const cur=getGlobalSettings();saveGlobalSettings({...cur,googleApiKey:'',deepseekApiKey:'',firebaseConfigJson:'',naiApiKey:''});v35Toast('인증정보를 삭제했어.','success');renderV35Connections(h)}
+        h.querySelector('#s-clear-creds').onclick=()=>{if(!confirm('Google / DeepSeek / Firebase / NovelAI 인증정보를 모두 삭제할까요?'))return;const cur=getGlobalSettings();saveGlobalSettings({...cur,googleApiKey:'',deepseekApiKey:'',firebaseConfigJson:'',firebaseAppCheckDebugToken:'',naiApiKey:''});v35Toast('인증정보를 삭제했어.','success');renderV35Connections(h)}
     }
     function renderV35GenerationDefaults(h){
         const g=getGlobalSettings(),s={...getDefaultNaiSettings(),...(g.naiSettings||{})},model=normalizeNaiModel(g.naiModel),fam=getNaiModelCapability(model).family;
