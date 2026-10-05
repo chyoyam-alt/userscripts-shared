@@ -10115,13 +10115,15 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
       let all;try{all=await WishHistory.read(room);}catch(e){if(isWishHistoryStale(e)){ui.toast('대화가 바뀌는 중이라 원문을 찾지 못했습니다. 잠시 뒤 다시 눌러 주세요.','info',4200);return;}throw e;}
       if(state.currentRoom!==room)return;
       const list=all.filter(m=>['user','assistant'].includes(messageRoleOf(m))).map(m=>({id:String(messageIdOf(m)),role:messageRoleOf(m),raw:messageTextOf(m)})),textOf=m=>m.text??=stripAutomationNoise(m.raw,true,true).trim();
-      // The texts searched in turn: as read, then as the AI read it (page wrapping out; the memory paths also leave out status panels).
-      const views=[textOf,m=>m.clean??=wishCleanRpText(textOf(m)),m=>m.bare??=wishCleanRpText(stripAutomationNoise(m.raw,true).trim())];
+      // The texts searched in turn: as read, then as the AI read it (page wrapping out; the memory paths also leave out status panels,
+      // which only a fenced message has). A message whose text is the same as in the pass before is not searched again.
+      const views=[textOf,m=>m.clean??=wishCleanRpText(textOf(m)),m=>m.bare??=/```|~~~/.test(m.raw)?wishCleanRpText(stripAutomationNoise(m.raw,true).trim()):views[1](m)];
+      const skip=(m,v)=>v?views[v](m)===views[v-1](m)||!(m['marks'+v]??=views[v](m).replace(/[*_~`]/g,'')).includes(word):!m.raw.replace(/[*_~`]/g,'').includes(word);
       let turn=0;const turns=list.map(m=>m.role==='user'?++turn:turn),anchorAt=t.anchor?list.findIndex(m=>m.id===t.anchor):-1;
       const label=i=>(list[i].role==='user'?'USER':'AI')+' · '+fmtTurn(turns[i])+' · 메시지 '+shortId(list[i].id);
       // Quick skip: a message whose raw text lacks the quote's longest word (markdown marks removed) cannot match.
       const word=(q.match(/[\p{L}\p{N}]+/gu)||[]).reduce((a,b)=>b.length>a.length?b:a,'');
-      const scan=(role,pass,v)=>list.flatMap((m,i)=>{if((role&&m.role!==role)||!(v?views[v](m):m.raw).replace(/[*_~`]/g,'').includes(word))return [];const at=locate(views[v](m),q,pass);return at?[{i,...at,v}]:[];});
+      const scan=(role,pass,v)=>list.flatMap((m,i)=>{if((role&&m.role!==role)||skip(m,v))return [];const at=locate(views[v](m),q,pass);return at?[{i,...at,v}]:[];});
       // The exact words anywhere come before a match across the quote's ellipsis. In each pass the quote's role is searched first; a line
       // the AI labeled by its speaker (a USER character narrated in an AI reply) is then looked for on both sides. The next text is
       // searched only when the one before has no match at all, so a quote found as read is shown exactly as before.
