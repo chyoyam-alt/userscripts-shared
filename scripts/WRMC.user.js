@@ -1535,6 +1535,8 @@ const WLOG=(()=>{
     return {category,cause,next,mode,relay,service,httpStatus:http,outcome:outcomes[r.outcome]||(unsaved?outcomes['not-applied']:'저장·전송 결과 확인 필요: 이 오류만으로 최종 반영 여부를 단정할 수 없습니다.')};
   }
   function fail(operation,error,details={}){
+    // An info event (a held proposal saved or settled) is not a failure: it stays out of 실패·주의 기록.
+    if(details?.level==='info')return null;
     const obj=error&&typeof error==='object',parse=error instanceof SyntaxError||error?.name==='SyntaxError';
     const d={...(error?.diagnostic||{}),...details},now=Date.now();
     const row=safeRow({id:'err-'+now+'-'+(++seq),at:now,lastAt:now,count:1,operation:operation||current()?.operation||'작업',stage:d.stage||current()?.label||'',message:parse?'JSON 파싱 실패 · 응답 또는 파일의 문법을 읽지 못했습니다.':error?.message||error||'알 수 없는 오류',code:error?.code||d.code||error?.name||'',...Object.fromEntries(textKeys.filter(k=>!['operation','stage','message','code','version'].includes(k)).map(k=>[k,d[k]||''])),...Object.fromEntries(numberKeys.map(k=>[k,d[k]??error?.[k]??0])),version:SCRIPT_VERSION,level:d.level==='warn'?'주의':'오류'});
@@ -3386,7 +3388,7 @@ const ExternalReplay=(()=>{
     const total=(staged.relationshipHeldAdds?.length||0)+(staged.cognitionHeldAdds?.length||0),notices=staged.notices||=[];
     const text=[queued?'보류 제안 '+total+'건 중 '+queued+'건은 장부 용량 초과로 대기열에 보관':'',suppressed.length?'이미 확인한 같은 제안 '+suppressed.length+'건은 다시 추가하지 않음':''].filter(Boolean).join(' · ');if(text)notices.push(text);
     if(settled)notices.push('보류 제안 '+settled+'건이 결과와 일치해 정리됨');
-    if(total||settled)try{WLOG.fail('held-commit',text||'보류 제안 저장 완료',{level:'info',added:Math.max(0,total-queued-suppressed.length-duplicate),queued,duplicate,suppressed:suppressed.length,settled,suppressedSigs:suppressed.map(r=>r.sig)});}catch{}
+    if(total||settled)try{WLOG.fail('held-commit',text||'보류 제안 저장 완료',{level:queued?'warn':'info',added:Math.max(0,total-queued-suppressed.length-duplicate),queued,duplicate,suppressed:suppressed.length,settled,suppressedSigs:suppressed.map(r=>r.sig)});}catch{}
   }
 
 const WishRelationships = (() => {
@@ -12309,7 +12311,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
           let heldSidecar;if(hp.queued.length){const value=clone(heldSc);value.queue.F.push(...hp.queued);value.rev=(Number(heldSc.rev)||0)+1;value.updatedAt=nowIso();heldSidecar={id:value.id,expectRev:Number(heldSc.rev)||0,value};}
           const automation={...clone(la),apiHeldProtected:hp.ledger,apiLastProcessedMessageId:j.anchor,apiCoveredAssistantIds:s.messages.filter(m=>m.role==='assistant').map(m=>m.id),apiLastRunAt:Date.now(),apiLastStatus:'자료집 묶음 정리 · '+j.segments.length+'구간 완료'+heldText};
           await putLorePackAndRoomAtomic(pack,lorePackStorageFingerprint(original),r,automation,{expectedRoomRevision:r._rev,expectedRoomEpoch:r._epoch,expectedLibraryFingerprints:await captureLorePackStorageFingerprints(ps,pack.scopeId),dirtyReason:'자료집 묶음 정리 적용',...(heldSidecar?{heldSidecar}:{})});
-          try{WLOG.fail('held-lore-commit',heldText.replace(/^ · /,'')||'자료집 보류 제안 저장 완료',{level:'info',added,queued:hp.queued.length,duplicate:hp.duplicate.length,suppressed:hp.suppressed.length,suppressedSigs:hp.suppressed.map(h=>h.sig)});}catch{}
+          try{WLOG.fail('held-lore-commit',heldText.replace(/^ · /,'')||'자료집 보류 제안 저장 완료',{level:hp.queued.length?'warn':'info',added,queued:hp.queued.length,duplicate:hp.duplicate.length,suppressed:hp.suppressed.length,suppressedSigs:hp.suppressed.map(h=>h.sig)});}catch{}
         }else{
           const selected=clone(r);selected.unified={...r.unified,...(kind==='memory'?{memoryCursor:j.anchor,memoryManifest:manifest}:{observeCursor:j.anchor,observeManifest:manifest}),lastError:'',failedKind:'',retry:null,status:labels[kind]+' 완료',lastRunAt:Date.now()};
           if(kind==='memory'){
