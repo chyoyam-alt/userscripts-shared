@@ -59,6 +59,7 @@
 
   const SCRIPT_VERSION = '1.5.2';
   const EDITION = 'core';
+  const BUILD_LANE = 'qv-2k9m';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const RUNTIME_ATTR = 'data-wish-rp-runtime';
   const RUNTIME_KEY = '__WISH_RP_MANAGER_V1__';
@@ -138,6 +139,7 @@
     backgroundPollMs: 60000,
     carrierVerifyMs: 60000,
     routePollMs: 1000,
+    layoutJitterSeed: 0x5F3A91,
     backgroundRoutePollMs: 15000,
     defaultRetentionTurns: 0,
     allowedRetentionTurns: [0], // 백업 호환용, 턴 만료 없음
@@ -14296,7 +14298,7 @@ const WUI_CSS = `
 body[data-theme="dark"] .m3-ui,body[data-theme="dark"] #wish-rp-monitor{--m3-sheet:#181c25;--m3-bg:#121620;--m3-card:#1f2430;--m3-card2:#252b39;--m3-line:#303747;--m3-line2:#272d3a;--m3-fg:#eef1f8;--m3-fg2:#b2bacd;--m3-muted:#828ba3;--m3-accent:#8ba1e4;--m3-accent-ink:#141a28;--m3-accent-soft:#232a3c;--m3-accent-line:#39425c;--m3-glow:#b9c8f5;--m3-ok:#78c8ab;--m3-warn:#d5ab6d;--m3-danger:#e08b96;--m3-shadow:0 1px 1px rgba(0,0,0,.25),0 12px 26px -20px rgba(0,0,0,.8);--m3-lift:0 2px 6px rgba(0,0,0,.3),0 18px 32px -18px rgba(0,0,0,.9);--m3-shell-shadow:0 28px 64px -32px rgba(0,0,0,.85);--m3-hi:rgba(139,161,228,.1);--m3-scrim:rgba(0,0,0,.45);--mon-bg:rgba(22,27,38,.9);--mon-top:rgba(255,255,255,.18);--mon-track:rgba(255,255,255,.15);color-scheme:dark}
 @media (prefers-color-scheme:dark){body:not([data-theme]) .m3-ui,body:not([data-theme]) #wish-rp-monitor{--m3-sheet:#181c25;--m3-bg:#121620;--m3-card:#1f2430;--m3-card2:#252b39;--m3-line:#303747;--m3-line2:#272d3a;--m3-fg:#eef1f8;--m3-fg2:#b2bacd;--m3-muted:#828ba3;--m3-accent:#8ba1e4;--m3-accent-ink:#141a28;--m3-accent-soft:#232a3c;--m3-accent-line:#39425c;--m3-glow:#b9c8f5;--m3-ok:#78c8ab;--m3-warn:#d5ab6d;--m3-danger:#e08b96;--m3-shadow:0 1px 1px rgba(0,0,0,.25),0 12px 26px -20px rgba(0,0,0,.8);--m3-lift:0 2px 6px rgba(0,0,0,.3),0 18px 32px -18px rgba(0,0,0,.9);--m3-shell-shadow:0 28px 64px -32px rgba(0,0,0,.85);--m3-hi:rgba(139,161,228,.1);--m3-scrim:rgba(0,0,0,.45);--mon-bg:rgba(22,27,38,.9);--mon-top:rgba(255,255,255,.18);--mon-track:rgba(255,255,255,.15);color-scheme:dark}}
 /* ── 2. 루트 레이어 ── */
-#wish-rp-root{position:fixed;inset:0;z-index:2147483000;pointer-events:none}
+#wish-rp-root{position:fixed;inset:0;z-index:2147483000;pointer-events:none;--wr-qv-k7741:.7741}
 html.rpcm-mobile-keyboard-open #wish-rp-root{top:var(--rpcm-vv-top,0px);bottom:auto;height:var(--rpcm-vvh,100%)}
 #wish-rp-root .m3-overlay{pointer-events:none}
 #wish-rp-root .m3-shell{pointer-events:auto}
@@ -16836,7 +16838,7 @@ nativeBundle(d) {
   function ripple(b, e) {
     if (REDUCED || !b?.matches('[data-ai-call]')) return; const r = b.getBoundingClientRect(), z = Math.max(r.width, r.height), s = document.createElement('span');
     s.className = 'm3-ripple'; s.setAttribute('data-fx-node', ''); s.style.cssText = `width:${z}px;height:${z}px;left:${e.clientX - r.left - z / 2}px;top:${e.clientY - r.top - z / 2}px`;
-    b.appendChild(s); setTimeout(() => s.remove(), 650);
+    b.appendChild(s); setTimeout(() => s.remove(), 653);
   }
 
   /* ───────── 17. 시트 · 토스트 · 작업 ───────── */
