@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽 Wish RP Manager Core
 // @namespace    local.rp.context.manager
-// @version      1.5.3
+// @version      1.5.3.2
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @description  Crack RP용 컨텍스트 주입·인지·자동 장기기억·자료집·전체 재구축을 하나로 관리합니다.
@@ -57,7 +57,7 @@
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '1.5.3';
+  const SCRIPT_VERSION = '1.5.3.2';
   const EDITION = 'core';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   // Managers without synchronous GM storage (iOS Userscripts, Greasemonkey 4) cannot keep settings; say so instead of a raw ReferenceError.
@@ -303,7 +303,7 @@
 - full/compact/micro는 key_quote를 포함해 모두 비우지 않는다. 확인되지 않은 target/location/date 등은 추측하지 말고 "", 없는 triggers/entities는 []로 쓴다.
 - key_quote를 제외한 카드에는 같은 type과 name을 중복 출력하지 않는다. diagnostics에 불확실성을 적더라도 추측 카드를 entries에 넣지 않는다.
 - [USER]/[ASSISTANT]는 메시지 역할이지 극중 인물명이 아니다. key_quote.speaker에는 RP에서 확인한 실제 인물 정본명을 쓴다.
-- 파일 미리보기·검색 발췌만 보고 ID나 종료 표시가 없다고 단정하지 않는다. 실제 첨부의 RP 전체와 맨 끝 [END OF RP LOG]·END_OF_LOG_TOKEN을 확인한다. 필요한 정보가 실제로 없다면 가져오기용 JSON이나 빈 entries를 만들지 말고 누락 항목을 알린다. 전체 기억용 Wish-재구축 TXT라면 같은 파일의 재첨부가 아니라 자료집의 ‘전체 TXT + 지침 저장’으로 받은 전용 TXT 하나가 필요하다고 안내한다.
+- 파일 미리보기·검색 발췌만 보고 ID나 종료 표시가 없다고 단정하지 않는다. 실제 첨부의 RP 전체와 맨 끝 [END OF RP LOG]·END_OF_LOG_TOKEN을 확인한다. 필요한 정보가 실제로 없다면 가져오기용 JSON이나 빈 entries를 만들지 말고 누락 항목을 알린다. 전체 기억용 Wish-재구축 TXT라면 같은 파일의 재첨부가 아니라 ‘외부 AI로 재구축’에서 ‘자료집’을 골라 받은 전용 TXT 하나가 필요하다고 안내한다.
 - 입력에 없는 이름·사실·소유·복장·장소·날짜·대사를 만들지 않는다.`,
   });
   // 외부 AI 복붙(API 없이) 요청문 맨 앞에 붙는 공통 안내입니다. 지침 편집의 '외부 AI · 복붙 공통 안내'에서 바꿀 수 있습니다.
@@ -4867,7 +4867,10 @@ function wishApplyReferencesDelta(db,data){if(!data||!Array.isArray(data.upsert)
     const shared=loadAiSettings().unifiedAutomation;
     // The Settings tab is global; the Home pause/resume control belongs to this room.
     const enabled=typeof room?.automationEnabled==='boolean'?room.automationEnabled:(room?.unified?.settings?.enabled??shared.enabled);
-    const legacyOff=typeof room?.automationEnabled!=='boolean'&&(room?.unified?.settings?.memoryEnabled===false||room?.autoMemory?.enabled===false);
+    // The old per-room memory switch (autoMemory.enabled) still holds until this room's pause control is used. room.unified.settings is
+    // only a copy of the shared settings, made when the room was set up (initialize, rebaseAfterImport): not a room choice, so it never
+    // keeps 기억 묶음 off after Settings turns it on.
+    const legacyOff=typeof room?.automationEnabled!=='boolean'&&room?.autoMemory?.enabled===false;
     return {...shared,enabled,...(legacyOff?{memoryEnabled:false}:{})};
   }
   function turnText(m){
@@ -5322,6 +5325,25 @@ const deltaNotices=[];
   }
 
 function applyObserve(cog,speech,data,rp,cutoff,relationshipRows=[],relationshipOptions={}) {
+    // A NEW_PERSON joins a person here by the wider rule (a normalized name or an alias, applyObserveRows) only while the answer
+    // agrees with it. When the joined answer fails, or leaves out more rows (fix.left: one direction twice, knows and doesNotKnow
+    // together, a row about oneself, a concealment the holder does not know) than the same answer staged without the joins, it was
+    // written about two people: the result without the joins is used, a new person as before. What the try not used added to the
+    // shared lists (notices, holds and every list on fix, such as the left-out rows a run asks again about) is taken back. When the
+    // joined try fails, an error of the other try is the answer's own.
+    const o=relationshipOptions,fix=o.fix||{fixed:0,drops:[],left:[]},lists=[o.notices,o.held,o.cogHeld,...Object.values(fix)].filter(Array.isArray),lengths=lists.map(x=>x.length),fixed=fix.fixed,left=()=>fix.left?.length??0,left0=left(),aliasLinks=[];
+    const reset=()=>{lists.forEach((x,i)=>{x.length=lengths[i];});fix.fixed=fixed;};
+    const stage=joins=>{try{return {out:applyObserveRows(cog,speech,data,rp,cutoff,relationshipRows,{...o,fix,...(joins?{aliasLinks:joins}:{})}),left:left()};}catch(error){return {error};}};
+    const joined=stage(aliasLinks);
+    if(!aliasLinks.length||!joined.error&&joined.left===left0){if(joined.error)throw joined.error;return joined.out;}
+    const added=lists.map((x,i)=>x.slice(lengths[i])),fixedJoined=fix.fixed;reset();
+    const plain=stage(null);
+    if(joined.error){if(plain.error)throw plain.error;return plain.out;}
+    if(!plain.error&&plain.left<joined.left)return plain.out;
+    reset();lists.forEach((x,i)=>{x.push(...added[i]);});fix.fixed=fixedJoined;
+    return joined.out;
+  }
+function applyObserveRows(cog,speech,data,rp,cutoff,relationshipRows=[],relationshipOptions={}) {
     if(!data||!['people_upsert','facts_upsert','speech_upsert','concealment_changes'].every(k=>Array.isArray(data[k])))throw Error('인물 묶음 응답 구조가 잘못되었습니다.');
     const next=copy(cog),relations=copy(speech||[]),people=new Map(),facts=new Map();
     const notices=relationshipOptions.notices||[],holdCtx=relationshipOptions.hold||{bundle:'unified'},cogHeld=relationshipOptions.cogHeld||[],heldFacts=new Map(),heldSpeech=[],fx=relationshipOptions.fix||{fixed:0,drops:[],left:[]};
@@ -5365,8 +5387,13 @@ function applyObserve(cog,speech,data,rp,cutoff,relationshipRows=[],relationship
       if(seen.has(a.ref))throw Error('인물 REF 중복: '+a.ref);seen.add(a.ref);
       let old=next.actors.find(x=>x.id===a.ref),linkedNew=false;
       if(!old&&/^NEW_PERSON_/.test(a.ref)){
-        const matches=next.actors.filter(x=>!x.archived&&x.name===a.name);
-        if(matches.length===1){old=matches[0];linkedNew=true;}
+        // One live person of exactly this name, as before. Without one, the rule a reference written by name follows (actor() below,
+        // wishPersonRef on the request side): the name, else an alias, held by exactly one live person; a person found by an alias
+        // also has the role (PC/CHAR) the answer gives, as in room copy and alignRelationActors. Such a join is noted (aliasLinks):
+        // applyObserve keeps it only while the answer agrees with it.
+        const exact=next.actors.filter(x=>!x.archived&&x.name===a.name),joins=relationshipOptions.aliasLinks;let matches=exact;
+        if(!exact.length&&joins){const k=speechNameKey(a.name),live=next.actors.filter(x=>!x.archived),named=live.filter(x=>speechNameKey(x.name)===k);matches=!k?[]:named.length?named:live.filter(x=>(x.aliases||[]).some(v=>speechNameKey(v)===k));if(!named.length&&matches.length===1&&!!matches[0].isPlayer!==(a.isPlayer===true))matches=[];}
+        if(matches.length===1){old=matches[0];linkedNew=true;if(matches!==exact)joins.push(a.ref);}
       }
       if(!old&&!/^NEW_PERSON_/.test(a.ref))throw Error('인물 REF 오류: '+a.ref+' ('+String(a.name||'')+') · 입력의 ref나 NEW_PERSON_* 표시만 쓸 수 있습니다.');
       if(!String(a.name||'').trim())throw Error('인물 이름이 없습니다: '+a.ref);
@@ -5426,10 +5453,14 @@ function applyObserve(cog,speech,data,rp,cutoff,relationshipRows=[],relationship
       const speaker=nameOf(from),target=nameOf(to),key=from+'>'+to;
       if(seen.has(key))throw Error('호칭·말투 '+speaker+' → '+target+': 같은 방향이 두 번 있습니다. 한 줄로 합쳐야 합니다.');seen.add(key);
       if(!['formal','casual','mixed','unknown'].includes(r.register))throw Error('호칭·말투 '+speaker+' → '+target+': register 값 '+JSON.stringify(r.register)+'는 쓸 수 없습니다. 가능한 값: formal, casual, mixed, unknown');
-      const prior=relations.find(x=>x.speaker===speaker&&x.target===target);
+      // A row the user wrote may name a person by an alias ('세라 → 레온 경'). With no row under the stored names, it is this direction
+      // when its names reach these two people the way a reference does (wishPersonRef: the name, else an alias, exactly one person)
+      // and it is the only such user row: it is kept and the change held, as for a user row under the stored names.
+      const liveActors=next.actors.filter(x=>!x.archived),aliasRows=relations.filter(x=>x.source!=='unified-ai'&&wishPersonRef(liveActors,'',x.speaker)===from&&wishPersonRef(liveActors,'',x.target)===to);
+      const prior=relations.find(x=>x.speaker===speaker&&x.target===target)||(aliasRows.length===1?aliasRows[0]:null);
       if(prior&&prior.source!=='unified-ai'){
         const a=String(r.address||'').trim(),n=String(r.note||'').trim(),reg=({formal:'honorific',casual:'banmal',mixed:'mixed',unknown:'other'})[r.register];
-        if((a&&a!==String(prior.address||'').trim())||(n&&n!==String(prior.note||'').trim())||(r.register!=='unknown'&&reg!==normalizeSpeechRegister(prior.register)))heldSpeech.push({speaker,target,proposal:copy(r)});
+        if((a&&a!==String(prior.address||'').trim())||(n&&n!==String(prior.note||'').trim())||(r.register!=='unknown'&&reg!==normalizeSpeechRegister(prior.register)))heldSpeech.push({speaker:prior.speaker,target:prior.target,proposal:copy(r)});
         continue;
       }
       validateAiSpeechFields(speaker,target,r.address,r.note);
@@ -6389,6 +6420,7 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
     Object.assign(next.cog,{rev:(c.rev||0)+1,lastAnalysis:j.anchor,tip:j.anchor,sourceManifest:manifest,snapshots:{},pending:[],scanJob:null,updated:Date.now()});
     next.memoryChanged=true;next.packs=next.packs.filter(p=>p.autoManaged&&p.ownerChatId===r.chatId);next.relationshipBackup=relationshipBackup(r,c,ps);
     for(const p of next.packs)carryAutoLoreSettings(ps.find(o=>o.scopeId===p.scopeId)?.entries,p.entries);
+    carryRebuildChoices({room:r,cog:c},{room:next.room,cog:next.cog});
     // An injection running now, or started while this apply waited, never keeps the memory this commit replaces: once the
     // apply's locks are released it is refreshed with the applied data (refreshPendingAfterRebuild in applyRelationshipReview).
     // Everything above ran under the AI lock only, so a send or poll of this chat never waits for the conversation read; the
@@ -6577,7 +6609,6 @@ references는 반복해서 다시 불러올 가치가 있는 정사 카드다.
       // Saved people keep their name·aliases·PC flag on this path; the import never changes them.
       if(found)continue;
       if(!neededNames.has(canonical)&&!(p.aliases||[]).some(a=>neededNames.has(personNameKey(a)))){notices.push('인물 '+p.name+': 관계에 쓰이지 않아 등록하지 않았습니다.');continue;}
-      if(cg.actors.filter(a=>!a.archived).length>=30)throw Error('새 관계 인물 등록 시 인물 30명 안전 한도를 넘습니다. 기존 인물을 먼저 확인해 주세요.');
       const actor={id:'cg_'+crypto.randomUUID().replace(/-/g,''),name:p.name.trim(),aliases:[...new Set(p.aliases)],isPlayer:!!p.isPlayer,automatic:true,archived:false};
       cg.actors.push(actor);cg.state.catalog.actors.push(actor.id);
     }
@@ -8526,12 +8557,17 @@ function remapLogSelectionKeysByMatch(room,oldBlocks,newBlocks){
     return added.length;
   }
 
-  function roomCopyMergeSpeech(targetRoom,sourceRoom) {
+  function roomCopyMergeSpeech(targetRoom,sourceRoom,actors=[]) {
     targetRoom.speechRelations=normalizeSpeechRelations(targetRoom.speechRelations||[]);sourceRoom.speechRelations=normalizeSpeechRelations(sourceRoom.speechRelations||[]);
     const byPair=new Map(targetRoom.speechRelations.map(row=>[speechPairKey(row.speaker,row.target),row]));let added=0,skipped=0;
-    for(const source of sourceRoom.speechRelations){const pair=speechPairKey(source.speaker,source.target);if(!pair)continue;if(byPair.has(pair)){skipped++;continue;}
+    // A row of the same two people under an alias ('세라 → 레온 경') is the same direction: names reach this room's people as a reference
+    // does (the wishPersonRef rule: the name, else an alias, exactly one person), and only when exactly one row of this room has those two.
+    const people=(actors||[]).filter(a=>a&&!a.archived),ref=v=>{const k=speechNameKey(v),named=people.filter(a=>speechNameKey(a.name)===k),hit=named.length?named:people.filter(a=>(a.aliases||[]).some(x=>speechNameKey(x)===k));return k&&hit.length===1?hit[0].id:'';};
+    const personPair=row=>{const s=ref(row.speaker),t=ref(row.target);return s&&t?s+'>'+t:'';},byPeople=new Map();
+    for(const row of targetRoom.speechRelations){const k=personPair(row);if(k)byPeople.set(k,byPeople.has(k)?null:row);}
+    for(const source of sourceRoom.speechRelations){const pair=speechPairKey(source.speaker,source.target);if(!pair)continue;if(byPair.has(pair)||byPeople.get(personPair(source))){skipped++;continue;}
       if(targetRoom.speechRelations.length>=300)throw new Error('호칭·말투 관계가 안전 한도 300개를 넘게 되어 복사를 적용하지 않았습니다. 일부를 정리한 뒤 다시 시도해 주세요.');
-      const next=normalizeSpeechRelation({...structuredClone(source),id:makeSpeechRelationId(),effectiveTurnSeq:0,effectiveMessageId:'',updatedAt:Date.now()});targetRoom.speechRelations.push(next);byPair.set(pair,next);added++;}
+      const next=normalizeSpeechRelation({...structuredClone(source),id:makeSpeechRelationId(),effectiveTurnSeq:0,effectiveMessageId:'',updatedAt:Date.now()});targetRoom.speechRelations.push(next);byPair.set(pair,next);const own=personPair(next);if(own&&!byPeople.has(own))byPeople.set(own,next);added++;}
     targetRoom.speechRelations=normalizeSpeechRelations(targetRoom.speechRelations);return {added,skipped};
   }
 
@@ -8539,7 +8575,15 @@ function remapLogSelectionKeysByMatch(room,oldBlocks,newBlocks){
     return {id:String(rid),historyPolicy:'stable-user-v1',rev:0,editRev:0,enabled:true,actors:[],facts:[],state:{knowledge:{},concealments:[],present:[],catalog:{actors:[],facts:[]},evidence:{}},tip:'',snapshots:{},reviews:[],events:[],journal:null,lastAnalysis:'',pending:[],scanJob:null,deliveries:[],automation:null,analysisPaused:false,autoEveryOverride:null,contextMode:'smart',updated:Date.now()};
   }
   function roomCopyCognitionMode(f){const raw=String(f?.injectionMode||'');return ['auto','always','exclude'].includes(raw)?raw:(f?.pinned?'always':'auto');}
+  // A copied person joins a person here by an alias (roomCopyMergeCognitionRows) only while the merge agrees with it: when the joined
+  // copy conflicts with this room (a concealment the person here does not know), it is merged again without those joins, a new
+  // person as before.
   function roomCopyMergeCognition(targetRaw,sourceRaw,targetRid) {
+    const aliasLinks=[];
+    try{return roomCopyMergeCognitionRows(targetRaw,sourceRaw,targetRid,aliasLinks);}
+    catch(error){if(!aliasLinks.length)throw error;return roomCopyMergeCognitionRows(targetRaw,sourceRaw,targetRid);}
+  }
+  function roomCopyMergeCognitionRows(targetRaw,sourceRaw,targetRid,aliasLinks=null) {
     if(!sourceRaw)return {record:targetRaw,changed:false,actors:0,facts:0,knowledge:0,concealments:0};
     const target=structuredClone(targetRaw||roomCopyCognitionBase(targetRid)),source=structuredClone(sourceRaw);
     target.id=String(targetRid);target.state=target.state&&typeof target.state==='object'?target.state:{knowledge:{},concealments:[],present:[]};
@@ -8555,15 +8599,18 @@ function remapLogSelectionKeysByMatch(room,oldBlocks,newBlocks){
     const actorsByName=new Map();for(const a of liveTargetActors){const key=roomCopyCanonical(a.name);if(!actorsByName.has(key))actorsByName.set(key,[]);actorsByName.get(key).push(a);}
     const sourceNameCounts=new Map(Object.entries(source._copyFullNameCounts||{}));if(!source._copyFullNameCounts)for(const a of sourceActors){const key=roomCopyCanonical(a.name);sourceNameCounts.set(key,(sourceNameCounts.get(key)||0)+1);}
     let actorsAdded=0,factsAdded=0,knowledgeAdded=0,concealAdded=0;
-    for(const a of sourceActors){const key=roomCopyCanonical(a.name),matches=actorsByName.get(key)||[];if((sourceNameCounts.get(key)||0)>1||matches.length>1)throw Error('동명이인 ‘'+a.name+'’을 안전하게 연결할 수 없습니다. 원본·현재 방에서 이름을 구분한 뒤 복사해 주세요.');let targetActor=sourceNameCounts.get(key)===1&&matches.length===1?matches[0]:null;if(!targetActor){const id=roomCopyCgId();targetActor={id,name:String(a.name||''),aliases:[...(a.aliases||[])],isPlayer:!!a.isPlayer,automatic:!!a.automatic,archived:false,evidence:[],source:a.automatic?'room-copy':String(a.source||'manual')};target.actors.push(targetActor);if(targetActor.automatic&&!target.state.catalog.actors.includes(id))target.state.catalog.actors.push(id);if(!actorsByName.has(key))actorsByName.set(key,[]);actorsByName.get(key).push(targetActor);actorsAdded++;}actorMap.set(String(a.id),String(targetActor.id));}
+    // A copied person no live person here is named after joins the one live person whose aliases hold that name (the 함께 정리 rule,
+    // applyObserve) and who has the same role (PC/CHAR), unless a person of the source room carries that person's name or two copied
+    // people point at that person. Only on the first try (aliasLinks, see roomCopyMergeCognition).
+    const aliasOf=new Map(),claims=new Map();
+    if(aliasLinks)for(const a of sourceActors){const key=roomCopyCanonical(a.name);if((actorsByName.get(key)||[]).length||sourceNameCounts.get(key)!==1)continue;const hit=liveTargetActors.filter(t=>(t.aliases||[]).some(v=>roomCopyCanonical(v)===key));if(hit.length===1&&!!hit[0].isPlayer===!!a.isPlayer&&!sourceNameCounts.has(roomCopyCanonical(hit[0].name))){aliasOf.set(a,hit[0]);claims.set(hit[0],(claims.get(hit[0])||0)+1);}}
+    for(const a of sourceActors){const key=roomCopyCanonical(a.name),matches=actorsByName.get(key)||[];if((sourceNameCounts.get(key)||0)>1||matches.length>1)throw Error('동명이인 ‘'+a.name+'’을 안전하게 연결할 수 없습니다. 원본·현재 방에서 이름을 구분한 뒤 복사해 주세요.');let targetActor=sourceNameCounts.get(key)===1&&matches.length===1?matches[0]:null;if(!targetActor&&claims.get(aliasOf.get(a))===1){targetActor=aliasOf.get(a);aliasLinks.push(String(a.id));}if(!targetActor){const id=roomCopyCgId();targetActor={id,name:String(a.name||''),aliases:[...(a.aliases||[])],isPlayer:!!a.isPlayer,automatic:!!a.automatic,archived:false,evidence:[],source:a.automatic?'room-copy':String(a.source||'manual')};target.actors.push(targetActor);if(targetActor.automatic&&!target.state.catalog.actors.includes(id))target.state.catalog.actors.push(id);if(!actorsByName.has(key))actorsByName.set(key,[]);actorsByName.get(key).push(targetActor);actorsAdded++;}actorMap.set(String(a.id),String(targetActor.id));}
     const factKey=f=>JSON.stringify([roomCopyCanonical(f.label),String(f.content||'')]),factsByKey=new Map();for(const f of liveTargetFacts){const key=factKey(f);if(!factsByKey.has(key))factsByKey.set(key,[]);factsByKey.get(key).push(f);}
     for(const f of sourceFacts){const key=factKey(f),matches=factsByKey.get(key)||[];let targetFact=matches.length===1?matches[0]:null;if(!targetFact){const id=roomCopyCgId();targetFact={id,label:String(f.label||''),content:String(f.content||''),type:String(f.type||'other'),automatic:!!f.automatic,archived:false,evidence:[],injectionMode:roomCopyCognitionMode(f),pinned:roomCopyCognitionMode(f)==='always',source:f.automatic?'room-copy':String(f.source||'manual')};target.facts.push(targetFact);if(targetFact.automatic&&!target.state.catalog.facts.includes(id))target.state.catalog.facts.push(id);if(!factsByKey.has(key))factsByKey.set(key,[]);factsByKey.get(key).push(targetFact);factsAdded++;}factMap.set(String(f.id),String(targetFact.id));}
     for(const [sourceActorId,rows] of Object.entries(source.state?.knowledge||{})){const aid=actorMap.get(String(sourceActorId));if(!aid||!rows||typeof rows!=='object')continue;for(const [sourceFactId,value] of Object.entries(rows)){if(!['aware','unaware'].includes(value))continue;const fid=factMap.get(String(sourceFactId));if(!fid)continue;const current=target.state.knowledge?.[aid]?.[fid]||'unverified';if(current==='aware'||current==='unaware')continue;(target.state.knowledge[aid]||={})[fid]=value;knowledgeAdded++;}}
     const conKey=c=>`${c.holderId}|${c.targetId}|${c.factId}`,existingCon=new Set(target.state.concealments.map(conKey));
     for(const c of source.state?.concealments||[]){if(!c?.active)continue;const holderId=actorMap.get(String(c.holderId)),targetId=actorMap.get(String(c.targetId)),factId=factMap.get(String(c.factId));if(!holderId||!targetId||!factId||holderId===targetId)continue;const next={holderId,targetId,factId,active:true,scope:String(c.scope||''),publicName:String(c.publicName||'')},key=conKey(next);if(existingCon.has(key))continue;if(target.state.knowledge?.[holderId]?.[factId]!=='aware')throw Error('현재 방의 기존 인지와 은폐 관계가 충돌합니다. 은폐 주체의 인지를 먼저 확인해 주세요.');target.state.concealments.push(next);existingCon.add(key);concealAdded++;}
     // 현재 장면 present, sourceManifest, 분석 cursor/snapshot/review는 대상 대화의 실행 상태이므로 복사하지 않습니다.
-    const actorCount=(target.actors||[]).filter(a=>a&&!a.archived).length,factCount=(target.facts||[]).filter(f=>f&&!f.archived).length;
-    if(actorCount>30||factCount>60)throw new Error(`인물·인지 복사 후 안전 한도를 넘습니다. 현재 ${actorCount}명 / 정보 ${factCount}개이며 허용 범위는 인물 30명 / 정보 60개입니다. 필요한 항목만 정리한 뒤 다시 시도해 주세요.`);
     if(actorsAdded||factsAdded||knowledgeAdded||concealAdded)target.editRev=Math.max(0,Number(target.editRev||0))+1;
     return {record:target,changed:!!(actorsAdded||factsAdded||knowledgeAdded||concealAdded),actors:actorsAdded,facts:factsAdded,knowledge:knowledgeAdded,concealments:concealAdded,actorMap};
   }
@@ -8690,16 +8737,18 @@ function remapLogSelectionKeysByMatch(room,oldBlocks,newBlocks){
     stats.state=roomCopyStateMerge(target,source,selected('state'),draft.stateMode);if(stats.state.changed)changedSlots.push('currentState');if(stats.state.conflicts)warnings.push(`제목이 같고 내용이 다른 현재상태 ${stats.state.conflicts}개는 현재 방 값을 유지합니다.`);
     const logs=selected('logs');if(logs.length){const old=String(target.slots.find(s=>s.id==='logSummary').content||''),logSlot=source.slots.find(s=>s.id==='logSummary');logSlot.content=logs.map(r=>r.data.raw).join('\n\n');stats.logs=roomCopyLogMerge(target,source);if(old!==target.slots.find(s=>s.id==='logSummary').content)changedSlots.push('logSummary');if(stats.logs.conflicts)warnings.push(`날짜·사건명이 같고 내용이 다른 로그 ${stats.logs.conflicts}개는 현재 방 값을 유지합니다.`);}
     for(const [category,group] of [['characters','character'],['extras','extra']]){const subset={...source,slots:selected(category).map(r=>r.data)};stats[category]=roomCopyAppendSlots(target,subset,group);}
-    stats.speech=roomCopyMergeSpeech(target,{...source,speechRelations:selected('speech').map(r=>r.data)});
     let cog={record:targetCogRaw,changed:false,actors:0,facts:0,knowledge:0,concealments:0};
     if(!session.inventory.sameApi&&rows.some(r=>['actors','facts','concealments'].includes(r.category))){
       const cg=structuredClone(session.inventory.sourceCog),actorIds=new Set(selected('actors').map(r=>String(r.data.id))),factIds=new Set(selected('facts').map(r=>String(r.data.id)));
       cg.actors=cg.actors.filter(a=>actorIds.has(String(a.id)));cg.facts=cg.facts.filter(f=>factIds.has(String(f.id)));cg._copyFullNameCounts=session.inventory.fullNameCounts;
       cg.state={...cg.state,concealments:selected('concealments').map(r=>r.data),knowledge:Object.fromEntries(Object.entries(cg.state?.knowledge||{}).filter(([aid])=>actorIds.has(aid)).map(([aid,v])=>[aid,Object.fromEntries(Object.entries(v).filter(([fid])=>factIds.has(fid)))]))};
-      const sameNames=cg.actors.filter(a=>(targetCogRaw?.actors||[]).some(t=>!t.archived&&roomCopyCanonical(t.name)===roomCopyCanonical(a.name))).map(a=>a.name);
-      if(sameNames.length)warnings.push('이름이 같은 기존 인물에 연결합니다: '+sameNames.join(', ')+'. 다른 인물이라면 복사 전에 원본 이름을 구분해 주세요.');
       cog=roomCopyMergeCognition(targetCogRaw,cg,apiChatIdOf(target));
+      // The people the merge actually joined: by the same name, or by an alias of that person (written 이름(그 사람)).
+      const joined=new Map((targetCogRaw?.actors||[]).filter(t=>t&&!t.archived).map(t=>[String(t.id),t])),sameNames=cg.actors.map(a=>[a,joined.get(String(cog.actorMap?.get(String(a.id))))]).filter(([,t])=>t).map(([a,t])=>roomCopyCanonical(t.name)===roomCopyCanonical(a.name)?a.name:a.name+'('+t.name+')');
+      if(sameNames.length)warnings.push('이름이 같은 기존 인물에 연결합니다: '+sameNames.join(', ')+'. 다른 인물이라면 복사 전에 원본 이름을 구분해 주세요.');
     }
+    // 호칭 rows meet this room's people after the 인지 copy: a person the copy added under their own name is not read as another's alias.
+    stats.speech=roomCopyMergeSpeech(target,{...source,speechRelations:selected('speech').map(r=>r.data)},(cog.record||targetCogRaw)?.actors);
     stats.relationships={added:0,skipped:0};
     const relationshipRows=WishRelationships.normalize(target.relationships),relationshipPairs=new Set(relationshipRows.map(x=>WishRelationships.key(x.speaker,x.target)));
     for(const row of selected('relationships')){
@@ -9233,7 +9282,7 @@ function remapLogSelectionKeysByMatch(room,oldBlocks,newBlocks){
       }
       function add(c,field,source,title,editable=true,extra={},span=null){
         source=text(source);if(!source.trim())return;
-        const literals=[...new Set([...protectedLiterals(source,names,extra.literals||[]),...extraProtectedLiterals(source,{speech:c.kind==='speech'||field==='note'&&!!c.unit.readonly.entry?.speechRule,address:c.unit.readonly.address||c.unit.readonly.entry?.speechRule?.address||''})])],mode=editable&&!unsafeBody(source)?'editable':'keep_only';
+        const literals=options.lean?[]:[...new Set([...protectedLiterals(source,names,extra.literals||[]),...extraProtectedLiterals(source,{speech:c.kind==='speech'||field==='note'&&!!c.unit.readonly.entry?.speechRule,address:c.unit.readonly.address||c.unit.readonly.entry?.speechRule?.address||''})])],mode=editable&&!unsafeBody(source)?'editable':'keep_only';
         const id='body_'+String(rows.length+1).padStart(6,'0');
         const row={id,container:c.key,field,title:text(title),category:c.category,source,mode,literals,...(span?{span:{start:span.start,end:span.end}}:{})};rows.push(row);c.fields.push(row);
         c.unit.bodies.push({id,field,title:row.title,mode,source_text:source,protected_literals:literals});
@@ -9530,7 +9579,22 @@ function remapLogSelectionKeysByMatch(room,oldBlocks,newBlocks){
         await commitRecord(d.room,snap,buildRecord(d.room,d.job,picked),d.epoch);
       });refreshPendingAfterRebuild(d.room);notify('선택한 표현 설정 '+selected.length+'개 적용 · 저장 원문·사건·팩·인지 연결 유지','success',6500);d.busy=false;WUI.closeSheet(d);}catch(e){d.error=WLOG.inline("재구축 결과 적용",e);}finally{d.busy=false;WUI.paint();}
     }
-    function summary(room){const r=room?.expressionRebuild;if(!r||r.version!==VERSION||r.roomId!==text(room.chatId))return {count:0,enabled:false};const rows=(r.containers||[]).flatMap(c=>c.values||[]);return {count:rows.length,enabled:r.enabled!==false,saved:rows.reduce((n,v)=>n+Math.max(0,text(v.source).length-text(v.text).length),0)};}
+    // 유효: a registered row the send can still use, by the projector's test (the item's basis and the field's text are the ones it was
+    // made from). Read from the room, the lore cache and this room's 인지 view; with no such view the 인지 rows count as before, and
+    // when the inventory cannot be read every row does.
+    const usableMemo=new WeakMap();
+    function usable(room,r,count){
+      const cog=state.v2Cognition&&text(state.v2Cognition.id)===text(apiChatIdOf(room))?state.v2Cognition:null,stamp=[room,room._rev,room.updatedAt,lorePackCache,cog],memo=usableMemo.get(r);
+      if(memo&&memo.stamp.every((v,i)=>v===stamp[i]))return memo.value;
+      let value=count;
+      try{
+        const inv=inventory(room,cog,lorePackCache||[],{includeProtected:true,includeRelationships:true,lean:true}),live=new Map(inv.containers.map(c=>[c.key,c])),source=new Map(inv.rows.map(x=>[x.container+'\n'+x.field,x.source]));
+        value=0;
+        for(const c of r.containers||[]){const now=live.get(c.key),values=c.values||[];if(!now&&!cog&&c.kind==='fact'){value+=values.length;continue;}if(!now||now.basis!==c.basis)continue;for(const v of values)if(source.get(c.key+'\n'+v.field)===v.source&&text(v.text).trim()&&text(v.text).length<text(v.source).length)value++;}
+      }catch{value=count;}
+      usableMemo.set(r,{stamp,value});return value;
+    }
+    function summary(room){const r=room?.expressionRebuild;if(!r||r.version!==VERSION||r.roomId!==text(room.chatId))return {count:0,enabled:false};const rows=(r.containers||[]).flatMap(c=>c.values||[]);return {count:rows.length,usable:usable(room,r,rows.length),enabled:r.enabled!==false,saved:rows.reduce((n,v)=>n+Math.max(0,text(v.source).length-text(v.text).length),0)};}
     function openManage(){const room=state.currentRoom,r=room?.expressionRebuild;if(!r||!summary(room).count)throw Error('등록된 압축 표현이 없습니다.');return WUI.openSheet('secondaryManage',{room,epoch:localRestoreEpoch,token:stamp(room),busy:false,error:'',rows:r.containers.flatMap((c,ci)=>c.values.map((v,vi)=>({...v,id:'m'+ci+'_'+vi,container:c.key}))),draft:{open:{}}});}
     async function change(id,mode){const d=WUI.ui.dlg(id);if(!d||d.busy)return;assertTarget(d.room,d.epoch,true);d.busy=true;d.error='';WUI.paint();try{await withRoomExclusiveKeys([apiChatIdOf(d.room),'ai:'+apiChatIdOf(d.room)],async()=>{if(stamp(d.room)!==d.token)throw Error('압축 설정이 바뀌었습니다. 관리창을 다시 열어 주세요.');const snap=await snapshot(d.room),next=structuredClone(d.room.expressionRebuild);if(mode==='clear')next.containers=[];else if(mode==='toggle')next.enabled=next.enabled===false;else{const row=d.rows.find(r=>r.id===mode);if(!row)throw Error('압축 항목이 없습니다.');for(const c of next.containers)if(c.key===row.container)c.values=c.values.filter(v=>v.field!==row.field);next.containers=next.containers.filter(c=>c.values.length);}next.token=crypto.randomUUID();next.updatedAt=nowIso();await commitRecord(d.room,snap,next,d.epoch);});refreshPendingAfterRebuild(d.room);d.busy=false;WUI.closeSheet(d);notify(mode==='clear'?'등록 압축본을 해제했습니다. 저장 원문 유지.':'압축 사용 설정을 변경했습니다.','success');}catch(e){d.error=WLOG.inline("압축 설정 변경",e);}finally{d.busy=false;WUI.paint();}}
     return {CONTEXT_NOTATION,hasContextNotation,contextNotationGuide,reviewGroups,visibleGroups,reviewPickState,selectReviewRows,toggleReviewGroup,FIELD_LABELS,FORMAT,VERSION,GUIDE_REVISION,LABELS,RESULT_SCHEMA,INTRO,GUIDE,END,extraProtectedLiterals,speechExampleLiterals,numberDiagnostics,numberEvidence,reviewAudit,proseCount,schemaCheck,inventory,documents,digest,validateReply,projector,cognitionProjector,apiStamp,stamp,summary,openExport,exportFromDialog,importFile,editReview,prepareImport,visibleRows,apply,openManage,change,buildRecord,snapshot,commitRecord,stateSpans};
@@ -10222,7 +10286,8 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     if(!target.fresh)throw Error(target.reason);
     const bridge=cogBridge();
     await bridge?.refreshExpression?.(apiChatIdOf(room));
-    const original=stripSessionSetupBlock(target.raw).text,pool=sessionSetupSelectedItems(room);
+    const setupCognition=await bridge?.setupContext?.(apiChatIdOf(room));
+    const original=stripSessionSetupBlock(target.raw).text,pool=sessionSetupSelectedItems(room).map(item=>item.slotId==='__cognition'&&typeof setupCognition==='string'?{...item,content:setupCognition}:item).filter(item=>String(item.content||'').trim());
     const setupText=items=>buildSessionSetupMessage(original,buildSessionSetupBlock(room,items).block);
     const pick=async budget=>{
       const selection=await chooseAllFitItemsWithinBytes(room,pool,original,'',{totalLength:items=>setupText(items).length},setupText,budget),built=buildSessionSetupBlock(room,selection.items);
@@ -11551,6 +11616,39 @@ function formatLocalRecordTime(value){
     return rebuilt;
   }
 
+  // A 재구축 (전체·부분 재구축, 기억·인물 묶음 정리) remakes the automatic items from a seed without them, and a choice the user had made
+  // on one went with it. The rule 자동 자료 카드 (carryAutoLoreSettings) and 서사 고리 follow: an item made again under the name of
+  // exactly one item of its kind before, a name exactly one item holds after, keeps that choice; its content is the new one.
+  // - an automatic 인지 정보: 넣는 방식 (자동·항상·빼기), by its title;
+  // - 현장: a person the seed kept, by id; an automatic person, by name;
+  // - 날짜로그 항상 호출·자동 제외·직접 선택: by the block key (the date and title line). An undated block's key also holds its place, so
+  //   it carries only when that title line is on one undated block on each side (the in-place rule of remapUnknownLogSelectionKeys).
+  // Anything else stays as the rebuild made it.
+  function carryRebuildChoices(before,after){
+    const once=(rows,key)=>{const m=new Map();for(const x of rows||[]){const k=key(x);if(k)m.set(k,m.has(k)?null:x);}return m;};
+    if(before.cog&&after.cog){
+      const live=c=>(c.actors||[]).filter(a=>a&&!a.archived),autoFacts=c=>(c.facts||[]).filter(f=>f&&f.automatic&&!f.archived);
+      const oldIds=new Set([...(before.cog.facts||[]),...(before.cog.actors||[])].map(x=>x?.id)),fromFacts=once(autoFacts(before.cog),f=>normalizedRecallTerm(f.label));
+      for(const [k,f] of once(autoFacts(after.cog),f=>normalizedRecallTerm(f.label))){const from=fromFacts.get(k);if(f&&from&&(!oldIds.has(f.id)||f.id===from.id)&&['auto','always','exclude'].includes(String(from.injectionMode))){f.injectionMode=from.injectionMode;f.pinned=from.injectionMode==='always';}}
+      if(after.cog.state){
+        const kept=new Set(live(after.cog).map(a=>a.id)),fromActors=once(live(before.cog).filter(a=>a.automatic),a=>normalizedRecallTerm(a.name)),toActors=once(live(after.cog).filter(a=>a.automatic),a=>normalizedRecallTerm(a.name)),present=new Set(after.cog.state.present||[]);
+        for(const id of before.cog.state?.present||[]){
+          if(kept.has(id)){present.add(id);continue;}
+          const old=live(before.cog).find(a=>a.id===id),k=old?.automatic?normalizedRecallTerm(old.name):'',to=k&&fromActors.get(k)===old?toActors.get(k):null;
+          if(to&&!oldIds.has(to.id))present.add(to.id);
+        }
+        after.cog.state.present=[...present];
+      }
+    }
+    if(before.room&&after.room){
+      const blocks=r=>parseDatedLogBlocks(String((r.slots||[]).find(s=>s.id==='logSummary')?.content||'')),old=blocks(before.room),now=blocks(after.room),byKey=new Map(now.map(b=>[b.key,b]));
+      const tally=list=>{const m=new Map();for(const v of list)m.set(v,(m.get(v)||0)+1);return m;},keys=[tally(old.map(b=>b.key)),tally(now.map(b=>b.key))],heads=[tally(old.filter(b=>b.isUnknown).map(b=>b.heading)),tally(now.filter(b=>b.isUnknown).map(b=>b.heading))];
+      const same=k=>{const b=byKey.get(k);return !!b&&keys[0].get(k)===1&&keys[1].get(k)===1&&(!b.isUnknown||heads[0].get(b.heading)===1&&heads[1].get(b.heading)===1);};
+      for(const field of ['autoLogPinnedKeys','autoLogExcludedKeys','manualLogSelectedKeys']){const list=(after.room[field]||[]).map(String);for(const k of (before.room[field]||[]).map(String))if(same(k)&&!list.includes(k))list.push(k);after.room[field]=list;}
+    }
+    return after;
+  }
+
   async function prepareLoreExternalSource(room) {
     const all=await fetchAllRoomMessages(apiChatIdOf(room));
     const stable=[...stableFrame([...all].reverse()).stable].reverse();
@@ -11741,10 +11839,12 @@ ${AI_JSON_TEXT_RULE}
     if(String(source.scope||'')!=='full'||Number(source.basis_version)!==1)throw new Error('분할 결과는 바로 적용할 수 없습니다. full 전체 결과가 필요합니다.');
     const rpDigest=String(source.rp_source_sha256||''),packDigest=String(source.auto_pack_sha256||'');
     const badDigest=[['source.rp_source_sha256',rpDigest],['source.auto_pack_sha256',packDigest]].filter(([,v])=>!/^[a-f0-9]{64}$/i.test(v)).map(([k])=>k);
-    if(badDigest.length)throw new Error(badDigest.join('·')+' 검증값이 없거나 64자리 값이 아닙니다. TXT의 EXPORT BASIS에 있는 값을 그대로 복사해야 합니다.');
+    // auto_pack_sha256 is read only when the tail token does not match (applyLoreExternalImport), so its shape is checked there too.
+    const digestError=keys=>keys.join('·')+' 검증값이 없거나 64자리 값이 아닙니다. TXT의 EXPORT BASIS에 있는 값을 그대로 복사해야 합니다.';
+    if(badDigest.includes('source.rp_source_sha256'))throw new Error(digestError(badDigest));
     if(!Array.isArray(data.entries)||data.entries.length>1000)throw new Error('entries는 최대 1,000개의 배열이어야 합니다.');
     const tailToken=String(source.tail_token||'');if(!/^lore_end_[A-Za-z0-9_-]+_[A-Za-z0-9_-]+$/.test(tailToken))throw new Error('source.tail_token이 없습니다. 외부 AI가 TXT 맨 끝까지 읽은 결과인지 확인해 주세요.');
-    return {source:{scope:'full',basis_version:1,last_message_id:String(source.last_message_id||''),rp_source_sha256:rpDigest,auto_pack_id:String(source.auto_pack_id||''),auto_pack_sha256:packDigest,tail_token:tailToken},entries:data.entries,diagnostics:data.diagnostics||{conflicts:[],uncertain:[]},nulled:fix.nulled.includes('entries'),fixed:fix.fixed};
+    return {source:{scope:'full',basis_version:1,last_message_id:String(source.last_message_id||''),rp_source_sha256:rpDigest,auto_pack_id:String(source.auto_pack_id||''),auto_pack_sha256:packDigest,tail_token:tailToken},entries:data.entries,diagnostics:data.diagnostics||{conflicts:[],uncertain:[]},nulled:fix.nulled.includes('entries'),fixed:fix.fixed,packDigestError:badDigest.length?digestError(badDigest):''};
   }
 
   function assertUniqueAutoLoreRows(rows,label='외부 자료') {
@@ -11772,8 +11872,15 @@ ${AI_JSON_TEXT_RULE}
 
       const rows=data.entries.map((entry,index)=>normalizeAutoLoreRow(entry,index,source.evidenceTurns,{label:'외부 자료'}));
       assertUniqueAutoLoreRows(rows,'외부 자료');
-      const freshPackDigest=await sha256Hex(new TextEncoder().encode(autoLoreContentFingerprint(freshRaw)));if(freshPackDigest!==data.source.auto_pack_sha256)throw new Error('외부 분석 뒤 진행형 자료 카드가 바뀌었습니다. 보호 카드까지 안전하게 유지하려면 새 TXT로 다시 분석해 주세요.');
-      if(data.source.tail_token!==loreExternalTailToken(data.source.rp_source_sha256,freshPackDigest))throw new Error('외부 AI가 TXT 맨 끝의 완료 토큰을 확인하지 못했습니다. 로그가 잘리지 않게 전체 TXT를 다시 분석해 주세요.');
+      // The tail token is made from the RP and pack digests the TXT was exported with, so a token that matches the pack as it is now
+      // shows the cards did not change: auto_pack_sha256 is read only when the token does not match (a slip in copying that one
+      // 64-digit value, even one that breaks its shape, no longer sends the file back).
+      const freshPackDigest=await sha256Hex(new TextEncoder().encode(autoLoreContentFingerprint(freshRaw)));
+      if(data.source.tail_token!==loreExternalTailToken(data.source.rp_source_sha256,freshPackDigest)){
+        if(data.packDigestError)throw new Error(data.packDigestError);
+        if(freshPackDigest!==data.source.auto_pack_sha256)throw new Error('외부 분석 뒤 진행형 자료 카드가 바뀌었습니다. 보호 카드까지 안전하게 유지하려면 새 TXT로 다시 분석해 주세요.');
+        throw new Error('외부 AI가 TXT 맨 끝의 완료 토큰을 확인하지 못했습니다. 로그가 잘리지 않게 전체 TXT를 다시 분석해 주세요.');
+      }
       const freshFingerprint=lorePackStorageFingerprint(freshRaw),working=normalizeLorePack(freshRaw,pack.name),protectedEntries=(working.entries||[]).filter(entry=>!entry.autoManaged||entry.userProtected),editableEntries=(working.entries||[]).filter(entry=>entry.autoManaged&&!entry.userProtected);
       // entries written as null never clears the stored automatic cards: refused as before unless there are none.
       if(data.nulled&&editableEntries.length)throw new Error('entries는 최대 1,000개의 배열이어야 합니다(받은 값: null). 저장된 자동 자료 카드 '+editableEntries.length+'개를 비울지 알 수 없어 가져오지 않았습니다. 비울 때는 [], 남길 때는 전체 목록을 넣어 주세요.');
@@ -12248,9 +12355,9 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
     const limit=Math.min(Number(room.loreConfig.budgetChars||APP.defaultLoreBudgetChars),contextLimit);
     const measure=createWishContextMeasure('',room);
     const run=fast=>{
-      const selected=[];let used=0;
+      const selected=[],anchorLevel=loreAnchorLevels(room);let used=0;
       for(let i=0;i<candidates.length;i++){
-        const row=candidates[i];let level=row.anchor?'full':'compact',text=projection.lore(row.pack,row.entry,level);
+        const row=candidates[i];let level=row.anchor?anchorLevel(row.pack,row.entry):'compact',text=projection.lore(row.pack,row.entry,level);
         if(!text)continue;
         if(!row.anchor&&used+text.length>limit){level='micro';text=projection.lore(row.pack,row.entry,level);}
         if(!text||(!row.anchor&&used+text.length>limit))continue;
@@ -12293,12 +12400,16 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
     const text=buildInjectedMessage(original,buildContextBlockFromItems(required,room)),total=text.length;
     if(total>limit)throw Error('현재상태·인지·호칭·켜진 캐릭터/OOC·고정 자료와 AI 원문만으로 '+limit.toLocaleString()+'자를 넘습니다. 고정 항목 또는 이번 세션 포함 선택을 줄여 주세요. 원문과 저장 기억은 삭제하지 않았습니다.');
     const bytes=carrierBodyBytes(text);if(bytes>APP.carrierByteBudget)throw requiredByteError(bytes,APP.carrierByteBudget);
-    const anchors=required.filter(item=>item.autoType==='pinned-lore');
-    const projection=SecondaryRebuild.projector(room);
-    const chars=anchors.reduce((sum,item)=>sum+String(projection.item({...item,content:item._loreLevels?.full||item.content,compressionLevel:'full'}).content||'').trim().length,0);
-    const loreLimit=Number(room.loreConfig?.budgetChars||APP.defaultLoreBudgetChars);
-    if(chars>loreLimit)throw Error('고정 자료집의 실제 사용 표현만 '+chars.toLocaleString()+'자로 자료집 예산 '+loreLimit.toLocaleString()+'자를 넘습니다. 자료집 분량 설정 또는 고정을 조정해 주세요. 고정 내용은 임의 축약·삭제하지 않았습니다.');
     return total;
+  }
+  // 앵커 cards are always sent. Where the cards must be chosen (over the length limit), an anchor goes in whole while the anchors fit
+  // the lore budget (loreConfig.budgetChars) together; past it, in the shorter form the card already has (요약, then 한 줄). When
+  // everything fits, every card goes in whole. The lore budget never stops a send. most: the longest form an anchor may take, lowered
+  // ('compact', then 'micro') only on a turn whose 꼭 넣는 칸 would otherwise stop the send (refreshHybridRecall). An anchor taken out
+  // of this session is not sent: it stays whole and takes none of the budget.
+  function loreAnchorLevels(room,most='full'){
+    const projection=SecondaryRebuild.projector(room),limit=Number(room.loreConfig?.budgetChars||APP.defaultLoreBudgetChars),size=(pack,entry,level)=>String(projection.lore(pack,entry,level)||'').trim().length,levels=['full','compact'].slice(['full','compact','micro'].indexOf(most)),removed=new Set(quickRemovedPendingItems(room.pending).map(pendingItemIdentity));let used=0;
+    return (pack,entry)=>{if(removed.has(pendingItemIdentity({sourceSlotId:'__lore',packId:pack.scopeId,entryId:entry.id})))return 'full';const level=levels.find(l=>used+size(pack,entry,l)<=limit)||'micro';used+=size(pack,entry,level);return level;};
   }
 
   function recallStaleError(){
@@ -12330,13 +12441,13 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
     const logTarget=Math.max(1,Math.min(4,Number(room.autoLogRelatedBlocks)||APP.defaultRelatedLogBlocks));
     const loreTarget=Math.max(1,Math.min(10,Number(room.loreConfig?.maxEntries)||APP.defaultLoreEntries));
     let vector=null,semanticError='';
-    const gather=ranked=>{
+    const gather=(ranked,most)=>{
       let logCandidates,loreItems;
       if(ranked){
         const logSlot=(room.slots||[]).find(slot=>slot.id==='logSummary'),blocks=parseDatedLogBlocks(logSlot?.content||'');
         logCandidates=collectLogRecallCandidates(room,rankQuery,semanticLogScores(room,blocks,vector),Number.MAX_SAFE_INTEGER,true);
-        const scored=room.loreConfig?.enabled===false?[]:scoreLoreEntries(room,rankQuery,vector,true);
-        loreItems=scored.map((row,index)=>makeLorePendingItem(row,'full',index+1,scored.length)).filter(item=>item.content);
+        const scored=room.loreConfig?.enabled===false?[]:scoreLoreEntries(room,rankQuery,vector,true),anchorLevel=loreAnchorLevels(room,most);
+        loreItems=scored.map((row,index)=>makeLorePendingItem(row,row.anchor?anchorLevel(row.pack,row.entry):'full',index+1,scored.length)).filter(item=>item.content);
       }else{
         logCandidates=collectLogRecallCandidates(room,'',null,Number.MAX_SAFE_INTEGER,true,{rankRelated:false});
         loreItems=unrankedLoreRecallItems(room);
@@ -12364,7 +12475,6 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
     // Measure the actual wire string, including the original AI response, headings,
     // comment escaping and approved compressed representations. No rough body sum.
     const fitText=items=>buildInjectedMessage(original,buildContextBlockFromItems(items,room)),fullText=fitText(normalPlan),fullTotal=fullText.length;
-    if(hasOriginal)assertRequiredRecallBudget(room,normalPlan,original);
     let selection=fullTotal<=limit&&carrierBodyBytes(fullText)<=APP.carrierByteBudget?{items:normalPlan,method:'all-fit',total:fullTotal,fullTotal,omitted:0,error:'',limit}:null;
     // A prefetch yields between its ranking steps, so a send clicked meanwhile waits for one step at most.
     if(prefetch){if(selection)return null;await new Promise(resolve=>setTimeout(resolve,0));}
@@ -12376,6 +12486,10 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
       // Without a vector for this exact query, the latest AI answer's vector (made in idle time after it arrived) ranks by meaning.
       vector=cachedSemanticQueryVector(room,rankQuery)||cachedSemanticQueryVector(room,recallSceneText(scene));
       candidates=gather(true);normalPlan=candidates.normalPlan;
+      // The 꼭 넣는 칸 are measured as this pick sends them (anchors by loreAnchorLevels), against the carrier or, on a refresh without
+      // one (a lore change, syncLoreMutation), the pending original. Before they stop the send, the anchors step down, every one to its
+      // 요약, then to its 한 줄; only an overflow left after that stops it, as before (chooseAllFitItems would stop it the same way).
+      for(const most of ['compact','micro','']){try{assertRequiredRecallBudget(room,normalPlan,original);break;}catch(error){if(!most||!candidates.loreAnchors.length)throw error;candidates=gather(true,most);normalPlan=candidates.normalPlan;}}
       if(prefetch)await new Promise(resolve=>setTimeout(resolve,0));
       if(allowAi&&allowSemanticNetwork&&hasOriginal&&!cachedSemanticQueryVector(room,rankQuery)&&recallSelectionSettings(room).semantic&&!isManualAiProvider()&&buildInjectedMessage(original,buildContextBlockFromItems(normalPlan,room)).length>APP.carrierSafeChars){
         // The send ranks with the latest AI answer's vector (made in idle time after it arrived); this input's vector, asked here
@@ -12619,6 +12733,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
           if(scope==='memory'){
             for(const key of ['currentState','logSummary'])selected.slots.find(x=>x.id===key).content=next.room.slots.find(x=>x.id===key).content;
             for(const key of ['autoLogPinnedKeys','autoLogExcludedKeys','manualLogSelectedKeys'])selected[key]=next.room[key];
+            carryRebuildChoices({room:r},{room:selected});
             selected.aiAppliedContent={...r.aiAppliedContent,...next.room.aiAppliedContent};
             selected.aiSourceManifests={...r.aiSourceManifests,currentState:manifest,logSummary:manifest};selected.aiUpdateCursors={...r.aiUpdateCursors,currentState:{messageId:s.anchorMessageId,updatedAt:nowIso()},logSummary:{messageId:s.anchorMessageId,updatedAt:nowIso()}};
             selected.autoMemory={...r.autoMemory,lastProcessedMessageId:s.anchorMessageId,lastCommittedMessageId:s.anchorMessageId,committedTurns:0,lastError:'',dirtyScore:0};selected.memoryBranchBlocked=false;
@@ -12626,6 +12741,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
           }else{
             for(const key of ['speechRelations','relationships','relationshipRevision','relationshipBaseline'])selected[key]=next.room[key];
             Object.assign(next.cog,{rev:(c.rev||0)+1,lastAnalysis:s.anchorMessageId,tip:s.anchorMessageId,sourceManifest:manifest,snapshots:{},pending:[],scanJob:null,updated:Date.now()});
+            carryRebuildChoices({cog:c},{cog:next.cog});
           }
           await saveMemoryCheckpoint(r,'external-'+scope+'-before-apply');check();await verify(d);check();
           const backup={id:runtimeRecordId('wish-external-partial-backup-'+scope,r),kind:'wish-external-partial-backup',chatId:r.chatId,at:nowIso(),scope,room:clone(r),cognition:clone(c)};
@@ -12906,6 +13022,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
           if(kind==='memory'){
             for(const id of ['currentState','logSummary'])selected.slots.find(x=>x.id===id).content=next.room.slots.find(x=>x.id===id).content;
             for(const field of ['autoLogPinnedKeys','autoLogExcludedKeys','manualLogSelectedKeys'])selected[field]=next.room[field];
+            carryRebuildChoices({room:r},{room:selected});
             selected.autoMemory={...selected.autoMemory,lastProcessedMessageId:j.anchor,lastCommittedMessageId:j.anchor,committedTurns:0,lastError:'',dirtyScore:0};
             selected.aiSourceManifests={...selected.aiSourceManifests,currentState:manifest,logSummary:manifest};
             selected.aiUpdateCursors={...selected.aiUpdateCursors,currentState:{messageId:j.anchor,updatedAt:nowIso()},logSummary:{messageId:j.anchor,updatedAt:nowIso()}};
@@ -12915,6 +13032,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
           }else{
             for(const field of ['speechRelations','relationships','relationshipRevision','relationshipBaseline'])selected[field]=next.room[field];
             Object.assign(next.cog,{rev:(c.rev||0)+1,lastAnalysis:j.anchor,tip:j.anchor,sourceManifest:manifest,snapshots:{},pending:[],scanJob:null,updated:Date.now()});
+            carryRebuildChoices({cog:c},{cog:next.cog});
           }
           await U3.atomicCommit(r,c,ps,{relationshipHeldAdds:kind==='people'?(next.relationshipHeldAdds||[]):[],cognitionHeldAdds:kind==='people'?(next.cognitionHeldAdds||[]):[],room:selected,cog:kind==='people'?next.cog:null,packs:[],memoryChanged:kind==='memory'});
           // Rows the segments left out or held are named once after commit, like the live run.
@@ -13119,11 +13237,19 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     if(text.length<20)throw new Error('변환할 원문을 조금 더 입력해 주세요.');
     if(text.length>120000)throw new Error('원문이 120,000자를 넘습니다. 뒷부분이 빠지지 않도록 나눠서 변환해 주세요.');
     const settings=loadAiSettings();
-    const system=getGuideText('apiLoreConversion');
+    // The result shape rides in the text as well (as 함께 정리 does): DeepSeek, Firebase and a Gemini/Vertex retry without the schema never see responseJsonSchema.
+    const system=getGuideText('apiLoreConversion')+'\n[응답 스키마]\n'+JSON.stringify(WISH_LORE_CONVERSION_SCHEMA);
     const result=await callAiProvider(settings,system,`${PROMPT_INPUT_BOUNDARY}\n\n[변환할 자료 원문]\n${text}`,{taskKind:'extract',responseMimeType:'application/json',operationLabel:'텍스트를 자료 카드로 변환',responseJsonSchema:WISH_LORE_CONVERSION_SCHEMA,maxOutputTokens:Math.max(8192,Number(settings.maxOutputTokens||0)||8192)});
     let parsed;try{parsed=JSON.parse(cleanAiGeneratedText(result.text));}catch{throw new Error('AI 변환 결과가 올바른 JSON이 아닙니다.');}
-    if(!Array.isArray(parsed?.entries)||!parsed.entries.length)throw new Error('AI가 변환할 자료 항목을 만들지 못했습니다.');
-    return parsed.entries.map(normalizeLoreEntry);
+    if(!Array.isArray(parsed?.entries)||!parsed.entries.length){
+      // The record keeps the answer's shape only (its top-level key names, or that it is an array), never its text. The names go in the
+      // record's 확인 field, not the message: 상세 보기 picks its help from the message words, and a key such as "timeout" would pick the wrong one.
+      const keys=parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?Object.keys(parsed):[];
+      throw Object.assign(new Error('AI 답 JSON에 entries 목록이 없거나 비어 있습니다.'),{diagnostic:{actual:Array.isArray(parsed)?'최상위 배열':keys.length?'최상위 키 '+keys.slice(0,5).map(k=>k.slice(0,40)).join('·')+(keys.length>5?'·…':''):''}});
+    }
+    // The schema's 'location' is the lore type 'place' (장소), the same fixed alias the automatic cards use; a card stored as place
+    // reads 장소 on the 자료집 screen and in its editor, like one added by hand.
+    return parsed.entries.map(normalizeLoreEntry).map(e=>e.type==='location'?{...e,type:'place'}:e);
   });}
 
   function openLoreConversionDialog(room){return WUI.openSheet('loreConvert',{wishRoom:room,draft:{target:'new',name:'가져온 자료집',src:'',busy:false}});}
@@ -13235,7 +13361,12 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     else notify(restored.legacy?'백업 복원 완료 · 구형 백업에는 인지 기록이 없어 현재 인지 기록을 유지했습니다.':`백업 복원 완료 · 인지 ${restored.cognition}개 방 포함`,'success',5000);
   }
 
-  function openBackupImportDialog(data,existingRooms=[],existingLibraries=[]){const localLibraryIds=new Set((existingLibraries||[]).map(x=>String(x?.scopeId||''))),referencedLibraryIds=new Set((data.rooms||[]).flatMap(r=>[...(r.activeLorePackIds||[]),r.autoCharacterLibraryId,r.lastExtraLibraryId]).filter(Boolean).map(String)),sharedRestoreHint=l=>{const id=String(l.scopeId);if(l.autoManaged===true||(data.rooms||[]).some(r=>r.chatId&&String(r.chatId)===String(l.ownerChatId))||!referencedLibraryIds.has(id))return '';return localLibraryIds.has(id)?' · 이 기기에 있음: 체크해야 백업 버전으로 교체':' · 이 기기에 없음: 이 자료집을 쓰는 방을 고르면 같이 복원';};const blocked=new Set(existingRooms.filter(r=>r.pending).map(r=>String(r.chatId))),all=(data.rooms||[]).filter(r=>r.chatId),rooms=all.filter(r=>!blocked.has(String(r.chatId))).map(r=>({id:String(r.chatId),label:r.backupDisplayName||WishRoomNames.display(r)||r.label||'RP '+shortId(r.chatId),sum:'방 ID '+r.chatId,current:String(r.chatId)===String(state.currentChatId)})),libs=(data.characterLibraries||[]).filter(l=>l.scopeId&&!(l.autoManaged&&blocked.has(String(l.ownerChatId)))).map(l=>({id:String(l.scopeId),label:l.name||l.title||l.scopeId,sum:sharedRestoreHint(l).replace(/^ · /,''),owner:all.some(r=>String(r.chatId)===String(l.ownerChatId))?String(l.ownerChatId):''}));const global=!!(data.guides||data.defaultExtraPreset||data.cognitionSettings);if(global)libs.push({id:'wish-global-settings',label:'공용 지침·프리셋·인지 설정 복원',});return WUIOpenPromise('backupImport',{src:'파일 백업',note:blocked.size?'주입 중인 '+blocked.size+'개 방은 선택 목록에서 제외했습니다. 복원할 방의 기존 데이터는 교체됩니다.':'선택한 방과 설정집의 데이터를 백업으로 교체합니다. API 연결 설정은 유지됩니다.',rooms,libs,blocked:[...blocked],draft:{pick:{}}});}
+  async function openBackupImportDialog(data,existingRooms=[],existingLibraries=[]){
+    // A room's 저장 시각 here and in the backup: the room record, and its 인지 when the backup carries 인지 (restoring replaces this
+    // device's). For display only: when this device's 인지 cannot be read, the room record's time stands alone.
+    const cogApiIds=Array.isArray(data.cognitionRooms)?[...new Set((data.rooms||[]).map(r=>String(apiChatIdOf(r)||'')).filter(Boolean))]:[],backupCogTime=new Map((data.cognitionRooms||[]).map(c=>[String(c?.id||''),Number(c?.updated)||0]));
+    const localCogTime=cogApiIds.length?await new Promise(resolve=>{const out=new Map();try{const tx=state.db.transaction(APP.cognitionStoreName,'readonly'),st=tx.objectStore(APP.cognitionStoreName);for(const id of cogApiIds){const q=st.get(id);q.onsuccess=()=>{if(q.result)out.set(id,Number(q.result.updated)||0);};}tx.oncomplete=()=>resolve(out);tx.onerror=tx.onabort=()=>resolve(out);}catch{resolve(out);}}):new Map();
+    const localLibraryIds=new Set((existingLibraries||[]).map(x=>String(x?.scopeId||''))),referencedLibraryIds=new Set((data.rooms||[]).flatMap(r=>[...(r.activeLorePackIds||[]),r.autoCharacterLibraryId,r.lastExtraLibraryId]).filter(Boolean).map(String)),sharedRestoreHint=l=>{const id=String(l.scopeId);if(l.autoManaged===true||(data.rooms||[]).some(r=>r.chatId&&String(r.chatId)===String(l.ownerChatId))||!referencedLibraryIds.has(id))return '';return localLibraryIds.has(id)?' · 이 기기에 있음: 체크해야 백업 버전으로 교체':' · 이 기기에 없음: 이 자료집을 쓰는 방을 고르면 같이 복원';};const localRooms=new Map((existingRooms||[]).map(x=>[String(x?.chatId||''),x])),blocked=new Set(existingRooms.filter(r=>r.pending).map(r=>String(r.chatId))),all=(data.rooms||[]).filter(r=>r.chatId),rooms=all.filter(r=>!blocked.has(String(r.chatId))).map(r=>{const local=localRooms.get(String(r.chatId)),api=String(apiChatIdOf(r)||''),saved=Math.max(Date.parse(String(r.updatedAt||''))||0,backupCogTime.get(api)||0),here=local?Math.max(Date.parse(String(local.updatedAt||''))||0,localCogTime.get(api)||0):0,at=t=>formatLocalRecordTime(new Date(t).toISOString());return {id:String(r.chatId),label:r.backupDisplayName||WishRoomNames.display(r)||r.label||'RP '+shortId(r.chatId),sum:'방 ID '+r.chatId+(saved?' · 백업 '+at(saved):'')+(here?' · 이 기기 '+at(here):''),current:String(r.chatId)===String(state.currentChatId),...(!local?{diff:'신규'}:saved&&here>saved?{diff:'변경 있음'}:{})};}),libs=(data.characterLibraries||[]).filter(l=>l.scopeId&&!(l.autoManaged&&blocked.has(String(l.ownerChatId)))).map(l=>({id:String(l.scopeId),label:l.name||l.title||l.scopeId,sum:sharedRestoreHint(l).replace(/^ · /,''),owner:all.some(r=>String(r.chatId)===String(l.ownerChatId))?String(l.ownerChatId):''}));const global=!!(data.guides||data.defaultExtraPreset||data.cognitionSettings);if(global)libs.push({id:'wish-global-settings',label:'공용 지침·프리셋·인지 설정 복원',});return WUIOpenPromise('backupImport',{src:'파일 백업',note:blocked.size?'주입 중인 '+blocked.size+'개 방은 선택 목록에서 제외했습니다. 복원할 방의 기존 데이터는 교체됩니다.':'선택한 방과 설정집의 데이터를 백업으로 교체합니다. API 연결 설정은 유지됩니다.',rooms,libs,blocked:[...blocked],draft:{pick:{}}});}
 
   // ---------------------------------------------------------------------------
   // Injection lifecycle
@@ -15318,7 +15449,9 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
   function cognitionContext(value,queryOverride,contextOverrides={}) {
     if(value.historyPolicy!=='stable-user-v1')return {text:'',included:[],dropped:[],suppressed:[],selected:[],reasons:{},mode:normalizeCognitionContextMode(value.contextMode),waiting:true};
     const query=queryOverride===undefined?(contextInput.get(String(value.id))||''):String(queryOverride||'');
-    return buildContext(value,value.state,query,config.budget,cognitionPendingCount(value),contextOverrides);
+    // The rule the send uses (getStableContext, fullFit): every fact, no length cut. The old 스마트·1,000자 setting has no control and
+    // the send never read it, so the preview, the 인지 tab and the status line no longer show a cut the send does not make.
+    return buildContext({...value,contextMode:'all'},value.state,query,Number.MAX_SAFE_INTEGER,cognitionPendingCount(value),contextOverrides);
   }
 
   function scheduleCognitionCatchup(rid,delay=900){if(String(apiChatIdOf(state.currentRoom))===String(rid))U3.schedule(state.currentRoom,delay);}
@@ -15405,7 +15538,6 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
         if(!name)throw new Error('인물 이름을 입력해 주세요.');
         if(name.length>120)throw new Error('인물 이름은 120자 이내로 작성해 주세요.');
         if(live.actors.some(a=>a.name===name&&a.id!==resultId))throw new Error('같은 이름의 인물이 있습니다.');
-        if(!resultId&&live.actors.length>=30)throw new Error('한 방에서 관리할 인물은 최대 30명입니다.');
         const old=r.actors.find(a=>a.id===resultId);
         if(!resultId)resultId=id();
         const actor={...(old||{}),automatic:false,id:resultId,name,aliases:Array.isArray(payload.aliases)?payload.aliases.map(String).map(x=>x.trim()).filter(Boolean).slice(0,10):[],isPlayer:!!payload.isPlayer};
@@ -15431,10 +15563,9 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     async upsertFact(rid,payload={}){
       rid=String(rid);let resultId=String(payload.id||'');
       await manualChange(r=>{
-        const live=roomAt(r),label=String(payload.label||'').trim(),content=String(payload.content||'').trim();
+        const label=String(payload.label||'').trim(),content=String(payload.content||'').trim();
         if(!label||!content)throw new Error('정보 제목과 실제 내용을 입력해 주세요.');
         if(label.length>160 || content.length>APP.absoluteUiMax)throw new Error('정보 제목은 160자, 본문은 '+APP.absoluteUiMax.toLocaleString()+'자 이내로 작성해 주세요.');
-        if(!resultId&&live.facts.filter(f=>!f.archived).length>=60)throw new Error('한 방에서 추적할 정보는 최대 60개입니다.');
         const old=r.facts.find(f=>f.id===resultId);
         if(!resultId)resultId=id();
         const injectionMode=normalizeCognitionFactInjectionMode(payload.injectionMode!==undefined?payload.injectionMode:(old||{}),!!payload.pinned);
@@ -15567,6 +15698,9 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       return true;
     },
     async refreshExpression(rid){return refreshCognitionContextSnapshot(rid,'압축 표현 변경');},
+    // The 인지 text 시작 설정 writes into the AI start message: the 스마트·1,000자 form it has always written (cognitionContext now
+    // gives the preview the send's form). From the first USER turn on, the send writes every fact.
+    async setupContext(rid){const value=await readRoom(String(rid));return value.enabled&&value.historyPolicy==='stable-user-v1'?buildContext(value,value.state,contextInput.get(String(value.id))||'',config.budget,cognitionPendingCount(value),{}).text:'';},
     async refresh(){return refreshRoom();},
   };
   Object.defineProperty(W,'__WishCognitionBridge',{value:WishCognitionBridge,configurable:true});
@@ -17204,7 +17338,7 @@ function createWishUI(AD) {
       (j.error?'<div class="m3-status m3-err" aria-live="polite">'+ic('alert')+'<span>답을 적용하지 못했습니다 · '+esc(j.short.length>160?j.short.slice(0,160)+'…':j.short)+'</span></div>'+(!j.fixable?'':'<p class="m3-muted">[답 붙여넣기] 창에서 [오류 문구 복사]를 누른 뒤 외부 AI의 같은 대화에 붙여 넣으면 고친 답을 받을 수 있습니다. 지금까지의 기억은 그대로입니다.</p>'):'')+'</section>';
   };
   function vCheck(){const m=V.memory,c=V.cog,u=V.unified||{},I=V.inj;
- const tile=(kind,label,count,total,on,action)=>{const left=Math.max(0,total-count),done=Math.min(1,count/Math.max(1,total));return '<div class="m3-tile" data-key="home-'+kind+'">'+ring(done,COL[kind])+ '<div class="m3-txt"><div class="m3-k">'+label+'</div><div class="m3-v">'+((kind==='log'?m.running:u.running)?'정리 중':on?left+'<small>턴 뒤</small>':'일시정지')+'</div><div class="m3-ts">미처리 확정 '+count+'/'+total+'턴</div></div>'+(V.job?'':btn('지금 정리',action,{cls:'quiet mini',dis:!!V.ai.manual}))+'</div>';};
+ const tile=(kind,label,count,total,on,action)=>{const left=Math.max(0,total-count),done=Math.min(1,count/Math.max(1,total));return '<div class="m3-tile" data-key="home-'+kind+'">'+ring(done,COL[kind])+ '<div class="m3-txt"><div class="m3-k">'+label+'</div><div class="m3-v">'+((kind==='log'?m.running:u.running)?'정리 중':on?left+'<small>턴 뒤</small>':u.enabled===false?'일시정지':'꺼짐')+'</div><div class="m3-ts">미처리 확정 '+count+'/'+total+'턴</div></div>'+(V.job?'':btn('지금 정리',action,{cls:'quiet mini',dis:!!V.ai.manual}))+'</div>';};
  const status=I.armed?(I.authWaiting?'<span class="m3-home-verification">'+ic('clock')+'로그인 확인 대기 · 저장된 기억 유지</span>':I.verified?'<span class="m3-home-verification ok">'+ic('check')+'서버 저장 확인됨 · 최신 AI 바로 이전 답변에 숨김 주입</span>':I.error?'<span class="m3-home-verification" style="color:var(--m3-bad,#ef7d86)">'+ic('alert')+'주입 확인 실패 · 서버 재검증 필요</span>':'<span class="m3-home-verification">'+ic('clock')+'서버 저장 확인 중…</span>'):'<span class="m3-muted">주입 대기</span>';
  const fresh=V.fresh?.show?'<section class="m3-panel m3-focus" data-key="home-fresh"><b>'+esc(V.fresh.title||'새 방 시작 설정')+'</b><p>'+esc(V.fresh.desc||'')+'</p>'+btn('나중에','freshSkip',{cls:'quiet mini'})+btn('적용','freshApply',{cls:'primary mini'})+'</section>':'';
  return '<div class="m3-pagehead" data-key="home-head"><h2>확인 '+help(helpSections([['전달량','AI 원문과 주입 지침을 포함합니다. 한도 안이면 켜진 기억을 모두 넣고 초과하면 설정한 방식으로 선택합니다.'],['공통 안내·서식','연속성·인지 안내와 항목 제목, 구분자, 숨김 표식의 실제 길이입니다. 기억 본문은 각 분류에 따로 셉니다.'],['서버 저장 확인','현재 표시 내용과 저장된 주입본이 일치하고 서버 검증까지 끝났을 때만 확인됨으로 표시합니다. 확인 실패가 표시되면 오류가 끝없이 숨겨지지 않으며 서버 재검증으로 다시 시도할 수 있습니다.']]))+'</h2>'+status+'<span class="m3-auto-control m3-actions">'+(V.ai.manual?btn('답 붙여넣기','manualPaste',{cls:'mini',icon:'check',dis:!!V.job||!V.ai.job}):'')+(V.ai.manual&&V.ai.job?btn('TXT 다시 받기','manualTxt',{cls:'primary mini',icon:'down',dis:!!V.job}):'')+(V.ai.manual&&V.ai.job?'':btn('함께 정리','unifiedAll',{cls:'primary mini',dis:!!V.job}))+btn(u.enabled?'자동 정리 일시정지':'자동 정리 시작','unifiedToggle',{cls:'quiet mini',icon:u.enabled?'pause':'play'})+'</span></div>'+fresh+capCard()+(V.ai.manual?manualJobPanel():V.ai.ready===false?'<section class="m3-panel" data-key="manual-ai-offer"><b>보조 AI 연결이 없습니다</b><p class="m3-muted">API 키가 없어도 외부 AI(ChatGPT·Gemini 등)에 복붙하는 방식으로 기억·인물 정리를 할 수 있습니다.</p>'+btn('외부 AI 복붙으로 쓰기','manualAiSetup',{cls:'mini',icon:'key'})+'</section>':'')+
@@ -17385,7 +17519,7 @@ function mRelationships() {
     const t = [['state', '현재상태'], ['log', '날짜로그'], ['threads', '서사 고리'], ['char', '캐릭터'], ['extra', '기타·OOC']].filter(([k]) => k !== 'speech' || has('speech'));
     if (!t.some(x => x[0] === S.mem)) S.mem = 'state';
     const sub = { state: mState, log: mLog, threads: mThreads, speech: mSpeech, char: mChar, extra: mExtra }[S.mem]();
-    return `${pageHead('기억 '+help(helpSections([['하이브리드 회수','전체 기억은 저장소에 보존하고, 최근 기억과 현재 맥락에 관련된 날짜로그·자료만 골라 주입합니다.'],['오래된 기억','에리식 의미검색과 키워드 검색이 전체 과거 기록에서 오래된 사건을 다시 찾습니다.'],['보조 AI 재검토','설정한 경우 후보가 50,000자를 넘으면 AI 답이 도착한 뒤 미리 AI 선별을 합니다. USER 전송 때는 기다리지 않습니다.'],['안전선','50,000자 안전선은 유지하고 서버 500이면 같은 선택본을 45,000자까지 한 번만 줄입니다.']])), '<span class="m3-actions">'+(btn('자동 정리 설정','nav',{arg:'settings',cls:'quiet mini',icon:'set'}))+btn('기억 묶음 정리','unifiedMemory',{cls:'mini',icon:'spark',dis:!!V.ai.manual})+'</span>')}${memDiffStrip()}${tabs(t, S.mem, 'memSub')}<div class="m3-sub" data-key="mem-${S.mem}">${sub}</div>`;
+    return `${pageHead('기억 '+help(helpSections([['하이브리드 회수','전체 기억은 저장소에 보존합니다. 한도 안이면 켜진 기억을 모두 넣고, 넘으면 최근 기억과 현재 맥락에 관련된 날짜로그·자료를 골라 주입합니다.'],['오래된 기억','에리식 의미검색과 키워드 검색이 전체 과거 기록에서 오래된 사건을 다시 찾습니다.'],['보조 AI 재검토','설정한 경우 후보가 50,000자를 넘으면 AI 답이 도착한 뒤 미리 AI 선별을 합니다. USER 전송 때는 기다리지 않습니다.'],['안전선','50,000자 안전선은 유지하고 서버 500이면 같은 선택본을 45,000자까지 한 번만 줄입니다.']])), '<span class="m3-actions">'+(btn('자동 정리 설정','nav',{arg:'settings',cls:'quiet mini',icon:'set'}))+btn('기억 묶음 정리','unifiedMemory',{cls:'mini',icon:'spark',dis:!!V.ai.manual})+'</span>')}${memDiffStrip()}${tabs(t, S.mem, 'memSub')}<div class="m3-sub" data-key="mem-${S.mem}">${sub}</div>`;
   }
 
   /* ───────── 9. 화면: 자료집 ───────── */
@@ -17443,7 +17577,7 @@ function mRelationships() {
   function vSecondaryStatus(dis=false){
     const info=SecondaryRebuild.summary(state.currentRoom);
     if(!info.count)return '';
-    return '<div class="m3-secondary-status"><div class="m3-secondary-status-copy"><div class="m3-secondary-status-title"><b>등록 압축본 <strong>'+fmt(info.count)+'</strong>개</b><span class="m3-secondary-status-badge'+(info.enabled?' is-on':'')+'"><i aria-hidden="true"></i>'+(info.enabled?'사용 켜짐':'사용 꺼짐')+'</span></div><p>'+(info.enabled?'원문이 바뀌지 않은 항목에 압축본을 사용합니다.':'등록 압축본은 보관 중이며, 현재는 원문을 사용합니다.')+'</p></div>'+btn('압축본 관리','secondaryManage',{cls:'mini',icon:'edit',dis})+'</div>';
+    return '<div class="m3-secondary-status"><div class="m3-secondary-status-copy"><div class="m3-secondary-status-title"><b>등록 압축본 <strong>'+fmt(info.count)+'</strong>개'+(info.usable<info.count?' · 유효 '+fmt(info.usable)+'개':'')+'</b><span class="m3-secondary-status-badge'+(info.enabled?' is-on':'')+'"><i aria-hidden="true"></i>'+(info.enabled?'사용 켜짐':'사용 꺼짐')+'</span></div><p>'+(info.enabled?'원문이 바뀌지 않은 항목에 압축본을 사용합니다.':'등록 압축본은 보관 중이며, 현재는 원문을 사용합니다.')+'</p></div>'+btn('압축본 관리','secondaryManage',{cls:'mini',icon:'edit',dis})+'</div>';
   }
 
   const EXTERNAL_MODE_HELP=helpSections([
@@ -17551,8 +17685,8 @@ vExternalRebuild(run||ExternalBundles.busy())+
     const advanced=`<section class="m3-panel" data-key="error-log-settings"><div class="m3-panel-head"><b class="m3-title-help">실패·주의 기록</b>${btn('실패 기록 보기','errorLogs',{cls:'mini',icon:'doc'})}</div><p class="m3-muted">최근 작업 오류와 주의 사항을 확인합니다. API 키는 숨깁니다. 항목명이나 서버 오류 문구가 포함될 수 있으니 공유 전 확인해 주세요.</p></section><section class="m3-panel" data-key="automation-baseline"><div class="m3-panel-head"><b class="m3-title-help">자동 시작점 ${help('아직 정리하지 않은 과거 대화를 건너뛰고 이후 새 대화부터 셉니다. 저장된 기억·인지·자료는 유지합니다. 과거 내용을 다시 읽으려면 전체 재구축을 사용하세요.')}</b>${btn('지금으로 맞추기','memoryBase',{cls:'mini',icon:'clock'})}</div><p class="m3-muted">이 방의 미처리 대화를 건너뛰고 지금부터 새 대화를 셉니다. 저장된 기억·인지·자료는 유지합니다.</p></section>`;
     return pageHead('설정')+
       `<section class="m3-panel" data-key="ai-settings"><div class="m3-panel-head"><b class="m3-title-help">보조 AI 연결 ${help('기억·인물 정리, 날짜로그, 선택된 주입 후보 재검토에 같은 연결을 사용합니다. 에리 임베딩 의미검색은 Gemini API Key가 준비된 경우 사용합니다.')}</b>${btn('연결 · 모델','api',{cls:'mini'})}</div><p class="m3-muted">${esc([V.ai.providerLabel,V.ai.model].filter(Boolean).join(' · '))}</p></section>`+
-      `<section class="m3-panel" data-key="automation-settings"><div class="m3-panel-head"><b class="m3-title-help">자동 정리 ${help(autoHelp)}</b>${savedTag('unified')}</div><p class="m3-muted m3-scope-hint">${'모든 방 공통 · 바꾸면 바로 적용 · 일시정지는 방별'}</p>${tog('기억 묶음','unified.memoryEnabled',u.memoryEnabled,'현재상태 · 날짜별 사건 · 자료 · 서사 고리')}${step('기억 정리 주기','unified.memoryEvery',u.memoryEvery,{readOnly:true,unit:'턴마다 · 인물 ×2'})}${tog('인물 묶음','unified.observeEnabled',u.observeEnabled,'인지 · 호칭 · 말투 · 은폐')}${step('인물 정리 주기','unified.observeEvery',u.observeEvery,{min:2,max:100,unit:'턴마다'})}</section>`+
-      `<section class="m3-panel" data-key="economy-settings"><div class="m3-panel-head"><b class="m3-title-help">API 사용량 절약 ${help('실험 기능 · 저장하면 모든 방에 공통 적용합니다. 둘 다 OFF이면 2.5.8 방식입니다. OFF는 이미 갱신된 기억을 되돌리지는 않습니다. 처음 켜기 전 기억·인지·자료 백업을 보관하며, 복원용 파일은 기존 백업/복원 화면에서 가져올 수 있습니다. RP 원문은 이 백업으로 되돌리지 않습니다.')}</b>${savedTag('apiEconomy')}</div><div class="m3-economy-scope m3-scope-hint"><span class="m3-muted">${V.ai.manual?manualOff:'모든 방 공통 · 확장 프로그램에 저장'}</span>${btn('절약 적용 전 백업 받기','economyBackup',{cls:'mini',dis:!!V.ai.manual})}</div>${apiOnly(helpToggle('현재상태 변경분 갱신','apiEconomy.delta',!V.ai.manual&&V.apiEconomy?.delta,'변경된 원문 구간만 수정하고 나머지 문구는 보존합니다. 수정·추가·종료에 신규 RP 근거와 요청 토큰을 검증합니다. 애매한 편집은 원본을 유지하고 오류를 표시합니다. 날짜별 사건·자료·인지는 기존 증분 방식을 유지합니다.'))}${apiOnly(helpToggle('색인으로 후보 선별','apiEconomy.index',!V.ai.manual&&V.apiEconomy?.index,'전체 후보가 50,000자를 초과할 때만 기존 선별 설정에 따라 사용합니다. 첫 선별에서 원문과 점수를 읽고 짧은 발췌 색인을 함께 준비하므로 첫 호출은 더 커질 수 있습니다. 다음 호출부터 같은 원문의 색인을 사용하며 실제 주입은 원문입니다. 자료 변경·색인 부적합·캐시 소실 때는 원문으로 돌아갑니다. 핵심 단서 누락 가능성은 실전 비교가 필요합니다.'))}<p class="m3-muted">${esc(V.apiEconomy?.status||'')}</p></section>`+
+      `<section class="m3-panel" data-key="automation-settings"><div class="m3-panel-head"><b class="m3-title-help">자동 정리 ${help(autoHelp)}</b>${savedTag('unified')}</div><p class="m3-muted m3-scope-hint">${'모든 방 공통 · 바꾸면 바로 적용 · 일시정지는 방별'}</p>${tog('기억 묶음','unified.memoryEnabled',u.memoryEnabled,'현재상태 · 날짜별 사건 · 자료 · 서사 고리')}${step('기억 정리 주기','unified.memoryEvery',u.memoryEvery,{readOnly:true,unit:'턴마다 · 인물 ×2'})}${tog('인물 묶음','unified.observeEnabled',u.observeEnabled,'인지 · 호칭 · 말투 · 은폐 · 관계')}${step('인물 정리 주기','unified.observeEvery',u.observeEvery,{min:2,max:100,unit:'턴마다'})}</section>`+
+      `<section class="m3-panel" data-key="economy-settings"><div class="m3-panel-head"><b class="m3-title-help">API 사용량 절약 ${help('실험 기능 · 저장하면 모든 방에 공통 적용합니다. 둘 다 OFF이면 현재상태를 매번 전체로 갱신하고 후보를 원문으로 선별하는 기본 방식입니다. OFF는 이미 갱신된 기억을 되돌리지는 않습니다. 처음 켜기 전 기억·인지·자료 백업을 보관하며, 복원용 파일은 기존 백업/복원 화면에서 가져올 수 있습니다. RP 원문은 이 백업으로 되돌리지 않습니다.')}</b>${savedTag('apiEconomy')}</div><div class="m3-economy-scope m3-scope-hint"><span class="m3-muted">${V.ai.manual?manualOff:'모든 방 공통 · 확장 프로그램에 저장'}</span>${btn('절약 적용 전 백업 받기','economyBackup',{cls:'mini',dis:!!V.ai.manual})}</div>${apiOnly(helpToggle('현재상태 변경분 갱신','apiEconomy.delta',!V.ai.manual&&V.apiEconomy?.delta,'변경된 원문 구간만 수정하고 나머지 문구는 보존합니다. 수정·추가·종료에 신규 RP 근거와 요청 토큰을 검증합니다. 애매한 편집은 원본을 유지하고 오류를 표시합니다. 날짜별 사건·자료·인지는 기존 증분 방식을 유지합니다.'))}${apiOnly(helpToggle('색인으로 후보 선별','apiEconomy.index',!V.ai.manual&&V.apiEconomy?.index,'전체 후보가 50,000자를 초과할 때만 기존 선별 설정에 따라 사용합니다. 첫 선별에서 원문과 점수를 읽고 짧은 발췌 색인을 함께 준비하므로 첫 호출은 더 커질 수 있습니다. 다음 호출부터 같은 원문의 색인을 사용하며 실제 주입은 원문입니다. 자료 변경·색인 부적합·캐시 소실 때는 원문으로 돌아갑니다. 핵심 단서 누락 가능성은 실전 비교가 필요합니다.'))}<p class="m3-muted">${esc(V.apiEconomy?.status||'')}</p></section>`+
       `<section class="m3-panel" data-key="recall-settings"><div class="m3-panel-head"><b class="m3-title-help">선택된 기억 AI 재검토 ${help(recallHelp)}</b>${savedTag('recall')}</div><p class="m3-muted m3-scope-hint">${V.ai.manual?manualOff+' · 최근·키워드 검색만 사용':'모든 방 공통 · 확장 프로그램에 저장'}</p><div class="m3-setting-row m3-recall-mode"><label for="wish-recall-mode">재검토 방식</label>${selc('recall.mode',V.ai.manual?'local':mode,[['local','에리·키워드 결과만 사용'],['priority','AI로 후보 순서 재검토'],['both','AI로 관련성·순서 재검토'],['semantic','AI로 관련성만 재검토']],'m3-select',' id="wish-recall-mode" aria-label="선택된 기억 AI 재검토"'+(V.ai.manual?' disabled':''))}</div><p class="m3-muted">최근·관련 기억 검색은 유지 · 원문·서식 포함 전체 후보가 50,000자를 초과할 때만 AI 선별 · 관련 후보를 50,000자 안전선까지 포함 · AI 답 도착 뒤 미리 선별, 전송 때는 기다리지 않음 · 임베딩·자동 정리는 별도</p>${apiOnly(helpToggle('AI로 관련성 재확인','recall.semantic',!V.ai.manual&&q.semantic,'사용하도록 설정한 전체 후보가 원문·서식 포함 50,000자를 초과하면 AI 답이 도착한 뒤 보조 AI가 그 답과의 문맥 관련성을 미리 확인합니다. 제외 항목은 유지하며, 키워드가 일치하지 않는 후보도 평가합니다. 이번 USER 입력으로 검색 점수가 오른 후보는 빼지 않습니다. 의미검색 색인이 있으면 전송 때 이번 입력의 검색 벡터를 요청하되 기다리지 않고, 미리 만든 직전 AI 답의 검색 벡터나 키워드로 순위를 정합니다.'))}${apiOnly(helpToggle('AI로 우선순위 정하기','recall.selector',!V.ai.manual&&q.selector,'직전 AI 답·미해결 약속·위험과 직접 연결된 후보부터 50,000자 안전선 안에 배치합니다. 이번 USER 입력으로 검색 점수가 오른 후보는 에리·키워드 자리를 지킵니다. 점수가 준비되지 않았거나 실패하면 에리·키워드 순위를 그대로 사용합니다.'))}</section>`+
       `<section class="m3-panel" data-key="api-guides"><div class="m3-panel-head"><b>API 추출 지침</b>${btn('지침','promptGuides',{arg:'apiCommon',cls:'mini',icon:'doc'})}</div><p class="m3-muted">기억·인물·후보 선별 등 지침을 선택해 편집합니다. 모든 방 공통 · 기본값 복원 가능</p></section>`+
       `<section class="m3-panel" data-key="usage-settings"><div class="m3-panel-head"><b>AI 사용량 가계부</b>${btn('가계부','usageLedger',{cls:'mini',icon:'wallet'})}</div><p class="m3-muted">날짜별 호출 횟수와 예상 비용(USD) · 추가 API 호출 없음</p></section>`+advanced;
@@ -18420,7 +18554,7 @@ diff:`<div class="m3-shell">
     secondaryManage(d){
       const summary=SecondaryRebuild.summary(d.room);
       const rows=d.rows.slice(0,Number(d.draft.limit)||30).map(r=>`<article class="m3-copy-item" data-key="manage-${r.id}"><div class="m3-copy-item-head m3-secondary-manage"><button type="button" class="m3-copy-title" data-act="secondaryExpand" data-arg="${d.id}|${r.id}"><b>${esc(r.title)}</b><small>${fmt(r.source.length)} → ${fmt(r.text.length)}자</small></button>${btn('이 압축본 해제','secondaryChange',{arg:d.id+'|'+r.id,cls:'quiet mini',dis:d.busy})}</div>${d.draft.open[r.id]?`<div class="m3-secondary-compare"><section><b>등록 당시 원문</b><pre>${esc(r.source)}</pre></section><section><b>압축 표현</b><pre>${esc(r.text)}</pre></section></div>`:''}</article>`).join('');
-      return sheet(d,{title:'2차 재구축 적용본 관리',desc:summary.enabled?'압축 사용 켜짐':'압축 사용 꺼짐',wide:true,body:`<div class="m3-status m3-bottomgap">${ic('alert')}<span>등록 본문 ${summary.count}개. 원문·대상 정보가 등록 당시와 같을 때만 사용합니다. 달라진 본문은 최신 원문을 사용하며, 여기서 해제해도 저장 기억은 삭제하지 않습니다.</span></div>${rows}${d.rows.length>(Number(d.draft.limit)||30)?btn('더 보기','secondaryMore',{arg:d.id,cls:'mini'}):''}${d.error?`<p class="m3-error">${esc(d.error)}</p>`:''}`,foot:`${btn(summary.enabled?'압축 사용 끄기':'압축 사용 켜기','secondaryChange',{arg:d.id+'|toggle',cls:'mini',dis:d.busy})}${btn('등록 압축본 모두 해제','secondaryClear',{arg:d.id,cls:'danger mini',dis:d.busy})}${SP}${closeBtn(d)}`});
+      return sheet(d,{title:'2차 재구축 적용본 관리',desc:summary.enabled?'압축 사용 켜짐':'압축 사용 꺼짐',wide:true,body:`<div class="m3-status m3-bottomgap">${ic('alert')}<span>등록 본문 ${summary.count}개${summary.usable<summary.count?' · 유효 '+summary.usable+'개':''}. 원문·대상 정보가 등록 당시와 같을 때만 사용합니다. 달라진 본문은 최신 원문을 사용하며, 여기서 해제해도 저장 기억은 삭제하지 않습니다.</span></div>${rows}${d.rows.length>(Number(d.draft.limit)||30)?btn('더 보기','secondaryMore',{arg:d.id,cls:'mini'}):''}${d.error?`<p class="m3-error">${esc(d.error)}</p>`:''}`,foot:`${btn(summary.enabled?'압축 사용 끄기':'압축 사용 켜기','secondaryChange',{arg:d.id+'|toggle',cls:'mini',dis:d.busy})}${btn('등록 압축본 모두 해제','secondaryClear',{arg:d.id,cls:'danger mini',dis:d.busy})}${SP}${closeBtn(d)}`});
     },
 
     errorLogs(d){const rows=V.diagnostics||[];return sheet(d,{title:'실패·주의 기록',desc:'이 브라우저의 최근 100개 · 항목을 펼치면 원인·조치·처리 상태를 확인합니다.',body:rows.map(row=>errorDiagnosticCard(row)).join('')||empty('저장된 실패 기록이 없습니다.'),foot:btn('기록 복사','errorLogsCopy',{cls:'mini',icon:'copy'})+btn('기록 비우기','errorLogsClear',{cls:'danger mini',icon:'trash'})+SP+closeBtn(d)});},
@@ -18632,7 +18766,7 @@ nativeBundle(d) {
     /* props: { isNew, pack, ref, draft:{name,type,triggers,full,compact,micro,on,anchor,auto,sp:{speaker,target,address,reg}} } */
     eEntry(d) {
       const x = d.draft;
-      return sheet(d, { title: d.isNew ? '자료 추가' : `${esc(x.name)} 편집`, desc: x.auto ? '자동 카드 · 직접 고치면 수동 보호로 바뀝니다' : '', wide: true, body: `<div class="m3-grid2">${field('이름', inp(D(d, 'name'), x.name || ''))}${field('종류', selc(D(d, 'type'), x.type, Object.entries(L.lore)))}</div>${field('호출 키워드 · 쉼표로 구분', inp(D(d, 'triggers'), x.triggers || ''))}${x.type === 'speech' && x.sp ? `<div class="m3-grid2">${field('화자', inp(D(d, 'sp.speaker'), x.sp.speaker || ''))}${field('상대', inp(D(d, 'sp.target'), x.sp.target || ''))}</div><div class="m3-grid2">${field('부르는 말', inp(D(d, 'sp.address'), x.sp.address || ''))}${field('말투', selc(D(d, 'sp.reg'), x.sp.reg, Object.entries(L.reg)))}</div>` : `${field('전체', ta(D(d, 'full'), x.full || '', '', '110'), '앵커이거나 깊게 찾을 때')}<div class="m3-grid2">${field('요약', ta(D(d, 'compact'), x.compact || '', '', '70'), '보통 관련 호출')}${field('한 줄', ta(D(d, 'micro'), x.micro || '', '', '70'), '넓게 찾을 때')}</div>`}<div class="m3-stack">${tog('사용', D(d, 'on'), x.on)}${tog('앵커 · 항상 참고', D(d, 'anchor'), x.anchor, '관련도와 상관없이 매턴 전체 내용을 넣음')}</div>`, foot: `${!d.isNew ? delBtn(d) : ''}${SP}${closeBtn(d, '취소')}${saveBtn(d)}` });
+      return sheet(d, { title: d.isNew ? '자료 추가' : `${esc(x.name)} 편집`, desc: x.auto ? '자동 카드 · 직접 고치면 수동 보호로 바뀝니다' : '', wide: true, body: `<div class="m3-grid2">${field('이름', inp(D(d, 'name'), x.name || ''))}${field('종류', selc(D(d, 'type'), x.type, Object.entries(L.lore)))}</div>${field('호출 키워드 · 쉼표로 구분', inp(D(d, 'triggers'), x.triggers || ''))}${x.type === 'speech' && x.sp ? `<div class="m3-grid2">${field('화자', inp(D(d, 'sp.speaker'), x.sp.speaker || ''))}${field('상대', inp(D(d, 'sp.target'), x.sp.target || ''))}</div><div class="m3-grid2">${field('부르는 말', inp(D(d, 'sp.address'), x.sp.address || ''))}${field('말투', selc(D(d, 'sp.reg'), x.sp.reg, Object.entries(L.reg)))}</div>` : `${field('전체', ta(D(d, 'full'), x.full || '', '', '110'), '앵커이거나 깊게 찾을 때')}<div class="m3-grid2">${field('요약', ta(D(d, 'compact'), x.compact || '', '', '70'), '보통 관련 호출')}${field('한 줄', ta(D(d, 'micro'), x.micro || '', '', '70'), '넓게 찾을 때')}</div>`}<div class="m3-stack">${tog('사용', D(d, 'on'), x.on)}${tog('앵커 · 항상 참고', D(d, 'anchor'), x.anchor, '관련도와 상관없이 매턴 넣음 · 기억이 길이 한도를 넘는 턴에는 요약·한 줄로 줄여 넣을 수 있음')}</div>`, foot: `${!d.isNew ? delBtn(d) : ''}${SP}${closeBtn(d, '취소')}${saveBtn(d)}` });
     },
     /* props: { isNew, ref, draft:{name,aliases,pc,present} } */
     eActor(d) { const x = d.draft; return sheet(d, { title: d.isNew ? '인물 추가' : `${esc(x.name)} 편집`, body: `${!d.isNew && d.ref ? `<div class="m3-toolbar">${btn('인물별 카드 보기', 'personDossier', { arg: 'actor:' + d.ref, cls: 'mini', icon: 'search' })}</div>` : ''}${field('이름', inp(D(d, 'name'), x.name || ''))}${field('별칭 · 쉼표로 구분', inp(D(d, 'aliases'), x.aliases || ''))}<div class="m3-stack">${tog('사용자 캐릭터 (PC)', D(d, 'pc'), x.pc)}${tog('지금 현장에 있음', D(d, 'present'), x.present, '현장에 있는 인물 기준으로 인지를 고릅니다')}</div>`, foot: `${!d.isNew ? delBtn(d) : ''}${SP}${closeBtn(d, '취소')}${saveBtn(d)}` }); },
