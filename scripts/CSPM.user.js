@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         🎨 Crack Scene Painter Mobile (크랙 장면 삽화 · 모바일)
 // @namespace    crack-scene-painter
-// @version      5.2.8
+// @version      5.3.0
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/CSPM.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/CSPM.user.js
-// @description  크랙 AI 삽화 + 만화 콘티. 5.2.8: 모바일 갤러리·UC 전환 오류 수정, 분석·저장 안정화, 중복 조회 감소.
+// @description  크랙 AI 삽화 + 만화 콘티 (모바일). 5.3.0: 세계관 & 설정 프리셋 추가, 갤러리·기록 썸네일과 스튜디오 경량화, 퀵 생성이 기존 기록을 지우지 않음, 저장 멈춤·재생성 위치 버그 수정, 코드·CSS 정리.
 // @match        https://crack.wrtn.ai/*
 // @grant        GM_xmlhttpRequest
 // @connect      generativelanguage.googleapis.com
@@ -274,11 +274,6 @@
 
     function resetGeminiUsage() {
         try { localStorage.removeItem(GEMINI_USAGE_STORE_KEY); } catch (_) {}
-        updateGeminiUsageSettingsSummary();
-    }
-
-    function getGeminiTokenPrices() {
-        return GEMINI_TOKEN_PRICES;
     }
 
     function formatGeminiUsageInt(value) {
@@ -291,7 +286,7 @@
         return `$${n < 0.0001 ? n.toFixed(6) : n.toFixed(4)}`;
     }
 
-    function getGeminiUsageCost(model, inputTokens, outputTokens, prices = getGeminiTokenPrices()) {
+    function getGeminiUsageCost(model, inputTokens, outputTokens, prices = GEMINI_TOKEN_PRICES) {
         const price = prices[getGeminiUsageModelKey(model)];
         if (!price) return null;
         return (Number(inputTokens || 0) / 1_000_000) * Number(price.in || 0)
@@ -300,7 +295,7 @@
 
     function getGeminiUsageCostSummary() {
         const usage = getGeminiUsage();
-        const prices = getGeminiTokenPrices();
+        const prices = GEMINI_TOKEN_PRICES;
         let totalCost = 0;
         const rows = Object.entries(usage.byModel || {}).map(([model, item]) => {
             const cost = getGeminiUsageCost(model, item.input, item.output, prices);
@@ -352,7 +347,6 @@
         };
 
         saveGeminiUsage(usage);
-        updateGeminiUsageSettingsSummary();
     }
 
     function trackGeminiUsage(model, body) {
@@ -361,41 +355,7 @@
         addGeminiUsage(model, tokens.input, tokens.output);
     }
 
-    function buildGeminiUsageSummaryHtml() {
-        const { usage, rows, totalCost } = getGeminiUsageCostSummary();
-        const rowHtml = rows.length
-            ? rows.map(row => `
-                <div class="csp-usage-model-row">
-                    <div>
-                        <b>${escapeHtml(row.model)}</b>
-                        <span>요청 ${formatGeminiUsageInt(row.count)}회 · 입력 ${formatGeminiUsageInt(row.input)} · 출력 ${formatGeminiUsageInt(row.output)}</span>
-                    </div>
-                    <strong>${typeof row.cost === 'number' ? formatGeminiUsageUsd(row.cost) : '$ -'}</strong>
-                </div>
-            `).join('')
-            : '<div class="csp-usage-empty">아직 집계된 Gemini 사용량이 없어.</div>';
 
-        return `
-            <div class="csp-usage-summary" data-csp-gemini-usage-summary="1">
-                <div class="csp-usage-total">
-                    <div class="csp-usage-total-chips">
-                        <span>요청 <b>${formatGeminiUsageInt(usage.requestCount)}</b>회</span>
-                        <span>입력 <b>${formatGeminiUsageInt(usage.inputTokens)}</b></span>
-                        <span>출력 <b>${formatGeminiUsageInt(usage.outputTokens)}</b></span>
-                        <span>예상 <b>${formatGeminiUsageUsd(totalCost)}</b></span>
-                    </div>
-                    <button class="csp-btn csp-btn-small csp-btn-danger" id="csp-gemini-usage-reset" type="button">사용량 초기화</button>
-                </div>
-                <div class="csp-usage-models">${rowHtml}</div>
-            </div>
-        `;
-    }
-
-    function updateGeminiUsageSettingsSummary(root = document) {
-        const summary = root?.querySelector?.('[data-csp-gemini-usage-summary="1"]') || document.querySelector('[data-csp-gemini-usage-summary="1"]');
-        if (!summary) return;
-        summary.outerHTML = buildGeminiUsageSummaryHtml();
-    }
 
 
     function parseFirebaseConfigInput(input) {
@@ -818,6 +778,8 @@
         const structuredFieldError = /(response.?schema|response.?format).*(invalid|unsupported|unknown|not allowed|malformed)|(invalid|unsupported|unknown|not allowed|malformed).*(response.?schema|response.?format)/.test(message);
         const isBadRequest = status === 400 || /\b400\b|invalid.argument|bad request/.test(message) || structuredFieldError;
         if (!isBadRequest) return false;
+        // API 키·지역 제한·입력 토큰 초과 같은 400은 구조화 출력과 무관해서 같은 요청을 다시 보내도 똑같이 실패한다.
+        if (!structuredFieldError && /api.?key|location is not supported|failed.?precondition|token count|exceeds the maximum number of tokens|permission|quota|unauthenticated|billing/.test(message)) return false;
 
         // generateContent는 지원하지 않는 JSON 출력 설정을 받았을 때 상세 필드 없이
         // "Request contains an invalid argument"만 주기도 하므로 400 자체도 호환 재시도 대상으로 본다.
@@ -1152,19 +1114,37 @@
         return json;
     }
 
-    function decodeLocalJsonValue(value, fallback = {}) {
+    const cspUndecodableLocalJsonKeys = new Set();
+
+    let cspUndecodableLocalJsonToastShown = false;
+
+    function reportUndecodableLocalJson(key, err) {
+        if (cspUndecodableLocalJsonKeys.has(key)) return;
+        cspUndecodableLocalJsonKeys.add(key);
+        console.error('[Crack Scene Painter] compressed JSON decode failed; overwriting this key is blocked for this session:', key, err);
+        if (cspUndecodableLocalJsonToastShown) return;
+        cspUndecodableLocalJsonToastShown = true;
+        try {
+            showToast('⚠️ 저장된 설정/기록을 읽지 못해서 덮어쓰지 않도록 저장을 막았어요. 새로고침하거나 스크립트를 다시 설치해줘.');
+        } catch (_) {}
+    }
+
+    function decodeLocalJsonValue(value, fallback = {}, key = '') {
         const raw = String(value || '');
         if (!raw) return fallback;
 
         if (raw.startsWith(COMPRESSED_JSON_PREFIX)) {
             try {
+                // fflate(@require)가 없으면 압축값을 읽을 수 없다. 빈 값으로 조용히 넘기지 않고 실패로 처리한다.
+                if (!window.fflate?.gunzipSync || !window.fflate?.strFromU8) throw new Error('fflate is not available');
                 const payload = raw.slice(COMPRESSED_JSON_PREFIX.length);
-                if (window.fflate?.gunzipSync && window.fflate?.strFromU8) {
-                    const json = window.fflate.strFromU8(window.fflate.gunzipSync(base64ToBytes(payload)));
-                    return JSON.parse(json);
-                }
+                const json = window.fflate.strFromU8(window.fflate.gunzipSync(base64ToBytes(payload)));
+                const parsed = JSON.parse(json);
+                // 다른 탭이 정상 값으로 다시 썼으면 지금은 읽히므로 쓰기 잠금을 푼다.
+                if (key) cspUndecodableLocalJsonKeys.delete(key);
+                return parsed;
             } catch (err) {
-                console.warn('[Crack Scene Painter] compressed JSON decode failed:', err);
+                reportUndecodableLocalJson(key, err);
                 return fallback;
             }
         }
@@ -1173,10 +1153,21 @@
     }
 
     function getLocalJsonStorage(key, fallback = {}) {
-        return decodeLocalJsonValue(localStorage.getItem(key), fallback);
+        return decodeLocalJsonValue(localStorage.getItem(key), fallback, key);
+    }
+
+    function isLocalJsonUnreadable(key) {
+        return cspUndecodableLocalJsonKeys.has(key) && String(localStorage.getItem(key) || '').startsWith(COMPRESSED_JSON_PREFIX);
     }
 
     function setLocalJsonStorage(key, value) {
+        if (isLocalJsonUnreadable(key)) {
+            const err = new Error('저장된 설정/기록을 읽지 못해서 덮어쓰지 않았어요. 새로고침하거나 스크립트를 다시 설치해줘.');
+            err.cspUndecodable = true;
+            throw err;
+        }
+        // 못 읽던 값이 지워졌거나 압축되지 않은 값으로 바뀌었으면 지킬 원본이 없으니 잠금을 푼다.
+        cspUndecodableLocalJsonKeys.delete(key);
         const encoded = encodeLocalJsonValue(value);
         localStorage.setItem(key, encoded);
         return encoded;
@@ -1233,6 +1224,8 @@
             const parsed = safeJsonParse(raw, null);
             if (!parsed || typeof parsed !== 'object') return;
             try {
+                // v5.3.0: 압축해도 짧아지지 않는 작은 값(또는 fflate 없음)은 같은 원문을 부팅마다 다시 쓰지 않는다.
+                if (!encodeLocalJsonValue(parsed).startsWith(COMPRESSED_JSON_PREFIX)) return;
                 const beforeKb = getStringSizeKb(raw);
                 const encoded = setLocalJsonStorage(key, parsed);
                 const afterKb = getStringSizeKb(encoded);
@@ -1601,7 +1594,7 @@ Reference: ${hasUsableReference(c) ? getActiveReferenceEntries(c).map((ref, idx)
         };
     }
 
-    function buildPcCharacterPromptForPlan(pcCharacter, mode = '') {
+    function buildPcCharacterPromptForPlan(pcCharacter) {
         const appearanceTags = getCharacterAppearanceTags(pcCharacter);
         const defaultOutfitTags = getCharacterOutfitTags(pcCharacter);
         return buildCommaPrompt([appearanceTags, defaultOutfitTags]);
@@ -1609,7 +1602,7 @@ Reference: ${hasUsableReference(c) ? getActiveReferenceEntries(c).map((ref, idx)
 
     function stripNonSceneNodes(root) {
         if (!root) return root;
-        root.querySelectorAll('.csp-generated-scene-image, pre, .wrtn-codeblock, .not-wrtn-markdown').forEach(el => el.remove());
+        root.querySelectorAll('.csp-generated-scene-image, .csp-image-history-row, pre, .wrtn-codeblock, .not-wrtn-markdown').forEach(el => el.remove());
         return root;
     }
 
@@ -2251,6 +2244,7 @@ director.lightingIntent:
             pcGeminiAutoGuide: getDefaultPcGeminiAutoGuideV2(),
             naiSettings: getDefaultNaiSettings(),
             characterQuickSlots: [],
+            worldPresets: [],
             danbooruTagbookCsvUrl: DEFAULT_DANBOORU_TAGBOOK_CSV_URL,
             danbooruTagbookTaxonomyUrl: DEFAULT_DANBOORU_TAXONOMY_URL,
             danbooruTagbookRepoUrl: DEFAULT_DANBOORU_TAGBOOK_REPO_URL
@@ -2411,27 +2405,29 @@ director.lightingIntent:
         };
     }
 
+    const LEGACY_BUILT_IN_PROMPT_HASHES = Object.freeze({
+        // v4.29.0~v4.30.3 내장 기본 지침 hash를 포함해 사용자가 수정하지 않은 설치만 최신 기본값으로 승격한다.
+        geminiInstruction: ['jilhtj', 'k8hn0h', 'qc08qw', 'um7q99', '4cjswj', '5pgcuu', '65cdb3', 'q77u1t'],
+        naiPromptGuide: ['pgk5c0', 'of3hgd', 'nz8yiy'],
+        naiPromptGuideV45: ['5yhy5t', '17lxa4'],
+        naiPromptGuideV5: ['bar002', 'x02equ', 'ibx60w'],
+        pcGeminiPovGuide: ['470qpn', 'tfrecj', 'wdw19u'],
+        pcGeminiVisibleGuide: ['gay23a', '1afd4x', '3n2335'],
+        pcGeminiAutoGuide: ['tm8xwo', 'djc2fr', 'exrnhj']
+    });
+
     function normalizeGlobalSettings(settings, options = {}) {
         const defaults = getDefaultGlobalSettings();
         const legacyRoom = options.legacyRoom || {};
         const saved = settings || {};
         const merged = Object.assign({}, defaults, saved);
 
-        // v4.25.3: 예전 내장 기본 프롬프트를 그대로 쓰던 사용자만 새 구조로 승격합니다.
-        // 4.24.x 기본값과 4.25.2 정리본을 모두 인식합니다. 사용자가 직접 수정한 값은 hash가 달라지므로 건드리지 않습니다.
-        const legacyBuiltInPromptHashes = Object.freeze({
-            // v4.29.0~v4.30.3 내장 기본 지침 hash를 포함해 사용자가 수정하지 않은 설치만 최신 기본값으로 승격한다.
-            geminiInstruction: ['jilhtj', 'k8hn0h', 'qc08qw', 'um7q99', '4cjswj', '5pgcuu', '65cdb3', 'q77u1t'],
-            naiPromptGuide: ['pgk5c0', 'of3hgd', 'nz8yiy'],
-            naiPromptGuideV45: ['5yhy5t', '17lxa4'],
-            naiPromptGuideV5: ['bar002', 'x02equ', 'ibx60w'],
-            pcGeminiPovGuide: ['470qpn', 'tfrecj', 'wdw19u'],
-            pcGeminiVisibleGuide: ['gay23a', '1afd4x', '3n2335'],
-            pcGeminiAutoGuide: ['tm8xwo', 'djc2fr', 'exrnhj']
-        });
+        const legacyBuiltInPromptHashes = LEGACY_BUILT_IN_PROMPT_HASHES;
         Object.entries(legacyBuiltInPromptHashes).forEach(([key, legacyHashes]) => {
+            // 공용/V4.5/V5 NAI 지침은 아래에서 따로 판정해 덮어쓰므로 여기서 hash를 계산하지 않는다.
+            if (key === 'naiPromptGuide' || key === 'naiPromptGuideV45' || key === 'naiPromptGuideV5') return;
             const savedValue = String(saved?.[key] || '');
-            if (key !== 'naiPromptGuide' && savedValue && legacyHashes.includes(hashTiny(savedValue))) merged[key] = defaults[key];
+            if (savedValue && legacyHashes.includes(hashTiny(savedValue))) merged[key] = defaults[key];
         });
         // v4.28.0: 구형 내장 지침을 수정 없이 사용하던 설치만 ScenePlan v2 기본값으로 승격한다.
         if (/NovelAI V4\.5 삽화용 장면 계획 JSON/.test(String(saved?.geminiInstruction || ''))) merged.geminiInstruction = defaults.geminiInstruction;
@@ -2507,6 +2503,14 @@ director.lightingIntent:
                 name: String(slot?.name || '').trim(),
                 characters: Array.isArray(slot?.characters) ? normalizeRoomSettings({ characters: slot.characters }).characters : []
             })).filter(slot => slot.name && slot.characters.length)
+            : [];
+        // 세계관 & 설정 프리셋(전역). 세계관 기본 설정 + 시각 설정만 보관하고 현재 상태(currentState)는 넣지 않는다.
+        merged.worldPresets = Array.isArray(merged.worldPresets)
+            ? merged.worldPresets.map(preset => ({
+                name: String(preset?.name || '').trim(),
+                ...cloneWorldPresetData(preset),
+                updatedAt: Number(preset?.updatedAt || 0) || 0
+            })).filter(preset => preset.name)
             : [];
 
         merged.danbooruTagbookCsvUrl = String(merged.danbooruTagbookCsvUrl || DEFAULT_DANBOORU_TAGBOOK_CSV_URL).trim() || DEFAULT_DANBOORU_TAGBOOK_CSV_URL;
@@ -2648,17 +2652,8 @@ director.lightingIntent:
     function forceFirebaseProviderIfConfigured() {
         const saved = getGlobalSettings();
         const hasFirebaseConfig = !!String(saved?.firebaseConfigJson || '').trim();
+        // 'vertex'는 normalizeGlobalSettings·migrateRemovedVertexProviderSettings가 이미 정리하므로 여기 올 수 없다.
         const rawProvider = String(saved?.geminiProvider || '').trim().toLowerCase();
-
-        if (rawProvider === 'vertex') {
-            saved.geminiProvider = hasFirebaseConfig ? 'firebase' : 'ai-studio';
-            delete saved.vertexProjectId;
-            delete saved.vertexLocation;
-            delete saved.vertexAccessToken;
-            saveGlobalSettings(saved);
-            console.warn(`[Crack Scene Painter] 구형 Vertex provider를 ${saved.geminiProvider}로 마이그레이션했습니다.`);
-            return;
-        }
 
         if (!hasFirebaseConfig) return;
         if (rawProvider === 'firebase' || rawProvider === 'deepseek') return;
@@ -2726,6 +2721,16 @@ director.lightingIntent:
         const history = Array.isArray(record?.history) ? record.history : [];
         const current = history.length ? history[clampHistoryIndex(record)] : null;
         return current?.promptArchiveId || record?.promptArchiveId || '';
+    }
+
+    const PROMPT_ARCHIVE_MEMORY_CACHE_MAX = 64;
+
+    function rememberPromptArchive(archiveId, archive) {
+        promptArchiveMemoryCache.delete(archiveId);
+        promptArchiveMemoryCache.set(archiveId, archive);
+        while (promptArchiveMemoryCache.size > PROMPT_ARCHIVE_MEMORY_CACHE_MAX) {
+            promptArchiveMemoryCache.delete(promptArchiveMemoryCache.keys().next().value);
+        }
     }
 
     async function deletePromptArchiveById(archiveId) {
@@ -2806,16 +2811,12 @@ director.lightingIntent:
         };
     }
 
-    function hasPromptArchivePayload(record = {}) {
-        return hasGeneratedPromptSnapshot(record);
-    }
-
     function fireAndForgetStorePromptArchive(messageKey, record = {}, archiveIdOverride = '', roomId = getRoomId()) {
-        if (!messageKey || !hasPromptArchivePayload(record)) return '';
+        if (!messageKey || !hasGeneratedPromptSnapshot(record)) return '';
         const archiveId = archiveIdOverride || record.promptArchiveId || makePromptArchiveId(messageKey, '', roomId);
         const payload = buildPromptArchivePayload(Object.assign({}, record, { promptArchiveId: archiveId }), roomId);
         try {
-            promptArchiveMemoryCache.set(archiveId, payload);
+            rememberPromptArchive(archiveId, payload);
         } catch (_) {}
         putStoredMeta(archiveId, payload).catch(err => {
             console.warn('[Crack Scene Painter] prompt archive save failed:', err);
@@ -2827,7 +2828,8 @@ director.lightingIntent:
         const compact = {};
         if (item.outputKind) compact.outputKind = item.outputKind;
         if (item.imageId) compact.imageId = item.imageId;
-        if (item.imageUrl && !String(item.imageUrl).startsWith('data:') && !String(item.imageUrl).startsWith('blob:')) {
+        // IndexedDB로 아직 옮기지 못한(imageId 없는) 예전 data URL은 유일한 사본이라 남긴다. blob URL은 새로고침 후 깨지므로 버린다.
+        if (item.imageUrl && !String(item.imageUrl).startsWith('blob:') && !(item.imageId && String(item.imageUrl).startsWith('data:'))) {
             compact.imageUrl = item.imageUrl;
         }
         if (item.folderFileName) compact.folderFileName = item.folderFileName;
@@ -2846,10 +2848,8 @@ director.lightingIntent:
             record.history.forEach(item => {
                 if (!item) return;
                 // data/blob URL은 localStorage에 넣지 않는다. 새 이미지와 기존 이미지 마이그레이션은 IndexedDB가 담당한다.
-                if (String(item.imageUrl || '').startsWith('data:')) {
-                    item.imageId = item.imageId || makeHistoryImageId(messageKey, roomId);
-                    delete item.imageUrl;
-                }
+                // v5.3.0: 단, IndexedDB에 없는(imageId 없는) 예전 data URL은 id만 찍고 버리면 이미지가 사라지므로 옮겨질 때까지 남긴다.
+                if (item.imageId && String(item.imageUrl || '').startsWith('data:')) delete item.imageUrl;
                 if (String(item.imageUrl || '').startsWith('blob:')) delete item.imageUrl;
             });
             record.history = record.history
@@ -2859,15 +2859,10 @@ director.lightingIntent:
             syncCurrentImageFieldsFromHistory(record);
         }
 
-        if (String(record.imageUrl || '').startsWith('data:')) {
-            record.imageId = record.imageId || makeStoredImageId(messageKey, roomId);
-            delete record.imageUrl;
-        }
-        if (String(record.imageUrl || '').startsWith('blob:')) delete record.imageUrl;
-
-        const currentHistoryItem = getCurrentHistoryItem(record);
+        // 위에서 이미 정규화했으므로 getCurrentHistoryItem으로 한 번 더 정규화하지 않는다.
+        const currentHistoryItem = record.history[clampHistoryIndex(record)] || null;
         let archiveId = currentHistoryItem?.promptArchiveId || record.promptArchiveId || '';
-        if (hasPromptArchivePayload(record)) {
+        if (hasGeneratedPromptSnapshot(record)) {
             archiveId = ensureHistoryPromptArchiveId(messageKey, currentHistoryItem || record, roomId) || archiveId || makePromptArchiveId(messageKey, '', roomId);
             // v4.24.13: 새로고침 복원 저장에서는 prompt archive 재기록을 건너뛴다.
             // 기존 archiveId는 compact 기록에 그대로 남겨 리롤 히스토리별 프롬프트 보존은 유지한다.
@@ -2921,6 +2916,23 @@ director.lightingIntent:
         });
     }
 
+    function pruneSceneRecordsToFit(storageKey, compact, roomId, keepCounts = [20, 12, 8, 5, 3, 1, 0]) {
+        const entries = Object.entries(compact || {}).sort(([, a], [, b]) => Number(a?.createdAt || 0) - Number(b?.createdAt || 0));
+        for (const keepCount of keepCounts) {
+            const pruned = keepCount > 0 ? Object.fromEntries(entries.slice(-keepCount)) : {};
+            try {
+                setLocalJsonStorage(storageKey, pruned);
+                cleanupPrunedSceneRecords(compact, pruned, roomId);
+                return { pruned, keepCount };
+            } catch (retryErr) {
+                if (keepCount === 0 || !isQuotaExceededError(retryErr)) {
+                    console.error('[Crack Scene Painter] scene records save retry failed:', retryErr);
+                }
+            }
+        }
+        return null;
+    }
+
     function saveSceneRecords(records, options = {}) {
         const roomId = options.roomId || cspSceneRecordOwners.get(records) || getRoomId();
         const compact = stripLargeImageFields(records || {}, { ...options, roomId });
@@ -2935,37 +2947,23 @@ director.lightingIntent:
         try {
             setLocalJsonStorage(getSceneRecordsKey(roomId), compact);
         } catch (err) {
-            console.warn('[Crack Scene Painter] localStorage save failed, pruning scene records:', err);
-            const entries = Object.entries(compact).sort(([, a], [, b]) => {
-                const at = Number(a?.createdAt || 0);
-                const bt = Number(b?.createdAt || 0);
-                return at - bt;
-            });
-
-            let saved = false;
-            for (const keepCount of [20, 12, 8, 5, 3, 1, 0]) {
-                const pruned = keepCount > 0 ? Object.fromEntries(entries.slice(-keepCount)) : {};
-                try {
-                    setLocalJsonStorage(getSceneRecordsKey(roomId), pruned);
-                    cache(pruned);
-                    cleanupPrunedSceneRecords(compact, pruned, roomId);
-                    saved = true;
-                    showToast(`⚠️ 저장공간이 부족해서 이 방 삽화 기록을 최근 ${keepCount}개만 보관했어요.`);
-                    break;
-                } catch (retryErr) {
-                    if (keepCount === 0 || !isQuotaExceededError(retryErr)) {
-                        console.error('[Crack Scene Painter] scene records save retry failed:', retryErr);
-                    }
+            if (err?.cspUndecodable) {
+                // v5.3.0: 압축을 풀지 못한 기존 기록은 잘라내거나 지우지 않는다.
+                showToast(`⚠️ ${err.message}`);
+            } else {
+                console.warn('[Crack Scene Painter] localStorage save failed, pruning scene records:', err);
+                const result = pruneSceneRecordsToFit(getSceneRecordsKey(roomId), compact, roomId);
+                if (result) {
+                    cache(result.pruned);
+                    showToast(`⚠️ 저장공간이 부족해서 이 방 삽화 기록을 최근 ${result.keepCount}개만 보관했어요.`);
+                } else {
+                    try {
+                        localStorage.removeItem(getSceneRecordsKey(roomId));
+                    } catch (_) {}
+                    cache({});
+                    cleanupPrunedSceneRecords(compact, {}, roomId);
+                    showToast('⚠️ 삽화 기록 저장 실패: 브라우저 저장공간이 가득 찼어요. 저장소 관리를 실행해줘.');
                 }
-            }
-
-            if (!saved) {
-                try {
-                    localStorage.removeItem(getSceneRecordsKey(roomId));
-                } catch (_) {}
-                cache({});
-                cleanupPrunedSceneRecords(compact, {}, roomId);
-                showToast('⚠️ 삽화 기록 저장 실패: 브라우저 저장공간이 가득 찼어요. 저장소 관리를 실행해줘.');
             }
         }
         if (roomId === getRoomId()) updateGalleryRowCount();
@@ -3122,30 +3120,20 @@ director.lightingIntent:
 
     async function appendSceneHistoryImage(messageKey, record, imageUrl, roomId = getRoomId()) {
         normalizeSceneRecordHistory(record, messageKey);
-        const item = { createdAt: Date.now(), outputKind: record.plan?.outputKind || 'illustration' };
-
-        if (String(imageUrl || '').startsWith('data:')) {
-            item.imageId = makeHistoryImageId(messageKey, roomId);
-            await putStoredImage(item.imageId, imageUrl);
-        } else if (String(imageUrl || '').startsWith('blob:')) {
-            // blob URL은 새로고침 후 깨지므로 기록하지 않습니다.
-            item.imageUrl = imageUrl;
-        } else if (imageUrl) {
-            item.imageUrl = imageUrl;
+        if (!imageUrl) return null;
+        record.history = Array.isArray(record.history) ? record.history : [];
+        // v5.3.0: 꽉 찬 기록은 IndexedDB에 2MB를 썼다가 바로 지우지 말고 먼저 거른다.
+        if (record.history.length >= CSP_MAX_IMAGE_HISTORY) {
+            throw new Error(`리롤 기록은 최대 ${CSP_MAX_IMAGE_HISTORY}장까지 보관돼요. 휴지통으로 이미지를 지운 뒤 다시 리롤해줘.`);
         }
 
-        if (!item.imageId && !item.imageUrl) return null;
-
-        record.history = Array.isArray(record.history) ? record.history : [];
-        if (record.history.length >= CSP_MAX_IMAGE_HISTORY) {
-            if (item.imageId) {
-                try {
-                    await deleteStoredImage(item.imageId);
-                } catch (err) {
-                    console.warn('[Crack Scene Painter] blocked reroll image cleanup failed:', err);
-                }
-            }
-            throw new Error(`리롤 기록은 최대 ${CSP_MAX_IMAGE_HISTORY}장까지 보관돼요. 휴지통으로 이미지를 지운 뒤 다시 리롤해줘.`);
+        const item = { createdAt: Date.now(), outputKind: record.plan?.outputKind || 'illustration' };
+        if (String(imageUrl).startsWith('data:')) {
+            item.imageId = makeHistoryImageId(messageKey, roomId);
+            await putStoredImage(item.imageId, imageUrl);
+        } else {
+            // blob: URL은 새로고침 후 깨지므로 저장 시점에 compactHistoryItemForStorage가 걸러낸다(메모리 안에서만 유지).
+            item.imageUrl = imageUrl;
         }
 
         record.history.push(item);
@@ -3275,27 +3263,30 @@ director.lightingIntent:
         refreshImageActionState(messageKey, targetBox, effectiveRecord);
     }
 
+    async function applyCurrentSceneHistory(messageKey, records, record, box = null) {
+        syncCurrentImageFieldsFromHistory(record);
+        await cspComicHydrateSelectedRecord(record);
+        records[messageKey] = record;
+        saveSceneRecords(records);
+
+        const src = await getRecordImageSrc(record);
+        const targetBox = box || document.querySelector(`.csp-generated-scene-image[data-message-key="${CSS.escape(messageKey)}"]`);
+        const img = targetBox?.querySelector('img');
+        if (img && src) img.src = src;
+        refreshImageHistoryControls(messageKey, targetBox, record);
+    }
+
     async function setCurrentSceneHistoryIndex(messageKey, index, box = null) {
         const records = getSceneRecords();
         const record = normalizeSceneRecordHistory(records[messageKey], messageKey);
         if (!record || !Array.isArray(record.history) || !record.history.length) return false;
 
         record.currentIndex = Math.max(0, Math.min(Number(index) || 0, record.history.length - 1));
-        syncCurrentImageFieldsFromHistory(record);
-
-        await cspComicHydrateSelectedRecord(record);
-        const src = await getRecordImageSrc(record);
-        const targetBox = box || document.querySelector(`.csp-generated-scene-image[data-message-key="${CSS.escape(messageKey)}"]`);
-        const img = targetBox?.querySelector('img');
-        if (img && src) img.src = src;
-
-        records[messageKey] = record;
-        saveSceneRecords(records);
-        refreshImageHistoryControls(messageKey, targetBox, record);
+        await applyCurrentSceneHistory(messageKey, records, record, box);
         return true;
     }
 
-    async function deleteCurrentSceneHistoryImage(messageKey, box = null) {
+    async function deleteSceneHistoryImage(messageKey, index = null, box = null) {
         const records = getSceneRecords();
         const record = normalizeSceneRecordHistory(records[messageKey], messageKey);
         if (!record || !Array.isArray(record.history) || !record.history.length) {
@@ -3303,73 +3294,54 @@ director.lightingIntent:
             return { removedAll: true, remaining: 0 };
         }
 
-        const index = clampHistoryIndex(record);
-        const [removed] = record.history.splice(index, 1);
+        const previousCurrent = clampHistoryIndex(record);
+        const deleteIndex = index === null
+            ? previousCurrent
+            : Math.max(0, Math.min(Math.trunc(Number(index) || 0), record.history.length - 1));
+        const [removed] = record.history.splice(deleteIndex, 1);
         if (removed?.imageId) {
             try {
                 await deleteStoredImage(removed.imageId);
             } catch (err) {
-                console.warn('[Crack Scene Painter] current history image delete failed:', err);
+                console.warn('[Crack Scene Painter] history image delete failed:', err);
             }
         }
         if (removed?.promptArchiveId) {
             await deletePromptArchiveById(removed.promptArchiveId);
+            // 지운 보관본 id가 record에 남아 있으면 남은 예전 항목이 그 id를 물려받는다.
+            if (record.promptArchiveId === removed.promptArchiveId) delete record.promptArchiveId;
         }
 
         if (!record.history.length) {
             await deleteRecordPromptArchives(record);
             delete records[messageKey];
             saveSceneRecords(records);
-            const targetBox = box || document.querySelector(`.csp-generated-scene-image[data-message-key="${CSS.escape(messageKey)}"]`);
-            const row = targetBox?.nextElementSibling?.classList?.contains('csp-image-history-row')
-                ? targetBox.nextElementSibling
-                : document.querySelector(`.csp-image-history-row[data-message-key="${CSS.escape(messageKey)}"]`);
-            row?.remove();
-            targetBox?.remove();
+            if (box) {
+                const row = box.nextElementSibling?.classList?.contains('csp-image-history-row')
+                    ? box.nextElementSibling
+                    : document.querySelector(`.csp-image-history-row[data-message-key="${CSS.escape(messageKey)}"]`);
+                row?.remove();
+                box.remove();
+            } else {
+                document
+                    .querySelectorAll(`.csp-generated-scene-image[data-message-key="${CSS.escape(messageKey)}"], .csp-image-history-row[data-message-key="${CSS.escape(messageKey)}"]`)
+                    .forEach(el => el.remove());
+            }
             markSceneButtons(messageKey, false);
             return { removedAll: true, remaining: 0 };
         }
 
-        record.currentIndex = Math.min(index, record.history.length - 1);
-        syncCurrentImageFieldsFromHistory(record);
-        await cspComicHydrateSelectedRecord(record);
-        records[messageKey] = record;
-        saveSceneRecords(records);
-
-        await cspComicHydrateSelectedRecord(record);
-        const src = await getRecordImageSrc(record);
-        const targetBox = box || document.querySelector(`.csp-generated-scene-image[data-message-key="${CSS.escape(messageKey)}"]`);
-        const img = targetBox?.querySelector('img');
-        if (img && src) img.src = src;
-        refreshImageHistoryControls(messageKey, targetBox, record);
+        if (deleteIndex < previousCurrent) record.currentIndex = previousCurrent - 1;
+        else if (deleteIndex === previousCurrent) record.currentIndex = Math.min(deleteIndex, record.history.length - 1);
+        else record.currentIndex = previousCurrent;
+        await applyCurrentSceneHistory(messageKey, records, record, box);
         markSceneButtons(messageKey, true);
 
-        return { removedAll: false, remaining: record.history.length };
+        return { removedAll: false, remaining: record.history.length, currentIndex: clampHistoryIndex(record) };
     }
 
-    function withTimeout(promise, ms = 5000, label = '작업') {
-        return new Promise((resolve, reject) => {
-            let settled = false;
-            const timer = setTimeout(() => {
-                if (settled) return;
-                settled = true;
-                reject(new Error(`${label} 시간이 초과됐어요.`));
-            }, Math.max(500, Number(ms) || 5000));
-
-            Promise.resolve(promise)
-                .then(value => {
-                    if (settled) return;
-                    settled = true;
-                    clearTimeout(timer);
-                    resolve(value);
-                })
-                .catch(err => {
-                    if (settled) return;
-                    settled = true;
-                    clearTimeout(timer);
-                    reject(err);
-                });
-        });
+    function deleteCurrentSceneHistoryImage(messageKey, box = null) {
+        return deleteSceneHistoryImage(messageKey, null, box);
     }
 
     function openImageDb() {
@@ -3385,8 +3357,18 @@ director.lightingIntent:
                     db.createObjectStore(META_STORE_NAME, { keyPath: 'id' });
                 }
             };
-            req.onsuccess = () => resolve(req.result);
+            req.onsuccess = () => {
+                const db = req.result;
+                // 다른 탭이 버전을 올리거나 브라우저가 연결을 닫으면 다음 호출에서 다시 연다.
+                db.onversionchange = () => { db.close(); imageDbPromise = null; };
+                db.onclose = () => { imageDbPromise = null; };
+                resolve(db);
+            };
             req.onerror = () => reject(req.error || new Error('IndexedDB를 열지 못했어요.'));
+        }).catch(err => {
+            // 실패한 Promise를 캐시하면 새로고침 전까지 모든 이미지 저장/조회가 계속 실패한다.
+            imageDbPromise = null;
+            throw err;
         });
         return imageDbPromise;
     }
@@ -3398,7 +3380,7 @@ director.lightingIntent:
             const tx = db.transaction(IMAGE_STORE_NAME, 'readwrite');
             tx.objectStore(IMAGE_STORE_NAME).put({ id, dataUrl, createdAt: Date.now() });
             tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error || new Error('이미지를 IndexedDB에 저장하지 못했어요.'));
+            tx.onerror = tx.onabort = () => reject(tx.error || new Error('이미지를 IndexedDB에 저장하지 못했어요.'));
         });
     }
 
@@ -3415,12 +3397,13 @@ director.lightingIntent:
 
     async function deleteStoredImage(id) {
         if (!id) return;
+        deleteStoredThumbnail(id).catch(() => {});
         const db = await openImageDb();
         return new Promise((resolve, reject) => {
             const tx = db.transaction(IMAGE_STORE_NAME, 'readwrite');
             tx.objectStore(IMAGE_STORE_NAME).delete(id);
             tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error || new Error('이미지를 IndexedDB에서 삭제하지 못했어요.'));
+            tx.onerror = tx.onabort = () => reject(tx.error || new Error('이미지를 IndexedDB에서 삭제하지 못했어요.'));
         });
     }
 
@@ -3467,6 +3450,10 @@ director.lightingIntent:
                 collectReferenceAssetIds(getLocalJsonStorage(storageKey, {}), liveIds);
             }
         });
+        // v5.3.0: 압축을 풀지 못한 기록이 있으면 그 이미지가 전부 고아로 잡혀 지워지므로 정리하지 않는다.
+        if (Array.from(cspUndecodableLocalJsonKeys).some(isLocalJsonUnreadable)) {
+            throw new Error('읽지 못한 저장 기록이 있어서 이미지 정리를 건너뛰었어요. 새로고침한 뒤 다시 시도해줘.');
+        }
         return liveIds;
     }
 
@@ -3487,7 +3474,7 @@ director.lightingIntent:
             const tx = db.transaction(META_STORE_NAME, 'readwrite');
             tx.objectStore(META_STORE_NAME).put({ id, value, updatedAt: Date.now() });
             tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error || new Error('메타 정보를 IndexedDB에 저장하지 못했어요.'));
+            tx.onerror = tx.onabort = () => reject(tx.error || new Error('메타 정보를 IndexedDB에 저장하지 못했어요.'));
         });
     }
 
@@ -3509,7 +3496,7 @@ director.lightingIntent:
             const tx = db.transaction(META_STORE_NAME, 'readwrite');
             tx.objectStore(META_STORE_NAME).delete(id);
             tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error || new Error('메타 정보를 IndexedDB에서 삭제하지 못했어요.'));
+            tx.onerror = tx.onabort = () => reject(tx.error || new Error('메타 정보를 IndexedDB에서 삭제하지 못했어요.'));
         });
     }
 
@@ -3541,13 +3528,13 @@ director.lightingIntent:
         });
     }
 
-    function countCsvDataRows(csvText) {
-        const lines = String(csvText || '').split(/\r?\n/).filter(line => line.trim());
+    function countCsvDataLines(lines) {
         if (!lines.length) return 0;
         const first = lines[0].toLowerCase();
         const hasHeader = /tag|name|category|wiki|korean|translated|count/.test(first);
         return Math.max(0, lines.length - (hasHeader ? 1 : 0));
     }
+
 
     function countTaxonomyNodes(value, depth = 0) {
         if (!value || depth > 8) return 0;
@@ -3668,18 +3655,20 @@ director.lightingIntent:
         return '';
     }
 
-    function matchDanbooruExcludedTopCategory(categoryOrRow, filterInfo = null) {
-        const fields = getDanbooruCategoryFields(categoryOrRow)
+    const DANBOORU_DEFAULT_EXCLUDED_TOP_KEYS = DANBOORU_TAGBOOK_EXCLUDED_TOP_CATEGORIES.map(name => normalizeDanbooruSearchText(name)).filter(Boolean);
+
+    function matchDanbooruExcludedTopCategory(categoryOrRow, filterInfo = null, normalizedFields = null) {
+        const fields = normalizedFields || getDanbooruCategoryFields(categoryOrRow)
             .map(value => normalizeDanbooruSearchText(value))
             .filter(Boolean);
         if (!fields.length) return '';
 
         const topKeys = Array.isArray(filterInfo?.excludedTopCategoryKeys) && filterInfo.excludedTopCategoryKeys.length
             ? filterInfo.excludedTopCategoryKeys
-            : DANBOORU_TAGBOOK_EXCLUDED_TOP_CATEGORIES.map(name => normalizeDanbooruSearchText(name)).filter(Boolean);
+            : DANBOORU_DEFAULT_EXCLUDED_TOP_KEYS;
         const topNames = Array.isArray(filterInfo?.excludedTopCategories) && filterInfo.excludedTopCategories.length
             ? filterInfo.excludedTopCategories
-            : DANBOORU_TAGBOOK_EXCLUDED_TOP_CATEGORIES.slice();
+            : DANBOORU_TAGBOOK_EXCLUDED_TOP_CATEGORIES;
         const subMap = filterInfo?.excludedSubCategoryMap && typeof filterInfo.excludedSubCategoryMap === 'object'
             ? filterInfo.excludedSubCategoryMap
             : {};
@@ -3734,7 +3723,8 @@ director.lightingIntent:
 
     function truncateDanbooruCompactText(value, max = 180) {
         const text = String(value || '').trim();
-        return text.length > max ? text.slice(0, max) : text;
+        // 자른 뒤 끝 공백도 지워 compactDanbooruPromptRow를 다시 거쳐도 결과가 같게 한다(다운로드 1회 정규화 전제).
+        return text.length > max ? text.slice(0, max).trim() : text;
     }
 
     function buildDanbooruCompactSearchText(row) {
@@ -3775,24 +3765,6 @@ director.lightingIntent:
         return compact.tag ? compact : null;
     }
 
-    function normalizeDanbooruCompactRows(rows) {
-        return (Array.isArray(rows) ? rows : [])
-            .map(compactDanbooruPromptRow)
-            .filter(Boolean)
-            .map(row => ({
-                tag: row.tag,
-                tagKey: row.tagKey || normalizeDanbooruStorageTagKey(row.tag),
-                category: row.category || '',
-                postCount: Number(row.postCount) || 0,
-                topCategory: row.topCategory || '',
-                subCategory: row.subCategory || '',
-                categoryFields: Array.isArray(row.categoryFields) ? row.categoryFields : [],
-                ko: row.ko || '',
-                wiki: row.wiki || '',
-                raw: '',
-                searchText: row.searchText || buildDanbooruCompactSearchText(row)
-            }));
-    }
 
     function yieldDanbooruMainThread() {
         return new Promise(resolve => setTimeout(resolve, 0));
@@ -3804,28 +3776,27 @@ director.lightingIntent:
     }
 
     function buildDanbooruRuntimeSearchRow(row) {
+        const tag = row?.tag || '';
         const normalized = {
-            ...row,
-            tag: row?.tag || '',
-            tagKey: row?.tagKey || normalizeDanbooruStorageTagKey(row?.tag || ''),
+            tag,
+            tagKey: row?.tagKey || normalizeDanbooruStorageTagKey(tag),
             category: row?.category || '',
             postCount: Number(row?.postCount) || 0,
             topCategory: row?.topCategory || '',
             subCategory: row?.subCategory || '',
             categoryFields: Array.isArray(row?.categoryFields) ? row.categoryFields : [],
             ko: row?.ko || '',
-            wiki: row?.wiki || '',
-            raw: row?.raw || '',
-            searchText: row?.searchText || buildDanbooruCompactSearchText(row || {})
+            wiki: row?.wiki || ''
         };
 
-        normalized._tagNorm = normalizeDanbooruSearchText(normalized.tag);
-        normalized._tagSpacedNorm = normalizeDanbooruSearchText(String(normalized.tag || '').replace(/_/g, ' '));
-        normalized._koNorm = normalizeDanbooruSearchText(normalized.ko || '');
-        normalized._categoryNorm = normalizeDanbooruSearchText(normalized.category || '');
-        normalized._wikiNorm = normalizeDanbooruSearchText(normalized.wiki || '');
-        normalized._rawNorm = normalizeDanbooruSearchText(normalized.raw || '');
-        normalized._searchNorm = normalizeDanbooruSearchText(normalized.searchText || '');
+        normalized._tagNorm = normalizeDanbooruSearchText(tag);
+        // normalizeDanbooruSearchText가 이미 _를 공백으로 바꾸므로 공백판 태그는 같은 문자열이다.
+        normalized._tagSpacedNorm = normalized._tagNorm;
+        normalized._koNorm = normalizeDanbooruSearchText(normalized.ko);
+        normalized._categoryNorm = normalizeDanbooruSearchText(normalized.category);
+        normalized._wikiNorm = normalizeDanbooruSearchText(normalized.wiki);
+        normalized._rawNorm = '';
+        normalized._searchNorm = normalizeDanbooruSearchText(buildDanbooruCompactSearchText(normalized));
         normalized._isPromptCandidate = looksLikeDanbooruPromptCandidate(normalized);
         return normalized;
     }
@@ -3841,23 +3812,11 @@ director.lightingIntent:
 
         if (source.length && source[0]?.tagKey) {
             // v4.23.9.57+ compactRows는 tagKey가 들어 있으므로 key 재계산을 줄인다.
-            // searchText는 저장하지 않고 런타임에서만 만든다.
+            // buildDanbooruRuntimeSearchRow가 필요한 필드만 골라 담으므로 중간 객체를 만들지 않는다.
             for (let i = 0; i < source.length; i++) {
                 const row = source[i];
                 if (!row?.tag) continue;
-                result.push(buildDanbooruRuntimeSearchRow({
-                    tag: row.tag,
-                    tagKey: row.tagKey || normalizeDanbooruStorageTagKey(row.tag),
-                    category: row.category || '',
-                    postCount: Number(row.postCount) || 0,
-                    topCategory: row.topCategory || '',
-                    subCategory: row.subCategory || '',
-                    categoryFields: Array.isArray(row.categoryFields) ? row.categoryFields : [],
-                    ko: row.ko || '',
-                    wiki: row.wiki || '',
-                    raw: '',
-                    searchText: buildDanbooruCompactSearchText(row)
-                }));
+                result.push(buildDanbooruRuntimeSearchRow(row));
                 if (i > 0 && i % chunkSize === 0) {
                     await yieldDanbooruMainThread();
                 }
@@ -3868,19 +3827,7 @@ director.lightingIntent:
         for (let i = 0; i < source.length; i++) {
             const compact = compactDanbooruPromptRow(source[i]);
             if (compact) {
-                result.push(buildDanbooruRuntimeSearchRow({
-                    tag: compact.tag,
-                    tagKey: compact.tagKey || normalizeDanbooruStorageTagKey(compact.tag),
-                    category: compact.category || '',
-                    postCount: Number(compact.postCount) || 0,
-                    topCategory: compact.topCategory || '',
-                    subCategory: compact.subCategory || '',
-                    categoryFields: Array.isArray(compact.categoryFields) ? compact.categoryFields : [],
-                    ko: compact.ko || '',
-                    wiki: compact.wiki || '',
-                    raw: '',
-                    searchText: compact.searchText || buildDanbooruCompactSearchText(compact)
-                }));
+                result.push(buildDanbooruRuntimeSearchRow(compact));
             }
             if (i > 0 && i % chunkSize === 0) {
                 await yieldDanbooruMainThread();
@@ -3890,24 +3837,21 @@ director.lightingIntent:
     }
 
 
-    function buildDanbooruCompactTagbookPayload(cacheOrRows, extra = {}) {
-        const rows = Array.isArray(cacheOrRows)
-            ? normalizeDanbooruCompactRows(cacheOrRows)
-            : normalizeDanbooruCompactRows(cacheOrRows?.compactRows || []);
-        const compactRows = rows.map(row => compactDanbooruPromptRow(row)).filter(Boolean);
+    function buildDanbooruCompactTagbookPayload(compactRows, extra = {}) {
+        const rows = Array.isArray(compactRows) ? compactRows : [];
         return {
             type: 'crack-scene-painter-danbooru-compact-tagbook',
             version: 3,
             compactFormat: 'lite-minimal',
             createdAt: Date.now(),
-            source: extra.source || cacheOrRows?.repoUrl || cacheOrRows?.csvUrl || '',
-            rawTagCount: Number(extra.rawTagCount ?? cacheOrRows?.tagCount ?? rows.length),
-            promptCandidateTagCount: compactRows.length,
-            excludedTagCount: Number(extra.excludedTagCount ?? cacheOrRows?.excludedTagCount ?? 0),
+            source: extra.source || '',
+            rawTagCount: Number(extra.rawTagCount ?? rows.length),
+            promptCandidateTagCount: rows.length,
+            excludedTagCount: Number(extra.excludedTagCount ?? 0),
             excludedTopCategories: Array.isArray(extra.excludedTopCategories)
                 ? extra.excludedTopCategories
-                : (Array.isArray(cacheOrRows?.excludedTopCategories) ? cacheOrRows.excludedTopCategories : DANBOORU_TAGBOOK_EXCLUDED_TOP_CATEGORIES.slice()),
-            rows: compactRows
+                : DANBOORU_TAGBOOK_EXCLUDED_TOP_CATEGORIES.slice(),
+            rows
         };
     }
 
@@ -3972,16 +3916,18 @@ director.lightingIntent:
         const parsedCsv = parseDanbooruTagbookCsv(csvText);
         const categoryFilterInfo = buildDanbooruCategoryFilterInfo(taxonomy);
         const filteredRows = filterDanbooruRowsByTopCategory(parsedCsv.rows, categoryFilterInfo);
-        const compactRows = normalizeDanbooruCompactRows(filteredRows.rows);
-        const compactPayload = buildDanbooruCompactTagbookPayload(compactRows, {
+        // 행 compact는 한 번만 한다(compactDanbooruPromptRow는 다시 거쳐도 결과가 같아 반복 패스가 불필요).
+        const compactPayload = buildDanbooruCompactTagbookPayload(filteredRows.rows.map(compactDanbooruPromptRow).filter(Boolean), {
             source: cleanRepoUrl || cleanCsvUrl,
-            rawTagCount: countCsvDataRows(csvText),
+            rawTagCount: parsedCsv.dataLineCount,
             excludedTagCount: filteredRows.removedCount,
             excludedTopCategories: categoryFilterInfo.excludedTopCategories
         });
         const compactBytes = new Blob([JSON.stringify(compactPayload)]).size;
         const cache = {
             version: 2,
+            // 받은 행은 이미 lite-minimal이라, 표시해 두지 않으면 첫 검색 때 불필요한 마이그레이션 재저장이 돈다.
+            compactFormat: 'lite-minimal',
             compactSchema: 'v5-postcount',
             storageMode: 'compact-from-csv',
             csvUrl: cleanCsvUrl,
@@ -4078,7 +4024,7 @@ director.lightingIntent:
 
     function parseDanbooruTagbookCsv(csvText, maxRows = 250000) {
         const lines = String(csvText || '').split(/\r?\n/).filter(line => line.trim());
-        if (!lines.length) return { headers: [], rows: [] };
+        if (!lines.length) return { headers: [], rows: [], dataLineCount: 0 };
 
         const firstFields = parseCsvLine(lines[0]);
         const hasHeader = looksLikeDanbooruHeader(firstFields);
@@ -4127,11 +4073,10 @@ director.lightingIntent:
             const postCount = postCountIndex >= 0
                 ? (parseInt(String(pickDanbooruField(fields, postCountIndex)).replace(/[^0-9]/g, ''), 10) || 0)
                 : 0;
-            const rawJoined = fields.filter(Boolean).join(' ');
-            const searchText = [tag, category, topCategory, subCategory, ko, wiki, rawJoined].filter(Boolean).join(' ').replace(/_/g, ' ').toLowerCase();
-            rows.push({ tag, category, topCategory, subCategory, categoryFields, ko, wiki, postCount, raw: rawJoined, searchText });
+            // raw/searchText는 다음 단계(compactDanbooruPromptRow)에서 버려지므로 행마다 만들지 않는다.
+            rows.push({ tag, category, topCategory, subCategory, categoryFields, ko, wiki, postCount });
         }
-        return { headers, rows };
+        return { headers, rows, dataLineCount: countCsvDataLines(lines) };
     }
 
     function normalizeDanbooruSearchText(value) {
@@ -4161,39 +4106,40 @@ director.lightingIntent:
         return count;
     }
 
-    function getDanbooruPrimarySearchFields(row) {
-        const tag = getDanbooruCachedNorm(row, '_tagNorm', row?.tag || '');
-        const tagSpaced = getDanbooruCachedNorm(row, '_tagSpacedNorm', String(row?.tag || '').replace(/_/g, ' '));
-        const ko = getDanbooruCachedNorm(row, '_koNorm', row?.ko || '');
-        const category = getDanbooruCachedNorm(row, '_categoryNorm', row?.category || '');
-        return [tag, tagSpaced, ko, category].filter(Boolean);
-    }
 
-    function getDanbooruSecondarySearchFields(row) {
-        const wiki = getDanbooruCachedNorm(row, '_wikiNorm', row?.wiki || '');
-        const raw = getDanbooruCachedNorm(row, '_rawNorm', row?.raw || '');
-        const search = getDanbooruCachedNorm(row, '_searchNorm', row?.searchText || '');
-        return [wiki, raw, search].filter(Boolean);
-    }
 
     function hasHangulToken(tokens) {
         return (Array.isArray(tokens) ? tokens : []).some(token => /[가-힣]/.test(String(token || '')));
     }
 
+    const DANBOORU_BLOCKED_CATEGORY_KEYS = [
+        'artist', 'artists', '아티스트', '작가',
+        'character', 'characters', '캐릭터', '인물', '오리지널 캐릭터',
+        'copyright', 'copyrights', '원작', '저작권',
+        'meta', '메타',
+        '작품 출처', '작품/출처', '출처'
+    ].map(token => normalizeDanbooruSearchText(token));
+
+    const DANBOORU_BLOCKED_TAG_PATTERNS = [
+        /^artist:/,
+        /^copyright:/,
+        /^character:/
+    ];
+
+    const DANBOORU_BLOCKED_WIKI_HINTS = [
+        'original character', 'originalcharacter',
+        'byfukuchi', ' by ', ' is a ', ' dating ', 'classmate', 'student',
+        'male classmate', 'female character'
+    ];
+
+    const DANBOORU_BLOCKED_KO_HINT_KEYS = ['오리지널 캐릭터', '캐릭터'].map(token => normalizeDanbooruSearchText(token));
+
     function isDanbooruPromptCandidateCategory(categoryOrRow, filterInfo = null) {
         const fields = getDanbooruCategoryFields(categoryOrRow);
         if (!fields.length) return true;
-        if (matchDanbooruExcludedTopCategory(categoryOrRow, filterInfo)) return false;
-
-        const blocked = [
-            'artist', 'artists', '아티스트', '작가',
-            'character', 'characters', '캐릭터', '인물', '오리지널 캐릭터',
-            'copyright', 'copyrights', '원작', '저작권',
-            'meta', '메타',
-            '작품 출처', '작품/출처', '출처'
-        ];
         const normalizedFields = fields.map(field => normalizeDanbooruSearchText(field)).filter(Boolean);
-        return !normalizedFields.some(field => blocked.some(token => field.includes(normalizeDanbooruSearchText(token))));
+        if (matchDanbooruExcludedTopCategory(categoryOrRow, filterInfo, normalizedFields)) return false;
+        return !normalizedFields.some(field => DANBOORU_BLOCKED_CATEGORY_KEYS.some(token => field.includes(token)));
     }
 
     function looksLikeDanbooruPromptCandidate(row) {
@@ -4205,22 +4151,9 @@ director.lightingIntent:
         const wiki = getDanbooruCachedNorm(row, '_wikiNorm', row.wiki || '');
         const ko = getDanbooruCachedNorm(row, '_koNorm', row.ko || '');
 
-        const blockedTagPatterns = [
-            /^artist:/,
-            /^copyright:/,
-            /^character:/
-        ];
-        if (blockedTagPatterns.some(pattern => pattern.test(tag))) return false;
-
-        const blockedWikiHints = [
-            'original character', 'originalcharacter',
-            'byfukuchi', ' by ', ' is a ', ' dating ', 'classmate', 'student',
-            'male classmate', 'female character'
-        ];
-        if (wiki && blockedWikiHints.some(token => wiki.includes(token))) return false;
-
-        const blockedKoHints = ['오리지널 캐릭터', '캐릭터'];
-        if (ko && blockedKoHints.some(token => ko.includes(normalizeDanbooruSearchText(token)))) return false;
+        if (DANBOORU_BLOCKED_TAG_PATTERNS.some(pattern => pattern.test(tag))) return false;
+        if (wiki && DANBOORU_BLOCKED_WIKI_HINTS.some(token => wiki.includes(token))) return false;
+        if (ko && DANBOORU_BLOCKED_KO_HINT_KEYS.some(token => ko.includes(token))) return false;
 
         return true;
     }
@@ -4228,16 +4161,28 @@ director.lightingIntent:
     function isDanbooruRelevantMatch(row, query, tokens, normalizedQueryInput = '') {
         if (!row || !tokens.length) return false;
         const normalizedQuery = normalizedQueryInput || normalizeDanbooruSearchText(query);
-        const primaryFields = getDanbooruPrimarySearchFields(row);
-        const secondaryFields = getDanbooruSecondarySearchFields(row);
-        const allFields = [...primaryFields, ...secondaryFields];
-        if (!allFields.length) return false;
+        // 검색 루프가 행마다 필드 배열을 만들지 않도록 캐시된 정규화 필드를 직접 비교한다(빈 필드는 어떤 토큰도 포함하지 않음).
+        const tag = getDanbooruCachedNorm(row, '_tagNorm', row.tag || '');
+        const tagSpaced = getDanbooruCachedNorm(row, '_tagSpacedNorm', String(row.tag || '').replace(/_/g, ' '));
+        const ko = getDanbooruCachedNorm(row, '_koNorm', row.ko || '');
+        const category = getDanbooruCachedNorm(row, '_categoryNorm', row.category || '');
 
-        const hasPrimaryExactOrContains = normalizedQuery && primaryFields.some(field => field === normalizedQuery || field.includes(normalizedQuery));
-        if (hasPrimaryExactOrContains) return true;
+        if (normalizedQuery && (tag.includes(normalizedQuery) || tagSpaced.includes(normalizedQuery) || ko.includes(normalizedQuery) || category.includes(normalizedQuery))) return true;
 
-        const matchedPrimaryTokens = countDanbooruMatchedTokens(primaryFields, tokens);
-        const matchedAllTokens = countDanbooruMatchedTokens(allFields, tokens);
+        const wiki = getDanbooruCachedNorm(row, '_wikiNorm', row.wiki || '');
+        const raw = getDanbooruCachedNorm(row, '_rawNorm', row.raw || '');
+        const search = getDanbooruCachedNorm(row, '_searchNorm', row.searchText || '');
+        let matchedPrimaryTokens = 0;
+        let matchedAllTokens = 0;
+        for (const token of tokens) {
+            if (!token) continue;
+            if (tag.includes(token) || tagSpaced.includes(token) || ko.includes(token) || category.includes(token)) {
+                matchedPrimaryTokens += 1;
+                matchedAllTokens += 1;
+            } else if (wiki.includes(token) || raw.includes(token) || search.includes(token)) {
+                matchedAllTokens += 1;
+            }
+        }
 
         if (tokens.length === 1) {
             // 한국어 검색어는 CSV의 키워드/설명 컬럼에만 들어있는 경우가 많다.
@@ -4298,18 +4243,27 @@ director.lightingIntent:
         return score;
     }
 
-    async function getParsedDanbooruTagbook(options = {}) {
+    let danbooruParsedTagbookLoad = null;
+
+    async function getParsedDanbooruTagbook() {
         // 5.2.8: 같은 세대의 파싱 결과가 있으면 검색마다 IndexedDB 전체를 다시 읽지 않는다.
         if (danbooruTagbookChannel && danbooruParsedTagbookCache && danbooruParsedTagbookGen === danbooruTagbookGen) return danbooruParsedTagbookCache;
         const gen = danbooruTagbookGen;
-        const parsed = await loadParsedDanbooruTagbook(options);
+        // 첫 로드 중에 들어온 다른 검색이 태그북을 한 번 더 읽고 파싱하지 않도록 같은 세대의 진행 중 로드를 공유한다.
+        if (!danbooruParsedTagbookLoad || danbooruParsedTagbookLoad.gen !== gen) {
+            const load = { gen, promise: loadParsedDanbooruTagbook() };
+            const clear = () => { if (danbooruParsedTagbookLoad === load) danbooruParsedTagbookLoad = null; };
+            load.promise.then(clear, clear);
+            danbooruParsedTagbookLoad = load;
+        }
+        const parsed = await danbooruParsedTagbookLoad.promise;
         // 파싱 도중 다운로드·삭제가 끝났으면 이번 결과는 쓰되 다음 검색 때 다시 읽게 한다.
         if (gen === danbooruTagbookGen) danbooruParsedTagbookGen = gen;
         else if (danbooruParsedTagbookCache === parsed) danbooruParsedTagbookCache = null;
         return parsed;
     }
 
-    async function loadParsedDanbooruTagbook(options = {}) {
+    async function loadParsedDanbooruTagbook() {
         const cache = await getDanbooruTagbookCache();
         if (!cache?.csvText && !Array.isArray(cache?.compactRows)) {
             throw new Error('로컬 태그북이 없어. 먼저 다운로드/업데이트를 눌러줘.');
@@ -4516,7 +4470,8 @@ director.lightingIntent:
             refs.push(createDefaultReferenceSlot());
         }
 
-        return refs.slice(0, MAX_PRECISE_REFERENCES_PER_CHARACTER).map(normalizeReferenceSlot);
+        // refs는 위에서 이미 normalizeReferenceSlot을 거친 새 객체다.
+        return refs.slice(0, MAX_PRECISE_REFERENCES_PER_CHARACTER);
     }
 
     function applyLegacyReferenceFields(target, references) {
@@ -4667,6 +4622,10 @@ director.lightingIntent:
                 base64: await resizeReferenceDataUrlToBase64(dataUrl)
             });
         }
+        const skipped = summary.items.length - prepared.length;
+        if (skipped) {
+            showToast(`⚠️ Reference 이미지 ${skipped}개를 읽지 못해 빼고 생성해요. 저장 폴더 연결·권한을 확인해줘.`);
+        }
         return prepared;
     }
 
@@ -4782,15 +4741,10 @@ director.lightingIntent:
         if (!isV5SharedTrialEligible(settings, normalizedModel, options)) return { kind: 'anlas_settings', label: 'Anlas 사용 설정', consumesAnlas: true };
         const quota = account?.quota || { status: 'unavailable' };
         if (quota.status === 'available' || quota.status === 'low') return { kind: 'v5_quota', label: 'V5 무료 할당량', consumesAnlas: false };
-        if (quota.status === 'exhausted') {
+        if (quota.status === 'exhausted' || quota.status === 'not_applicable') {
             if (Number(account?.fixed || 0) > 0) return { kind: 'subscription_anlas', label: '구독 Anlas', consumesAnlas: true };
             if (Number(account?.purchased || 0) > 0) return { kind: 'paid_anlas', label: '구매 Anlas', consumesAnlas: true };
-            return { kind: 'no_balance', label: 'Anlas 부족 가능', consumesAnlas: true };
-        }
-        if (quota.status === 'not_applicable') {
-            if (Number(account?.fixed || 0) > 0) return { kind: 'subscription_anlas', label: '구독 Anlas', consumesAnlas: true };
-            if (Number(account?.purchased || 0) > 0) return { kind: 'paid_anlas', label: '구매 Anlas', consumesAnlas: true };
-            return { kind: 'no_balance', label: 'Anlas 필요', consumesAnlas: true };
+            return { kind: 'no_balance', label: quota.status === 'exhausted' ? 'Anlas 부족 가능' : 'Anlas 필요', consumesAnlas: true };
         }
         return { kind: 'unknown', label: '결제 경로 확인 불가', consumesAnlas: false };
     }
@@ -4976,18 +4930,18 @@ director.lightingIntent:
         const keys = Object.keys(localStorage).filter(key => key.startsWith(`${CSP_PREFIX}_scene_records_`));
         for (const storageKey of keys) {
             const records = getLocalJsonStorage(storageKey, {});
+            const roomPart = storageKey.replace(`${CSP_PREFIX}_scene_records_`, '') || getRoomId();
             let changed = false;
             for (const [messageKey, record] of Object.entries(records)) {
                 if (!record) continue;
                 const rawUrl = String(record.imageUrl || '');
                 normalizeSceneRecordHistory(record, messageKey);
-                const roomPart = storageKey.replace(`${CSP_PREFIX}_scene_records_`, '') || getRoomId();
                 if (Array.isArray(record.history)) {
                     for (const item of record.history) {
                         if (!item) continue;
                         const itemUrl = String(item.imageUrl || '');
                         if (itemUrl.startsWith('data:')) {
-                            const imageId = item.imageId || `${roomPart}::${messageKey}::${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+                            const imageId = item.imageId || makeHistoryImageId(messageKey, roomPart);
                             try {
                                 await putStoredImage(imageId, itemUrl);
                                 item.imageId = imageId;
@@ -5006,7 +4960,7 @@ director.lightingIntent:
                     syncCurrentImageFieldsFromHistory(record);
                 }
                 if (rawUrl.startsWith('data:')) {
-                    const imageId = record.imageId || `${roomPart}::${messageKey}`;
+                    const imageId = record.imageId || makeStoredImageId(messageKey, roomPart);
                     try {
                         await putStoredImage(imageId, rawUrl);
                         record.imageId = imageId;
@@ -5020,22 +4974,28 @@ director.lightingIntent:
                     changed = true;
                 }
             }
-            if (changed || !String(localStorage.getItem(storageKey) || '').startsWith(COMPRESSED_JSON_PREFIX)) {
-                try {
-                    setLocalJsonStorage(storageKey, stripLargeImageFields(records));
-                } catch (err) {
-                    console.warn('[Crack Scene Painter] migration localStorage save failed, pruning large records:', err);
-                    const compact = stripLargeImageFields(records);
-                    const entries = Object.entries(compact).sort(([, a], [, b]) => Number(a?.createdAt || 0) - Number(b?.createdAt || 0));
-                    for (const keepCount of [20, 12, 8, 5, 3, 1, 0]) {
-                        try {
-                            setLocalJsonStorage(storageKey, Object.fromEntries(entries.slice(-keepCount)));
-                            break;
-                        } catch (_) {}
-                    }
-                }
+            // v5.3.0: 실제로 옮긴 이미지가 있을 때만 다시 저장한다(평소에는 매 로드마다 방을 다시 쓰지 않음).
+            if (!changed) continue;
+            const compact = stripLargeImageFields(records, { roomId: roomPart });
+            try {
+                setLocalJsonStorage(storageKey, compact);
+            } catch (err) {
+                console.warn('[Crack Scene Painter] migration localStorage save failed, pruning large records:', err);
+                // 자동 마이그레이션은 방 기록을 전부 비우지 않는다(0개 단계 제외).
+                if (!err?.cspUndecodable) pruneSceneRecordsToFit(storageKey, compact, roomPart, [20, 12, 8, 5, 3, 1]);
+            }
+            // 현재 방이면 메모리 캐시가 옮기기 전 기록을 계속 쓰지 않도록 비운다.
+            if (roomPart === getRoomId()) {
+                invalidateSceneRecordsCache(roomPart);
+                updateGalleryRowCount();
             }
         }
+    }
+
+    function makeFileTimestamp() {
+        const now = new Date();
+        const pad = n => String(n).padStart(2, '0');
+        return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
     }
 
     function getFileExtension(name, fallback = 'png') {
@@ -5045,11 +5005,8 @@ director.lightingIntent:
     }
 
     function makeReferenceFileName(slotName, sourceName = '') {
-        const now = new Date();
-        const pad = n => String(n).padStart(2, '0');
-        const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
         const ext = getFileExtension(sourceName, 'png');
-        return `Ref_${sanitizeFileName(getRoomId())}_${sanitizeFileName(slotName || 'character')}_${stamp}.${ext}`;
+        return `Ref_${sanitizeFileName(getRoomId())}_${sanitizeFileName(slotName || 'character')}_${makeFileTimestamp()}.${ext}`;
     }
 
     // 모바일판 Reference 이미지는 브라우저 IndexedDB에 저장한다.
@@ -5269,1001 +5226,10 @@ director.lightingIntent:
         const style = document.createElement('style');
         style.id = 'csp-scene-painter-style';
         style.textContent = `
-            .csp-overlay {
-                --csp-surface: #1e1e22;
-                --csp-surface-2: rgba(255,255,255,0.04);
-                --csp-surface-3: rgba(0,0,0,0.28);
-                --csp-text: #f5f5f5;
-                --csp-muted: #c9c9ce;
-                --csp-soft: #a9abb3;
-                --csp-border: rgba(255,255,255,0.12);
-                --csp-input: rgba(0,0,0,0.34);
-                --csp-input-text: #f5f5f5;
-                --csp-shadow: rgba(0,0,0,0.45);
-                --csp-space-1: 4px;
-                --csp-space-2: 8px;
-                --csp-space-3: 12px;
-                --csp-space-4: 16px;
-                --csp-space-5: 20px;
-                position: fixed;
-                inset: 0;
-                z-index: 999999;
-                background: rgba(0, 0, 0, 0.58);
-                display: flex;
-                justify-content: center;
-                align-items: center;
-            }
-            body[data-theme="light"] .csp-overlay {
-                --csp-surface: #ffffff;
-                --csp-surface-2: #f5f6f8;
-                --csp-surface-3: #eef0f3;
-                --csp-text: #1f2328;
-                --csp-muted: #4b5563;
-                --csp-soft: #6b7280;
-                --csp-border: rgba(31,35,40,0.18);
-                --csp-input: #ffffff;
-                --csp-input-text: #111827;
-                --csp-shadow: rgba(31,35,40,0.18);
-            }
-            body[data-theme="dark"] .csp-overlay {
-                --csp-surface: #242321;
-                --csp-surface-2: rgba(255,255,255,0.055);
-                --csp-surface-3: rgba(0,0,0,0.28);
-                --csp-text: #f5f5f5;
-                --csp-muted: #c9c9ce;
-                --csp-soft: #a9abb3;
-                --csp-border: rgba(255,255,255,0.16);
-                --csp-input: rgba(0,0,0,0.34);
-                --csp-input-text: #f5f5f5;
-                --csp-shadow: rgba(0,0,0,0.45);
-            }
-            .csp-modal {
-                width: min(920px, calc(100vw - 40px));
-                max-width: none;
-                max-height: calc(100vh - 40px);
-                overflow-y: auto;
-                overscroll-behavior: contain;
-                border-radius: 16px;
-                background: var(--csp-surface);
-                color: var(--csp-text);
-                box-shadow: 0 18px 60px var(--csp-shadow);
-                padding: var(--csp-space-4);
-                font-family: inherit;
-            }
-            .csp-modal h2 { font-size: 18px; margin: 0 0 6px; font-weight: 800; color: var(--csp-text); }
-            .csp-desc {
-                font-size: 12px;
-                line-height: 1.55;
-                color: var(--csp-muted);
-                margin-bottom: 12px;
-                white-space: normal;
-                word-break: keep-all;
-                overflow-wrap: anywhere;
-            }
-            .csp-section {
-                border: 0;
-                border-top: 1px solid var(--csp-border);
-                border-radius: 0;
-                padding: 14px 0 4px;
-                margin-top: 12px;
-                background: transparent;
-                box-shadow: none;
-            }
-            .csp-section:first-of-type {
-                border-top: 0;
-                padding-top: 6px;
-                margin-top: 4px;
-            }
-            .csp-tab-panel > .csp-section:first-child {
-                border-top: 0;
-                padding-top: 4px;
-            }
-            .csp-section-title {
-                font-size: 14px;
-                font-weight: 800;
-                margin-bottom: 12px;
-                padding-bottom: 0;
-                border-bottom: 0;
-                color: var(--csp-text);
-            }
-            .csp-section-subbox > .csp-section-title {
-                font-size: 13px;
-                margin-bottom: 8px;
-                padding-bottom: 0;
-                border-bottom: 0;
-            }
-            .csp-section-subbox {
-                margin-top: 12px;
-                padding: 12px;
-                border: 1px solid var(--csp-border);
-                border-radius: 12px;
-                background: color-mix(in srgb, var(--csp-surface) 86%, transparent);
-            }
-            .csp-section-toggle {
-                width: 100%;
-                border: 0;
-                background: transparent;
-                color: inherit;
-                padding: 0;
-                min-height: 30px;
-                display: flex;
-                align-items: center;
-                gap: 8px;
-                font-size: 14px;
-                font-weight: 800;
-                line-height: 1.25;
-                cursor: pointer;
-                text-align: left;
-                border-radius: 8px;
-                transition: background 140ms ease;
-            }
-            .csp-section-toggle:hover {
-                background: color-mix(in srgb, var(--csp-surface-2) 0%, var(--primary, #ff4432) 10%);
-            }
-            .csp-section-toggle::after {
-                content: '펼치기';
-                margin-left: auto;
-                flex: 0 0 auto;
-                padding: 3px 9px;
-                border-radius: 999px;
-                background: var(--csp-surface-3);
-                border: 1px solid var(--csp-border);
-                color: var(--csp-soft);
-                font-size: 11px;
-                font-weight: 800;
-            }
-            .csp-section.is-open > .csp-section-toggle::after { content: '접기'; }
-            .csp-section-arrow {
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                flex: 0 0 auto;
-                width: auto;
-                height: auto;
-                border: 0;
-                border-radius: 0;
-                background: transparent;
-                color: var(--csp-muted);
-                font-size: 11px;
-                line-height: 1;
-            }
-            .csp-section-body { margin-top: 12px; }
-            .csp-section.is-open > .csp-section-toggle { margin-bottom: 0; }
-            .csp-size-hidden { display: none !important; }
-            .csp-info-modal { width: 760px; }
-            .csp-reroll-modal { width: min(960px, calc(100vw - 28px)); }
-            /* v4.24.34: 리롤 설정창은 모달 내부 스크롤 대신 오버레이 스크롤로 풀어, 최종 미리보기에서 하단이 끊기지 않게 한다. */
-            #csp-image-reroll-modal {
-                align-items: flex-start;
-                overflow-y: auto;
-                padding: 14px 0;
-            }
-            #csp-image-reroll-modal .csp-reroll-modal {
-                max-height: none;
-                overflow: visible;
-                margin: 0 auto;
-            }
-            .csp-info-pre {
-                white-space: pre-wrap;
-                word-break: break-word;
-                max-height: 62vh;
-                overflow: auto;
-                border: 1px solid var(--csp-border);
-                background: var(--csp-surface-3);
-                border-radius: 12px;
-                padding: 12px;
-                font-size: 12px;
-                line-height: 1.55;
-            }
-            .csp-image-edit-character-card {
-                border: 1px solid var(--csp-border);
-                background: var(--csp-surface-2);
-                border-radius: 12px;
-                padding: 12px;
-                margin-bottom: 10px;
-            }
-            .csp-readonly-preview {
-                min-height: 92px;
-                max-height: 220px;
-                overflow: auto;
-                white-space: pre-wrap;
-                word-break: break-word;
-                border: 1px solid var(--csp-border);
-                background: var(--csp-surface-3);
-                color: var(--csp-text);
-                border-radius: 12px;
-                padding: 12px;
-                font-size: 12px;
-                line-height: 1.5;
-            }
-            .csp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start; }
-            .csp-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; align-items: start; }
-            .csp-grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; align-items: start; }
-            .csp-pc-outfit-row {
-                display: grid;
-                grid-template-columns: minmax(0, 1fr) 122px;
-                gap: 8px;
-                align-items: start;
-            }
-            .csp-pc-enabled-field {
-                margin-bottom: 0;
-                padding-top: 30px;
-                align-self: start;
-                display: flex;
-                align-items: flex-start;
-                justify-content: flex-start;
-                min-height: 0;
-            }
-            .csp-pc-enabled-field label.csp-pc-enabled-label {
-                display: inline-flex !important;
-                align-items: center !important;
-                justify-content: flex-start;
-                gap: 7px !important;
-                width: auto;
-                min-height: 0;
-                padding: 2px 0;
-                border: 0;
-                border-radius: 8px;
-                background: transparent;
-                color: var(--csp-text) !important;
-                font-size: 12px !important;
-                font-weight: 800 !important;
-                line-height: 1.35 !important;
-                white-space: normal !important;
-                word-break: keep-all !important;
-                overflow-wrap: normal !important;
-                cursor: pointer;
-            }
-            .csp-pc-enabled-field label.csp-pc-enabled-label:hover {
-                background: color-mix(in srgb, var(--csp-surface-2) 0%, var(--primary, #ff4432) 10%);
-            }
-            .csp-pc-enabled-field .csp-pc-enabled-label input.csp-pc-enabled {
-                flex: 0 0 auto;
-                width: auto !important;
-                min-width: 0 !important;
-                height: auto !important;
-                margin: 0;
-                padding: 0;
-            }
-            .csp-pc-enabled-field .csp-pc-enabled-label span {
-                display: block;
-                min-width: 0;
-                white-space: normal;
-                word-break: keep-all;
-                overflow-wrap: normal;
-            }
-            .csp-label-row {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 8px;
-            }
-            .csp-value-chip {
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                min-width: 42px;
-                padding: 3px 8px;
-                border-radius: 999px;
-                font-size: 11px;
-                font-weight: 800;
-                color: var(--csp-text);
-                background: var(--csp-surface-3);
-                border: 1px solid var(--csp-border);
-            }
-            .csp-range-wrap {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-            }
-            .csp-range-wrap input[type="range"] {
-                flex: 1;
-                margin: 0;
-            }
-            .csp-range-number {
-                width: 80px !important;
-                flex: 0 0 auto;
-                font-variant-numeric: tabular-nums;
-            }
-            .csp-res-row {
-                display: grid;
-                grid-template-columns: 1fr;
-                gap: 8px;
-            }
-            .csp-res-dims {
-                display: flex;
-                align-items: center;
-                justify-content: flex-start;
-                gap: 8px;
-                flex-wrap: wrap;
-            }
-            .csp-dim-pill {
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                min-width: 72px;
-                padding: 9px 12px;
-                border-radius: 10px;
-                border: 1px solid var(--csp-border);
-                background: var(--csp-input);
-                color: var(--csp-input-text);
-                font-size: 13px;
-                font-weight: 700;
-            }
-            .csp-dim-swap {
-                width: 38px;
-                height: 38px;
-                border-radius: 10px;
-                border: 1px solid var(--csp-border);
-                background: var(--csp-surface-3);
-                color: var(--csp-text);
-                cursor: pointer;
-                font-size: 14px;
-                font-weight: 800;
-            }
-            .csp-dim-swap:hover { filter: brightness(1.06); }
-            .csp-section .csp-grid > .csp-field { margin-bottom: 0; }
-            .csp-section .csp-grid { column-gap: 12px; row-gap: 12px; }
-            .csp-range-wrap { gap: 8px; }
-            .csp-range-number::-webkit-outer-spin-button,
-            .csp-range-number::-webkit-inner-spin-button {
-                -webkit-appearance: none;
-                margin: 0;
-            }
-            .csp-range-number[type="number"] {
-                -moz-appearance: textfield;
-            }
-            .csp-dim-pill { min-width: 64px; }
-            .csp-inline-details > summary::before,
-            .csp-section-arrow { margin-right: 2px; }
-            .csp-nai-settings-section .csp-mini-note,
-            .csp-nai-settings-note {
-                margin: 0 0 8px;
-                line-height: 1.45;
-            }
-            .csp-nai-resolution-field { order: 1; }
-            .csp-nai-steps-field { order: 2; }
-            .csp-nai-scale-field { order: 3; }
-            .csp-nai-rescale-field { order: 4; }
-            .csp-nai-sampler-field { order: 5; }
-            .csp-nai-noise-field { order: 6; }
-            .csp-nai-seed-field { order: 7; grid-column: 1 / -1; }
-            .csp-nai-resolution-field .csp-res-row {
-                display: grid;
-                grid-template-columns: minmax(0, 1fr) auto;
-                gap: 8px;
-                align-items: center;
-            }
-            .csp-nai-resolution-field .csp-res-dims {
-                justify-content: flex-end;
-                flex-wrap: nowrap;
-                gap: 6px;
-            }
-            .csp-nai-resolution-field .csp-dim-pill {
-                min-width: 58px;
-                padding: 9px 10px;
-            }
-            .csp-nai-resolution-field .csp-dim-swap {
-                width: 32px;
-                height: 34px;
-            }
-            .csp-label-note {
-                color: var(--csp-soft);
-                font-size: 11px;
-                font-weight: 700;
-            }
-            .csp-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
-            .csp-field label {
-                font-size: 12px;
-                font-weight: 600;
-                color: var(--csp-muted);
-                white-space: normal;
-                word-break: keep-all;
-                overflow-wrap: anywhere;
-            }
-            .csp-field input,
-            .csp-field textarea,
-            .csp-field select {
-                width: 100%;
-                box-sizing: border-box;
-                border-radius: 10px;
-                border: 1px solid var(--csp-border);
-                background: var(--csp-input);
-                color: var(--csp-input-text);
-                padding: 10px 11px;
-                font-size: 13px;
-                outline: none;
-                font-family: inherit;
-            }
-            .csp-field textarea { min-height: 72px; resize: vertical; line-height: 1.45; }
-            .csp-field textarea.csp-long { min-height: 180px; }
-            .csp-field input::placeholder,
-            .csp-field textarea::placeholder {
-                color: var(--csp-soft);
-                opacity: 1;
-            }
-            .csp-field input:focus,
-            .csp-field textarea:focus,
-            .csp-field select:focus {
-                border-color: var(--primary, #ff4432);
-                box-shadow: 0 0 0 3px rgba(255, 68, 50, 0.12);
-            }
-            .csp-actions {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                gap: var(--csp-space-3);
-                margin-top: var(--csp-space-5);
-                flex-wrap: wrap;
-            }
-            .csp-actions-left, .csp-actions-right { display: flex; gap: 8px; flex-wrap: wrap; }
-            .csp-modal > .csp-actions {
-                position: sticky;
-                bottom: calc(-1 * var(--csp-space-4));
-                z-index: 12;
-                margin-inline: calc(-1 * var(--csp-space-4));
-                margin-bottom: calc(-1 * var(--csp-space-4));
-                padding: 12px var(--csp-space-4) var(--csp-space-4);
-                border-top: 1px solid var(--csp-border);
-                background: color-mix(in srgb, var(--csp-surface) 94%, transparent);
-                backdrop-filter: blur(14px);
-            }
-            .csp-connection-test-row,
-            .csp-nai-toggle-grid {
-                display: flex;
-                align-items: center;
-                gap: var(--csp-space-3);
-                flex-wrap: wrap;
-                margin-top: var(--csp-space-2);
-            }
-            .csp-connection-test-row .csp-mini-note { margin-left: auto; }
-            .csp-nai-toggle-grid .csp-check-row { margin: 0; min-height: 36px; }
-            .csp-section > .csp-actions-left,
-            .csp-section > .csp-actions-right,
-            .csp-section-body > .csp-actions-left,
-            .csp-section-body > .csp-actions-right { margin-top: 14px; }
-            .csp-quick-slot-grid { margin-top: 12px; }
-            .csp-quick-slot-actions { margin-top: 14px; gap: 10px; }
-            .csp-quick-slot-actions .csp-btn { min-width: 92px; }
-            .csp-anlas-chip {
-                border: 0;
-                background: transparent;
-                color: var(--csp-muted);
-                padding: 2px 4px;
-                border-radius: 6px;
-                font-size: 13px;
-                font-weight: 900;
-                letter-spacing: 0.01em;
-                cursor: pointer;
-                min-width: 0;
-                text-align: center;
-            }
-            .csp-anlas-chip:hover { background: var(--csp-surface-2); }
-            .csp-anlas-chip.csp-anlas-cost,
-            .csp-anlas-chip.is-active { color: #ef4444; }
-            .csp-v5-quota-chip { color: #60a5fa; }
-            .csp-v5-quota-chip.is-low { color: #f59e0b; }
-            .csp-v5-quota-chip.is-exhausted { color: #ef4444; }
-            .csp-anlas-chip[hidden] { display: none !important; }
-            .csp-btn {
-                border: 1px solid var(--csp-border);
-                background: var(--csp-surface-2);
-                color: inherit;
-                padding: 10px 16px;
-                border-radius: 10px;
-                cursor: pointer;
-                font-size: 13px;
-                font-weight: 700;
-                transition: background 140ms ease, transform 100ms ease;
-            }
-            .csp-btn:active {
-                transform: scale(0.98);
-            }
-            .csp-btn:hover { background: rgba(255,255,255,0.13); }
-            .csp-btn-primary {
-                background: var(--primary, #ff4432);
-                color: var(--primary-foreground, #fff);
-                border-color: var(--primary, #ff4432);
-            }
-            .csp-btn-danger {
-                background: rgba(255, 80, 80, 0.16);
-                border-color: rgba(255, 80, 80, 0.35);
-            }
-            .csp-btn-small { padding: 7px 10px; font-size: 12px; }
-            #csp-base-positive,
-            #csp-base-negative,
-            #csp-renderer-guide-editor,
-            #csp-gemini-instruction {
-                min-height: 64px;
-            }
-
-            .csp-mini-note {
-                font-size: 11px;
-                color: var(--csp-soft);
-                line-height: 1.5;
-                margin-top: 4px;
-                white-space: normal;
-                word-break: keep-all;
-                overflow-wrap: anywhere;
-            }
-            .csp-warning-text {
-                color: #f0b56b;
-            }
-
-            .csp-storage-status {
-                margin-top: 10px;
-                padding: 10px 12px;
-                border: 1px solid var(--csp-border);
-                border-radius: 12px;
-                background: var(--csp-surface-3);
-                color: var(--csp-muted);
-                font-size: 12px;
-                line-height: 1.55;
-                overflow-wrap: anywhere;
-            }
             .csp-storage-top {
                 margin-top: 4px;
                 color: var(--csp-soft);
                 font-size: 11px;
-            }
-            .csp-storage-action-row {
-                margin-top: 12px;
-                display: flex;
-                align-items: center;
-                gap: 12px;
-                flex-wrap: wrap;
-            }
-            .csp-storage-action-row .csp-actions-left,
-            .csp-storage-actions {
-                margin-top: 0 !important;
-            }
-            .csp-storage-help {
-                margin-top: 0;
-                flex: 1 1 320px;
-                color: var(--csp-soft);
-            }
-            .csp-source-link-list {
-                display: grid;
-                gap: 0;
-                margin: 2px 0 12px;
-                border-top: 1px solid color-mix(in srgb, var(--csp-border) 55%, transparent);
-            }
-            .csp-source-link-row {
-                display: grid;
-                grid-template-columns: 124px minmax(0, 1fr);
-                gap: 10px;
-                align-items: center;
-                padding: 8px 0;
-                border-bottom: 1px solid color-mix(in srgb, var(--csp-border) 55%, transparent);
-            }
-            .csp-source-link-row b {
-                font-size: 11px;
-                color: var(--csp-muted);
-                white-space: nowrap;
-            }
-            .csp-source-link-row a,
-            .csp-source-link-row span {
-                min-width: 0;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-                font-size: 12px;
-                color: var(--csp-text);
-                text-decoration: none;
-            }
-            .csp-source-link-row a:hover { text-decoration: underline; }
-            .csp-diagnostic-pre {
-                max-height: 220px;
-                overflow: auto;
-                white-space: pre-wrap;
-                word-break: break-word;
-                background: var(--csp-surface-2);
-                border: 1px solid var(--csp-border);
-                border-radius: 10px;
-                padding: 8px 10px;
-                color: var(--csp-text);
-                font-size: 11px;
-                line-height: 1.45;
-            }
-            .csp-tagbook-search-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-            .csp-tagbook-search-row input { min-width: 220px; flex: 1 1 260px; }
-            .csp-tagbook-search-result {
-                margin-top: 8px;
-                padding: 10px 12px;
-                border: 1px solid var(--csp-border);
-                border-radius: 12px;
-                background: var(--csp-surface-3);
-                color: var(--csp-muted);
-                font-size: 12px;
-                line-height: 1.5;
-                max-height: 280px;
-                overflow: auto;
-            }
-            .csp-tagbook-results { display: grid; gap: 8px; margin-top: 8px; }
-            .csp-tagbook-result-card { border: 1px solid var(--csp-border); border-radius: 10px; padding: 8px 10px; background: var(--csp-surface-2); }
-            .csp-tagbook-result-main { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-            .csp-tagbook-result-main code { font-size: 12px; color: var(--csp-text); }
-            .csp-tagbook-result-meta { padding: 2px 6px; border-radius: 999px; border: 1px solid var(--csp-border); color: var(--csp-soft); font-size: 10px; }
-            .csp-tagbook-result-ko { display: block; margin-top: 4px; color: var(--csp-muted); }
-            .csp-tagbook-result-wiki { margin-top: 4px; color: var(--csp-soft); font-size: 11px; overflow-wrap: anywhere; }
-            .csp-tagbook-candidate-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
-            .csp-tagbook-candidate-result {
-                margin-top: 8px;
-                padding: 10px 12px;
-                border: 1px solid var(--csp-border);
-                border-radius: 12px;
-                background: var(--csp-surface-3);
-                color: var(--csp-muted);
-                font-size: 12px;
-                line-height: 1.5;
-                max-height: 420px;
-                overflow: auto;
-            }
-            .csp-tagbook-candidate-group { margin-top: 10px; }
-            .csp-tagbook-candidate-group-title {
-                font-size: 12px;
-                font-weight: 900;
-                color: var(--csp-text);
-                margin: 4px 0 6px;
-            }
-            .csp-tagbook-selector-block {
-                margin-top: 10px;
-                padding: 10px 12px;
-                border: 1px solid var(--csp-border);
-                border-radius: 12px;
-                background: var(--csp-surface-2);
-            }
-            .csp-tagbook-selector-title { font-size: 12px; font-weight: 900; color: var(--csp-text); margin-bottom: 8px; }
-            .csp-tagbook-selected-list { display: flex; gap: 6px; flex-wrap: wrap; }
-            .csp-tagbook-selected-chip {
-                display: inline-flex;
-                align-items: center;
-                padding: 3px 7px;
-                border-radius: 999px;
-                border: 1px solid var(--csp-border);
-                background: var(--csp-surface-3);
-                color: var(--csp-text);
-                font-size: 11px;
-                font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-            }
-            .csp-tagbook-rejected-list { display: grid; gap: 5px; margin-top: 8px; }
-            .csp-tagbook-rejected-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; color: var(--csp-muted); font-size: 11px; }
-            .csp-tagbook-rejected-row code { color: var(--csp-text); }
-            .csp-character-card {
-                border: 1px solid var(--csp-border);
-                background: var(--csp-surface-2);
-                border-radius: 9px;
-                padding: 7px 8px;
-                margin-bottom: 6px;
-            }
-            .csp-character-head {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                gap: 6px;
-                min-height: 28px;
-                margin-bottom: 6px;
-                font-size: 12px;
-                font-weight: 800;
-                color: var(--csp-muted);
-                cursor: pointer;
-            }
-            .csp-character-card.is-card-collapsed .csp-character-head {
-                margin-bottom: 0;
-                min-height: 26px;
-                align-items: center;
-            }
-            .csp-character-title-toggle {
-                appearance: none;
-                display: inline-flex;
-                align-items: center;
-                justify-content: flex-start;
-                flex: 1 1 auto;
-                width: 100%;
-                min-height: 22px;
-                border: 0 !important;
-                outline: 0 !important;
-                box-shadow: none !important;
-                background: transparent !important;
-                color: var(--csp-text);
-                font: inherit;
-                font-weight: 900;
-                line-height: 1.28;
-                padding: 0;
-                margin: 0;
-                cursor: pointer;
-                text-align: left;
-                max-width: 100%;
-                text-decoration: none !important;
-            }
-            .csp-character-title-toggle:hover,
-            .csp-character-title-toggle:focus,
-            .csp-character-title-toggle:focus-visible {
-                border: 0 !important;
-                outline: 0 !important;
-                box-shadow: none !important;
-                background: transparent !important;
-                color: var(--csp-text);
-                text-decoration: none !important;
-            }
-            .csp-remove-character {
-                min-width: auto !important;
-                align-self: center;
-                padding: 3px 5px !important;
-                border: 0 !important;
-                background: transparent !important;
-                color: #f87171 !important;
-                box-shadow: none !important;
-                white-space: nowrap !important;
-                writing-mode: horizontal-tb !important;
-                font-size: 11px !important;
-            }
-            .csp-pc-character-card .csp-character-head {
-                margin-bottom: 8px;
-                min-height: 32px;
-                align-items: center;
-            }
-            .csp-pc-character-card.is-card-collapsed .csp-character-head {
-                margin-bottom: 0;
-            }
-            .csp-character-card.is-missing-name {
-                border-color: rgba(245, 158, 11, .55);
-                box-shadow: 0 0 0 1px rgba(245, 158, 11, .16);
-            }
-            .csp-character-name-warning {
-                color: #f59e0b;
-                font-size: 12px;
-                font-weight: 800;
-                margin-left: 6px;
-            }
-            .csp-remove-character:hover {
-                background: rgba(248, 113, 113, 0.10) !important;
-                color: #fecaca !important;
-            }
-            .csp-reference-box {
-                margin-top: 10px;
-                border: 1px dashed var(--csp-border);
-                border-radius: 12px;
-                padding: 10px;
-                background: var(--csp-surface-2);
-            }
-            .csp-reference-head {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 10px;
-                min-width: 0;
-            }
-            .csp-reference-enable-row {
-                display: flex;
-                align-items: center;
-                gap: 8px;
-                min-width: 0;
-                flex: 1 1 auto;
-                line-height: 1.35;
-                white-space: nowrap;
-            }
-            .csp-reference-enable-row input {
-                flex: 0 0 auto;
-            }
-            .csp-reference-title {
-                flex: 0 0 auto;
-                font-weight: 800;
-            }
-            .csp-reference-head .csp-inline-note {
-                min-width: 0;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-            }
-            .csp-reference-toggle {
-                flex: 0 0 auto;
-                width: auto !important;
-                white-space: nowrap;
-                padding: 6px 10px;
-                line-height: 1.2;
-            }
-            .csp-two-col {
-                display: grid;
-                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-                gap: 12px;
-                align-items: start;
-            }
-            .csp-two-col .csp-field {
-                min-width: 0;
-            }
-            .csp-scene-summary-list {
-                display: grid;
-                gap: 8px;
-            }
-            .csp-scene-summary-row {
-                display: grid;
-                grid-template-columns: 118px minmax(0, 1fr);
-                gap: 12px;
-                align-items: start;
-                padding: 5px 0;
-            }
-            .csp-scene-summary-toggle {
-                display: inline-flex;
-                align-items: center;
-                gap: 7px;
-                font-size: 12px;
-                font-weight: 800;
-                color: var(--csp-text);
-                min-width: 0;
-                line-height: 1.45;
-            }
-            .csp-scene-summary-toggle input {
-                width: auto !important;
-                flex: 0 0 auto;
-                margin: 0;
-            }
-            .csp-scene-summary-label {
-                display: inline-flex;
-                align-items: center;
-                gap: 6px;
-                min-width: 0;
-                white-space: nowrap;
-            }
-            .csp-scene-summary-text {
-                font-size: 12px;
-                line-height: 1.5;
-                color: var(--csp-text);
-                word-break: break-word;
-                white-space: normal;
-            }
-            .csp-inline-check {
-                display: flex;
-                align-items: center;
-                gap: 8px;
-                width: fit-content;
-                max-width: 100%;
-                color: var(--csp-muted);
-                font-size: 12px;
-                font-weight: 800;
-                line-height: 1.4;
-            }
-            .csp-inline-check input {
-                width: auto !important;
-                flex: 0 0 auto;
-                margin: 0;
-            }
-            .csp-tagbook-actions-main {
-                margin-top: 10px;
-            }
-            .csp-outfit-textarea {
-                min-height: 72px !important;
-                resize: vertical;
-                overflow-y: auto;
-            }
-            .csp-inline-details {
-                border: 1px solid var(--csp-border);
-                border-radius: 12px;
-                background: var(--csp-surface-2);
-                padding: 0;
-                overflow: hidden;
-            }
-            .csp-inline-details > summary {
-                list-style: none;
-                cursor: pointer;
-                display: flex;
-                align-items: center;
-                gap: 8px;
-                padding: 11px 12px;
-                font-weight: 800;
-                color: var(--csp-text);
-                background: color-mix(in srgb, var(--csp-surface-2) 78%, var(--primary, #ff4432) 8%);
-                border-bottom: 1px solid transparent;
-                transition: background 140ms ease;
-            }
-            .csp-inline-details > summary:hover {
-                background: color-mix(in srgb, var(--csp-surface-2) 58%, var(--primary, #ff4432) 24%);
-            }
-            .csp-inline-details > summary::-webkit-details-marker { display: none; }
-            .csp-inline-details[open] > summary { border-bottom-color: var(--csp-border); }
-            .csp-inline-details > summary::before {
-                content: '▶';
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                flex: 0 0 auto;
-                width: auto;
-                height: auto;
-                border: 0;
-                border-radius: 0;
-                background: transparent;
-                color: var(--csp-muted);
-                font-size: 11px;
-                line-height: 1;
-                transition: transform 160ms ease;
-            }
-            .csp-inline-details[open] > summary::before {
-                content: '▶';
-                transform: rotate(90deg);
-            }
-            .csp-inline-details > summary::after {
-                content: '펼치기';
-                margin-left: auto;
-                flex: 0 0 auto;
-                padding: 3px 9px;
-                border-radius: 999px;
-                background: var(--csp-surface-3);
-                border: 1px solid var(--csp-border);
-                color: var(--csp-soft);
-                font-size: 11px;
-                font-weight: 800;
-            }
-            .csp-inline-details[open] > summary::after { content: '접기'; }
-            .csp-inline-details-body {
-                padding: 12px;
-            }
-            .csp-inline-dedupe-preview {
-                margin-top: 4px;
-                padding: 0;
-                border: 0;
-                background: transparent;
-                font-size: 11px;
-                line-height: 1.45;
-                color: var(--csp-muted);
-                white-space: normal;
-                word-break: break-word;
-            }
-            .csp-inline-dedupe-preview[hidden] {
-                display: none !important;
-            }
-            .csp-token-meter {
-                margin-top: 6px;
-                color: #34d399;
-                font-size: 11px;
-                font-weight: 800;
-            }
-            .csp-token-meter.is-warning { color: #f59e0b; }
-            .csp-token-meter.is-over { color: #ef4444; }
-            .csp-dup-token {
-                color: var(--csp-soft);
-                text-decoration: line-through;
-                opacity: 0.9;
-            }
-            .csp-dup-sep {
-                opacity: 0.72;
-            }
-            .csp-compact-textarea {
-                min-height: 64px !important;
-            }
-            .csp-tiny-textarea {
-                min-height: 54px !important;
-            }
-            #csp-plan-reason {
-                min-height: 58px !important;
-            }
-            .csp-reference-body {
-                display: grid;
-                gap: 10px;
-            }
-            .csp-reference-box.is-collapsed .csp-reference-body {
-                display: none;
-            }
-            .csp-reference-preview-row {
-                display: flex;
-                gap: 10px;
-                align-items: flex-start;
-                margin-top: 8px;
-            }
-            .csp-reference-preview-img {
-                width: 72px;
-                height: 96px;
-                object-fit: cover;
-                border-radius: 10px;
-                border: 1px solid rgba(255,255,255,0.16);
-                background: rgba(0,0,0,0.22);
-            }
-            .csp-reference-preview-actions {
-                flex: 1;
-                min-width: 0;
-            }
-            .csp-reference-file {
-                font-size: 12px !important;
-                padding: 8px !important;
             }
             .csp-generated-scene-image {
                 contain: layout paint;
@@ -6326,7 +5292,7 @@ director.lightingIntent:
                 padding: 0 4px 0 0;
                 line-height: 1;
                 font-size: 12px;
-                color: var(--csp-muted);
+                color: inherit;
                 opacity: 0.92;
                 pointer-events: auto;
                 user-select: none;
@@ -6336,9 +5302,9 @@ director.lightingIntent:
                 width: 22px;
                 height: 22px;
                 border-radius: 999px;
-                border: 1px solid var(--csp-border);
-                background: var(--csp-surface-2);
-                color: var(--csp-text);
+                border: 1px solid rgba(255,255,255,0.22);
+                background: rgba(18,18,22,0.58);
+                color: #fff;
                 display: inline-flex;
                 align-items: center;
                 justify-content: center;
@@ -6359,7 +5325,7 @@ director.lightingIntent:
                 font-size: 12px;
                 font-weight: 800;
                 line-height: 1;
-                color: var(--csp-muted);
+                color: inherit;
                 text-shadow: 0 1px 2px rgba(0,0,0,0.12);
             }
             .csp-message-generate-btn,
@@ -6393,170 +5359,6 @@ director.lightingIntent:
             }
             .csp-message-generate-btn[data-csp-loading="true"],
             .csp-message-speed-btn[data-csp-loading="true"] { opacity: 0.55; pointer-events: none; }
-            .csp-check-row {
-                display: flex;
-                align-items: flex-start;
-                gap: 8px;
-                font-size: 13px;
-                font-weight: 700;
-                opacity: 0.9;
-                padding: 8px 0;
-                white-space: normal;
-                word-break: keep-all;
-                overflow-wrap: anywhere;
-                line-height: 1.45;
-            }
-            .csp-check-row input { width: auto !important; flex: 0 0 auto; margin-top: 2px; }
-            .csp-inline-note {
-                display: inline-block;
-                margin-left: 8px;
-                font-size: 11px;
-                opacity: 0.62;
-            }
-            .csp-slot-preview-wrap {
-                display: flex;
-                flex-direction: column;
-                gap: 10px;
-                margin-top: 6px;
-            }
-            .csp-slot-preview-card {
-                border: 1px solid var(--csp-border);
-                border-radius: 12px;
-                padding: 12px;
-                background: var(--csp-surface-3);
-            }
-            .csp-slot-preview-two-col {
-                display: grid;
-                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-                gap: 12px;
-                align-items: start;
-                margin-top: 6px;
-            }
-            .csp-slot-preview-column {
-                display: flex;
-                flex-direction: column;
-                gap: 10px;
-                min-width: 0;
-            }
-            .csp-slot-preview-title-row {
-                display: flex;
-                align-items: baseline;
-                justify-content: space-between;
-                gap: 8px;
-                margin-bottom: 10px;
-            }
-            .csp-slot-preview-meta {
-                font-size: 11px;
-                color: var(--csp-soft);
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-            }
-            .csp-slot-preview-card.csp-slot-preview-details {
-                padding: 0;
-                overflow: hidden;
-            }
-            .csp-slot-preview-details > summary {
-                list-style: none;
-                cursor: pointer;
-                padding: 10px 12px;
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 8px;
-                font-size: 12px;
-                font-weight: 800;
-                color: var(--csp-text);
-            }
-            .csp-slot-preview-details > summary::-webkit-details-marker {
-                display: none;
-            }
-            .csp-slot-preview-details > summary::after {
-                content: '펼치기';
-                font-size: 11px;
-                font-weight: 800;
-                color: var(--csp-soft);
-                flex: 0 0 auto;
-            }
-            .csp-slot-preview-details[open] > summary {
-                border-bottom: 1px solid var(--csp-border);
-            }
-            .csp-slot-preview-details[open] > summary::after {
-                content: '접기';
-            }
-            .csp-slot-preview-detail-body {
-                padding: 10px 12px 12px;
-            }
-            .csp-character-prompt-details {
-                margin-top: 8px;
-            }
-            .csp-slot-preview-title {
-                font-size: 12px;
-                font-weight: 800;
-                color: var(--csp-text);
-                margin-bottom: 8px;
-            }
-            .csp-slot-preview-label {
-                font-size: 11px;
-                font-weight: 800;
-                color: var(--csp-soft);
-                margin: 10px 0 3px;
-            }
-            .csp-slot-preview-body {
-                white-space: pre-wrap;
-                word-break: break-word;
-                font-size: 12px;
-                line-height: 1.45;
-                color: var(--csp-text);
-            }
-            .csp-slot-preview-textarea {
-                width: 100%;
-                min-height: 72px;
-                resize: vertical;
-                box-sizing: border-box;
-                border: 1px solid var(--csp-border);
-                border-radius: 10px;
-                background: var(--csp-surface-2);
-                color: var(--csp-text);
-                padding: 9px 10px;
-                font-size: 12px;
-                line-height: 1.45;
-                font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-                outline: none;
-            }
-            .csp-slot-preview-textarea:focus {
-                border-color: rgba(96, 165, 250, .65);
-                box-shadow: 0 0 0 2px rgba(96, 165, 250, .16);
-            }
-            .csp-slot-uc-editor {
-                min-height: 48px;
-            }
-            .csp-paragraph-preview {
-                min-height: 70px;
-                max-height: 150px;
-                overflow: auto;
-                white-space: pre-wrap;
-                word-break: break-word;
-                border: 1px solid var(--csp-border);
-                border-radius: 12px;
-                background: var(--csp-surface-3);
-                padding: 12px;
-                font-size: 12px;
-                line-height: 1.55;
-                color: var(--csp-text);
-            }
-            .csp-btn-small {
-                min-height: 32px;
-                padding: 7px 10px;
-                font-size: 12px;
-            }
-            .csp-slot-preview-empty {
-                font-size: 12px;
-                color: var(--csp-soft);
-            }
-            .csp-hidden-raw {
-                display: none !important;
-            }
             .csp-message-generate-btn[data-csp-loading="true"],
             .csp-image-action-btn[data-csp-loading="true"] {
                 opacity: 0.72;
@@ -6699,109 +5501,6 @@ director.lightingIntent:
                 background: var(--primary, #ff4432);
                 line-height: 1;
             }
-            .csp-gallery-modal { width: min(1080px, calc(100vw - 30px)); }
-            .csp-gallery-summary {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 10px;
-                flex-wrap: wrap;
-                margin-bottom: 12px;
-            }
-            .csp-gallery-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
-                gap: 12px;
-                min-height: 160px;
-            }
-            .csp-gallery-empty {
-                border: 1px dashed var(--csp-border);
-                border-radius: 14px;
-                padding: 28px 16px;
-                color: var(--csp-muted);
-                font-size: 13px;
-                text-align: center;
-                background: var(--csp-surface-2);
-            }
-            .csp-gallery-card {
-                border: 1px solid var(--csp-border);
-                border-radius: 14px;
-                background: var(--csp-surface-2);
-                overflow: hidden;
-                min-width: 0;
-                box-shadow: 0 8px 22px rgba(0,0,0,0.10);
-            }
-            .csp-gallery-thumb {
-                width: 100%;
-                aspect-ratio: 1 / 1.25;
-                border: 0;
-                background: var(--csp-surface-3);
-                padding: 0;
-                cursor: zoom-in;
-                display: block;
-                overflow: hidden;
-            }
-            .csp-gallery-thumb img {
-                width: 100%;
-                height: 100%;
-                object-fit: cover;
-                display: block;
-            }
-            .csp-gallery-thumb.is-missing {
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                color: var(--csp-muted);
-                font-size: 12px;
-                line-height: 1.45;
-                padding: 12px;
-                text-align: center;
-            }
-            .csp-gallery-card-body { padding: 10px; }
-            .csp-gallery-title {
-                color: var(--csp-text);
-                font-size: 12px;
-                font-weight: 900;
-                line-height: 1.35;
-                overflow: hidden;
-                display: -webkit-box;
-                -webkit-line-clamp: 2;
-                -webkit-box-orient: vertical;
-                min-height: 32px;
-            }
-            .csp-gallery-meta {
-                margin-top: 5px;
-                color: var(--csp-muted);
-                font-size: 11px;
-                line-height: 1.45;
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-            }
-            .csp-gallery-actions {
-                display: flex;
-                gap: 6px;
-                flex-wrap: wrap;
-                margin-top: 9px;
-            }
-            .csp-gallery-actions .csp-btn {
-                padding: 6px 8px;
-                font-size: 11px;
-                min-width: 0;
-                flex: 1 1 auto;
-            }
-            .csp-gallery-nav-btn {
-                flex: 0 0 30px !important;
-                width: 30px;
-                padding-left: 0 !important;
-                padding-right: 0 !important;
-                font-size: 15px !important;
-                font-weight: 900 !important;
-            }
-            .csp-gallery-actions .csp-btn:disabled {
-                opacity: 0.42;
-                cursor: default;
-            }
             .csp-lightbox-backdrop {
                 position: fixed;
                 inset: 0;
@@ -6811,38 +5510,6 @@ director.lightingIntent:
                 align-items: center;
                 justify-content: center;
                 padding: 28px;
-            }
-            .csp-lightbox-panel {
-                position: relative;
-                max-width: min(96vw, 1280px);
-                max-height: 92vh;
-                display: flex;
-                flex-direction: column;
-                gap: 10px;
-                align-items: center;
-            }
-            .csp-lightbox-panel img {
-                max-width: 100%;
-                max-height: calc(92vh - 54px);
-                object-fit: contain;
-                border-radius: 16px;
-                box-shadow: 0 18px 80px rgba(0,0,0,0.48);
-                background: rgba(0,0,0,0.2);
-            }
-            .csp-lightbox-topbar {
-                width: 100%;
-                display: flex;
-                justify-content: flex-end;
-                gap: 8px;
-            }
-            .csp-lightbox-btn {
-                border: 1px solid rgba(255,255,255,0.18);
-                background: rgba(20,20,20,0.76);
-                color: #fff;
-                border-radius: 999px;
-                padding: 8px 12px;
-                font-size: 12px;
-                cursor: pointer;
             }
             @keyframes csp-spin {
                 from { transform: rotate(0deg); }
@@ -6917,559 +5584,11 @@ director.lightingIntent:
                 background: rgba(160, 36, 36, 0.86);
                 border-color: rgba(255,120,120,0.40);
             }
-            .csp-tab-shell { margin-top: 10px; }
-            .csp-tab-list {
-                display: flex;
-                gap: 4px;
-                position: sticky;
-                top: calc(-1 * var(--csp-space-4));
-                z-index: 14;
-                border-bottom: 1px solid var(--csp-border);
-                padding: var(--csp-space-2) 0 0;
-                background: color-mix(in srgb, var(--csp-surface) 96%, transparent);
-                backdrop-filter: blur(14px);
-                overflow-x: auto;
-                overflow-y: hidden;
-                flex-wrap: nowrap;
-                -webkit-overflow-scrolling: touch;
-                scrollbar-width: none;
-                -ms-overflow-style: none;
-            }
-            .csp-tab-list::-webkit-scrollbar {
-                display: none;
-                width: 0;
-                height: 0;
-            }
-            .csp-tab-btn {
-                border: 1px solid transparent;
-                background: transparent;
-                color: var(--csp-muted);
-                padding: 8px 14px;
-                border-radius: 10px 10px 0 0;
-                cursor: pointer;
-                font-size: 13px;
-                font-weight: 700;
-                border-bottom: none;
-                margin-bottom: -1px;
-                white-space: nowrap;
-                flex: 0 0 auto;
-            }
-            .csp-tab-btn:hover { background: var(--csp-surface-2); }
-            .csp-tab-btn.is-active {
-                background: var(--csp-surface);
-                color: var(--csp-text);
-                border-color: var(--csp-border);
-                border-bottom-color: var(--csp-surface);
-                box-shadow: inset 0 -2px 0 var(--primary, #ff4432);
-            }
-            .csp-usage-summary {
-                display: grid;
-                gap: 12px;
-                margin-bottom: 12px;
-            }
-            .csp-usage-total {
-                display: flex;
-                flex-wrap: wrap;
-                gap: 10px;
-                align-items: center;
-                justify-content: space-between;
-            }
-            .csp-usage-total-chips {
-                display: flex;
-                flex-wrap: wrap;
-                gap: 8px;
-                align-items: center;
-            }
-            .csp-usage-total span,
-            .csp-usage-empty {
-                border: 1px solid var(--csp-border);
-                border-radius: 999px;
-                background: var(--csp-surface-3);
-                color: var(--csp-muted);
-                padding: 7px 10px;
-                font-size: 12px;
-            }
-            .csp-usage-total b {
-                color: var(--csp-text);
-                font-weight: 800;
-            }
-            .csp-usage-models {
-                display: grid;
-                gap: 8px;
-            }
-            .csp-usage-model-row {
-                display: grid;
-                grid-template-columns: minmax(0, 1fr) auto;
-                gap: 10px;
-                align-items: center;
-                border: 1px solid var(--csp-border);
-                border-radius: 12px;
-                background: color-mix(in srgb, var(--csp-surface) 88%, transparent);
-                padding: 10px 12px;
-            }
-            .csp-usage-model-row b {
-                display: block;
-                color: var(--csp-text);
-                font-size: 12px;
-                margin-bottom: 3px;
-            }
-            .csp-usage-model-row span {
-                display: block;
-                color: var(--csp-muted);
-                font-size: 12px;
-                line-height: 1.45;
-            }
-            .csp-usage-model-row strong {
-                color: var(--csp-text);
-                font-size: 13px;
-                white-space: nowrap;
-            }
-
-            .csp-prompt-tools-grid {
-                display: grid;
-                grid-template-columns: minmax(0, 1fr);
-                gap: 12px;
-                align-items: stretch;
-                margin-top: 0;
-            }
-            .csp-prompt-tools-grid > .csp-inline-details {
-                height: 100%;
-            }
-            .csp-plan-prompt-section > .csp-section-title {
-                margin: 4px 0 5px;
-            }
-            .csp-plan-prompt-section .csp-field {
-                gap: 3px;
-                margin-bottom: 7px;
-            }
-            .csp-plan-prompt-section .csp-field label {
-                line-height: 1.2;
-            }
-            .csp-plan-prompt-section > .csp-grid:first-of-type {
-                margin-top: 0;
-            }
-            .csp-plan-prompt-section .csp-section-subbox {
-                margin-top: 4px;
-            }
-            .csp-character-prompt-field,
-            .csp-prompt-tools-field {
-                margin-top: 9px;
-                margin-bottom: 9px;
-            }
-            .csp-character-prompt-details {
-                margin-top: 0;
-            }
-            .csp-prompt-tools-grid .csp-inline-details-body {
-                padding-top: 8px;
-            }
-            .csp-prompt-tools-grid .csp-tagbook-candidate-result {
-                max-height: 360px;
-            }
-            .csp-prompt-tools-grid .csp-tagbook-results {
-                gap: 0;
-                margin-top: 4px;
-            }
-            .csp-prompt-tools-grid .csp-tagbook-result-card {
-                border: 0;
-                border-bottom: 1px solid color-mix(in srgb, var(--csp-border) 58%, transparent);
-                border-radius: 0;
-                background: transparent;
-                padding: 5px 2px;
-            }
-            .csp-prompt-tools-grid .csp-tagbook-result-card:last-child {
-                border-bottom: 0;
-            }
-            .csp-prompt-tools-grid .csp-tagbook-result-main {
-                gap: 4px;
-            }
-            .csp-prompt-tools-grid .csp-tagbook-result-meta {
-                padding: 0 4px;
-                border-radius: 6px;
-                background: transparent;
-            }
-            .csp-prompt-tools-grid .csp-copy-tagbook-tag {
-                min-height: 24px;
-                padding: 2px 7px;
-                border-radius: 8px;
-                font-size: 11px;
-                line-height: 1.2;
-            }
-            .csp-prompt-tools-grid .csp-tagbook-result-main code {
-                font-size: 12px;
-                line-height: 1.25;
-            }
-            .csp-prompt-tools-grid .csp-tagbook-result-ko,
-            .csp-prompt-tools-grid .csp-tagbook-result-wiki {
-                margin-top: 2px;
-                font-size: 11px;
-                line-height: 1.42;
-            }
-            .csp-tab-panels { margin-top: 4px; }
-            .csp-tab-panel { display: none; }
-            .csp-tab-panel.is-active { display: block; }
-
-
-            /* NAI 확인창의 보조 프롬프트 도구는 단일 토글 안에서 표시한다. */
-            .csp-prompt-tools-details .csp-inline-details-body {
-                padding: 12px;
-            }
-            .csp-prompt-tools-details .csp-prompt-tools-grid {
-                margin-top: 0;
-                align-items: stretch;
-            }
-            .csp-prompt-tool-pane {
-                min-width: 0;
-                display: flex;
-                flex-direction: column;
-            }
-            .csp-prompt-tool-title {
-                font-size: 13px;
-                font-weight: 900;
-                color: var(--csp-text);
-                margin: 0 0 8px;
-                padding-bottom: 7px;
-                border-bottom: 1px solid color-mix(in srgb, var(--csp-border) 70%, transparent);
-            }
-            /* v4.24.30: Character Prompt 슬롯 내부 카드는 박스 대신 중앙 구분선으로 분리한다. */
-            .csp-plan-prompt-section .csp-character-prompt-details .csp-inline-details-body {
-                padding: 10px 14px 12px;
-            }
-            .csp-plan-prompt-section .csp-character-prompt-details .csp-slot-preview-wrap {
-                margin-top: 0;
-                gap: 8px;
-            }
-            .csp-plan-prompt-section .csp-character-prompt-details .csp-slot-preview-two-col {
-                gap: 0;
-                align-items: stretch;
-                margin-top: 0;
-            }
-            .csp-plan-prompt-section .csp-character-prompt-details .csp-slot-preview-column {
-                gap: 10px;
-                padding: 0 14px;
-            }
-            .csp-plan-prompt-section .csp-character-prompt-details .csp-slot-preview-column:first-child {
-                padding-left: 0;
-                border-right: 1px solid color-mix(in srgb, var(--csp-border) 80%, transparent);
-            }
-            .csp-plan-prompt-section .csp-character-prompt-details .csp-slot-preview-column:last-child {
-                padding-right: 0;
-            }
-            .csp-plan-prompt-section .csp-character-prompt-details .csp-slot-preview-card {
-                border: 0;
-                border-radius: 0;
-                padding: 0;
-                background: transparent;
-            }
-            .csp-plan-prompt-section .csp-character-prompt-details .csp-slot-preview-title-row {
-                margin-bottom: 7px;
-                padding-bottom: 6px;
-                border-bottom: 1px solid color-mix(in srgb, var(--csp-border) 62%, transparent);
-            }
-            .csp-plan-prompt-section .csp-character-prompt-details .csp-slot-preview-title {
-                margin-bottom: 0;
-            }
-            .csp-plan-prompt-section .csp-character-prompt-details .csp-slot-preview-label {
-                margin: 7px 0 2px;
-            }
-            .csp-plan-prompt-section .csp-character-prompt-details .csp-slot-preview-textarea {
-                border-radius: 8px;
-            }
-            .csp-plan-prompt-section .csp-character-prompt-field {
-                margin-bottom: 10px;
-            }
-            .csp-plan-prompt-section .csp-prompt-tools-field {
-                margin-top: 10px;
-                margin-bottom: 10px;
-            }
-
-
-            /* v4.24.33: NAI 설정 3열 하단행 + 리롤 캐릭터 슬롯도 확인창과 동일한 평면 구조 */
-            .csp-nai-settings-grid {
-                grid-template-columns: repeat(6, minmax(0, 1fr));
-            }
-            .csp-nai-resolution-field,
-            .csp-nai-model-field,
-            .csp-nai-steps-field,
-            .csp-nai-scale-field,
-            .csp-nai-rescale-field {
-                grid-column: span 3;
-            }
-            .csp-nai-sampler-field,
-            .csp-nai-noise-field,
-            .csp-nai-seed-field {
-                grid-column: span 2 !important;
-            }
-            .csp-nai-seed-field { order: 7; }
-            .csp-image-reroll-modal .csp-character-prompt-details .csp-inline-details-body {
-                padding: 10px 14px 12px;
-            }
-            .csp-image-reroll-modal .csp-character-prompt-details .csp-slot-preview-wrap {
-                margin-top: 0;
-                gap: 8px;
-            }
-            .csp-image-reroll-modal .csp-character-prompt-details .csp-slot-preview-two-col {
-                gap: 0;
-                align-items: stretch;
-                margin-top: 0;
-            }
-            .csp-image-reroll-modal .csp-character-prompt-details .csp-slot-preview-column {
-                gap: 10px;
-                padding: 0 14px;
-            }
-            .csp-image-reroll-modal .csp-character-prompt-details .csp-slot-preview-column:first-child {
-                padding-left: 0;
-                border-right: 1px solid color-mix(in srgb, var(--csp-border) 80%, transparent);
-            }
-            .csp-image-reroll-modal .csp-character-prompt-details .csp-slot-preview-column:last-child {
-                padding-right: 0;
-            }
-            .csp-image-reroll-modal .csp-character-prompt-details .csp-slot-preview-card {
-                border: 0;
-                border-radius: 0;
-                padding: 0;
-                background: transparent;
-            }
-            .csp-image-reroll-modal .csp-character-prompt-details .csp-slot-preview-title-row {
-                margin-bottom: 7px;
-                padding-bottom: 6px;
-                border-bottom: 1px solid color-mix(in srgb, var(--csp-border) 62%, transparent);
-            }
-            .csp-image-reroll-modal .csp-character-prompt-details .csp-slot-preview-title { margin-bottom: 0; }
-            .csp-image-reroll-modal .csp-character-prompt-details .csp-slot-preview-label { margin: 7px 0 2px; }
-            .csp-image-reroll-modal .csp-character-prompt-details .csp-slot-preview-textarea { border-radius: 8px; }
-            .csp-reroll-outfit-inline {
-                display: flex;
-                align-items: center;
-                gap: 12px;
-                margin-top: 2px;
-            }
-            .csp-reroll-outfit-inline .csp-check-row {
-                margin: 0;
-                flex: 0 0 auto;
-                white-space: nowrap;
-            }
-            .csp-reroll-outfit-inline input[type="text"] {
-                flex: 1 1 auto;
-                min-width: 0;
-            }
-            .csp-final-edit-grid {
-                margin-top: 4px;
-            }
-            .csp-final-edit-grid .csp-field {
-                margin-bottom: 0;
-            }
-            .csp-final-edit-grid .csp-final-prompt-label-spacer {
-                display: block;
-                flex: 0 0 180px;
-                height: 40px;
-                visibility: hidden;
-                pointer-events: none;
-            }
-            .csp-plan-prompt-two-col {
-                align-items: stretch;
-            }
-            .csp-plan-prompt-field {
-                display: flex;
-                flex-direction: column;
-                min-height: 100%;
-            }
-            .csp-plan-prompt-field > .csp-mini-note {
-                margin-bottom: 0;
-            }
-            .csp-plan-outfit-editor {
-                margin-top: auto;
-                padding-top: 10px;
-                border-top: 1px solid var(--csp-border);
-            }
-            .csp-plan-outfit-editor label {
-                display: block;
-                margin-bottom: 6px;
-            }
-            /* ── v4.25 A안: 캐릭터 탭 설명 카드형 리디자인 ── */
-            .csp-slot-group { margin-bottom: 18px; }
-            .csp-slot-group-head {
-                display: flex;
-                align-items: center;
-                gap: 9px;
-                margin-bottom: 4px;
-            }
-            .csp-slot-group-ic {
-                width: 24px;
-                height: 24px;
-                flex: 0 0 auto;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                border-radius: 7px;
-                background: var(--csp-surface-3);
-                border: 1px solid var(--csp-border);
-                font-size: 12px;
-            }
-            .csp-slot-group-head h3 {
-                margin: 0;
-                font-size: 13.5px;
-                font-weight: 800;
-                color: var(--csp-text);
-            }
-            .csp-slot-group-note {
-                margin: 0 0 10px 33px;
-                font-size: 11px;
-                line-height: 1.6;
-                color: var(--csp-soft);
-            }
-            [data-csp-tab-panel="characters"] .csp-section {
-                border-top: 1px solid var(--csp-border);
-                padding-top: 18px;
-                margin-top: 18px;
-            }
-
-            /* 카드 자체 여백 복구 */
-            [data-csp-tab-panel="characters"] .csp-character-card {
-                padding: 14px 14px 4px;
-                margin-bottom: 10px;
-                border-radius: 12px;
-            }
-            [data-csp-tab-panel="characters"] .csp-character-head {
-                min-height: 0;
-                margin-bottom: 13px;
-                padding-bottom: 11px;
-                border-bottom: 1px solid var(--csp-border);
-            }
-            [data-csp-tab-panel="characters"] .csp-character-card.is-card-collapsed .csp-character-head {
-                margin-bottom: 0;
-                padding-bottom: 0;
-                border-bottom: 0;
-                min-height: 0;
-                align-items: center;
-            }
-            [data-csp-tab-panel="characters"] .csp-character-title-toggle { min-height: 24px; }
-            [data-csp-tab-panel="characters"] .csp-remove-character {
-                padding: 5px 8px !important;
-                font-size: 11px !important;
-            }
-
-            /* PC 카드는 왼쪽 강조선 카드로 */
-            .csp-pc-character-card {
-                border: 1px solid var(--csp-border) !important;
-                border-left: 3px solid var(--primary, #ff4432) !important;
-                border-radius: 12px !important;
-                background: var(--csp-surface-2) !important;
-                padding: 14px 14px 4px !important;
-                margin-bottom: 0 !important;
-            }
-            .csp-pc-character-card .csp-character-body {
-                border-top: 0;
-                padding-top: 0;
-            }
-            .csp-pc-head-switch {
-                display: inline-flex;
-                align-items: center;
-                gap: 7px;
-                flex: 0 0 auto;
-                white-space: nowrap;
-                font-size: 11px;
-                font-weight: 700;
-                color: var(--csp-muted);
-                cursor: pointer;
-            }
-            .csp-pc-head-switch input {
-                width: auto !important;
-                min-width: 0 !important;
-                margin: 0;
-                flex: 0 0 auto;
-            }
-
-            /* 필드 라벨 / 도움말 */
-            [data-csp-tab-panel="characters"] .csp-field { margin-bottom: 14px; gap: 6px; }
-            [data-csp-tab-panel="characters"] .csp-field label {
-                font-size: 12px;
-                font-weight: 700;
-                color: var(--csp-text);
-            }
-            .csp-label-sub {
-                margin-left: 6px;
-                font-size: 10.5px;
-                font-weight: 600;
-                color: var(--csp-soft);
-            }
-            .csp-field-help {
-                margin-top: 1px;
-                font-size: 10.5px;
-                line-height: 1.55;
-                color: var(--csp-soft);
-            }
-
-            /* 참고 이미지 박스 */
-            [data-csp-tab-panel="characters"] .csp-reference-box {
-                margin-top: 0;
-                margin-bottom: 10px;
-                border-radius: 10px;
-                background: var(--csp-surface-3);
-            }
-            [data-csp-tab-panel="characters"] .csp-reference-title { font-size: 11.5px; }
-
-
-            /* v4.25.1: 칩(배지) */
-            [data-csp-tab-panel="characters"] .csp-character-name-warning {
-                display: inline-flex;
-                align-items: center;
-                margin-left: 8px;
-                padding: 3px 8px;
-                border-radius: 999px;
-                border: 1px solid color-mix(in srgb, #f59e0b 45%, transparent);
-                background: color-mix(in srgb, #f59e0b 12%, transparent);
-                color: #f59e0b;
-                font-size: 10px;
-                font-weight: 800;
-                line-height: 1;
-                vertical-align: middle;
-            }
-            [data-csp-tab-panel="characters"] .csp-reference-head .csp-inline-note {
-                margin-left: auto;
-                flex: 0 0 auto;
-                padding: 3px 8px;
-                border-radius: 999px;
-                border: 1px solid var(--csp-border);
-                background: var(--csp-surface-2);
-                color: var(--csp-soft);
-                font-size: 10px;
-                font-weight: 800;
-                line-height: 1;
-                opacity: 1;
-            }
-
-            /* 참고 이미지 줄 정렬 */
-            [data-csp-tab-panel="characters"] .csp-reference-enable-row {
-                flex: 1 1 auto;
-                gap: 8px;
-            }
-            [data-csp-tab-panel="characters"] .csp-reference-head {
-                gap: 8px;
-                min-height: 26px;
-            }
-
-            /* 접힌 카드 토글 제목 수직 중앙 정렬 */
-            [data-csp-tab-panel="characters"] .csp-character-card.is-card-collapsed {
-                padding-top: 8px !important;
-                padding-bottom: 8px !important;
-            }
-            [data-csp-tab-panel="characters"] .csp-character-card.is-card-collapsed .csp-character-title-toggle {
-                display: inline-flex;
-                align-items: center;
-                min-height: 24px;
-                line-height: 1;
-                padding-top: 0 !important;
-                padding-bottom: 0 !important;
-            }
 
         `;
         document.head.appendChild(style);
     }
 
-    function hasAllClasses(el, classes) {
-        if (!el || !el.classList) return false;
-        return classes.every(name => el.classList.contains(name));
-    }
 
     function classSetHas(el, ...names) {
         return !!el?.classList && names.every(name => el.classList.contains(name));
@@ -7497,7 +5616,7 @@ director.lightingIntent:
     }
 
     function isFooterLike(el) {
-        return hasAllClasses(el, ['flex', 'items-center', 'justify-between', 'mt-2']);
+        return classSetHas(el, 'flex', 'items-center', 'justify-between', 'mt-2');
     }
 
     function isScenePainterNode(node) {
@@ -7511,12 +5630,12 @@ director.lightingIntent:
             '.csp-lightbox-backdrop',
             '.csp-generated-scene-image',
             '.csp-image-history-row',
-            '.csp-inline-action-footer',
             '.csp-message-generate-btn',
             '.csp-message-speed-btn',
             '.csp-message-comic-btn',
             '#csp-comic-studio',
-            '#csp-toast'
+            '#csp-toast',
+            '#csp-v35-root'
         ].join(','));
     }
 
@@ -7562,10 +5681,10 @@ director.lightingIntent:
         if (!el || !el.closest) return false;
         const scroller = el.closest('[data-testid="virtuoso-scroller"][data-virtuoso-scroller="true"]');
         if (!scroller) return false;
-        const text = String(scroller.textContent || '');
-        return text.includes('보관함')
-            || !!scroller.querySelector?.('button[aria-label="보관함 전체보기"], button[aria-label="보관함 메뉴"], button[aria-label="채팅방 메뉴"]')
-            || !!scroller.querySelector?.('[class*="w-[240px]"]');
+        // v5.3.0: 사이드바 전체 textContent 직렬화는 마지막 폴백으로만 쓴다(사이드바 변경마다 호출되는 함수).
+        if (scroller.querySelector?.('button[aria-label="보관함 전체보기"], button[aria-label="보관함 메뉴"], button[aria-label="채팅방 메뉴"]')) return true;
+        if (scroller.querySelector?.('[class*="w-[240px]"]')) return true;
+        return String(scroller.textContent || '').includes('보관함');
     }
 
     function isMainMarkdown(el) {
@@ -7575,32 +5694,6 @@ director.lightingIntent:
             && !el.closest('.not-wrtn-markdown')
             && !el.closest('.csp-generated-scene-image')
             && !isSuggestionNode(el);
-    }
-
-    function findPreviousMarkdown(footer) {
-        if (!footer) return null;
-        let cur = footer.previousElementSibling;
-        let guard = 0;
-
-        while (cur && guard < 10) {
-            if (isMainMarkdown(cur)) return cur;
-            const found = Array.from(cur.querySelectorAll?.('.wrtn-markdown') || []).find(isMainMarkdown);
-            if (found) return found;
-            cur = cur.previousElementSibling;
-            guard++;
-        }
-
-        const group = getMessageGroupContainer(footer);
-        if (group) return getDirectMarkdown(group);
-
-        const parent = footer.parentElement;
-        if (parent) {
-            const candidates = Array.from(parent.querySelectorAll('.wrtn-markdown')).filter(isMainMarkdown);
-            const before = candidates.filter(md => md.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING);
-            if (before.length) return before[before.length - 1];
-        }
-
-        return null;
     }
 
     function findNextFooter(markdown) {
@@ -7729,31 +5822,18 @@ director.lightingIntent:
         return null;
     }
 
-    function ensureCspInlineFooter(markdown) {
-        if (!markdown || !markdown.parentElement) return null;
-
-        const existing = markdown.parentElement.querySelector?.(':scope > .csp-inline-action-footer')
-            || (markdown.nextElementSibling?.classList?.contains('csp-inline-action-footer') ? markdown.nextElementSibling : null);
-        if (existing) return existing;
-
-        const footer = document.createElement('div');
-        footer.className = 'csp-inline-action-footer';
-        footer.setAttribute('data-csp-inline-footer', 'true');
-
-        const leftSlot = document.createElement('div');
-        leftSlot.className = 'flex items-center space-x-3';
-        footer.appendChild(leftSlot);
-
-        markdown.insertAdjacentElement('afterend', footer);
-        return footer;
-    }
 
     function getButtonTargetFooter(bubble, markdown) {
         if (!isLikelyAssistantMarkdown(markdown) || isUserBubble(bubble) || isUserBubble(markdown)) return null;
-        return getFooter(bubble) || ensureCspInlineFooter(markdown);
+        // 버튼 대상은 getAssistantBubbles가 footer(메시지 옵션 버튼)를 이미 확인한 메시지뿐이라 footer를 새로 만들 일이 없다.
+        return getFooter(bubble);
     }
 
     function isUserMarkdown(markdown) {
+        return readCspMessagePart('userMarkdown', markdown, () => resolveCspIsUserMarkdown(markdown));
+    }
+
+    function resolveCspIsUserMarkdown(markdown) {
         if (!markdown) return false;
         if (markdown.closest?.('.bg-surface_chat_secondary')) return true;
         if (markdown.classList?.contains('css-cbn3z5')) return true;
@@ -7764,14 +5844,16 @@ director.lightingIntent:
     }
 
     function findNovelUserRow(node) {
-        const closest = closestByClassSet(node, 'flex-row', 'gap-4', 'w-full', 'items-end', 'justify-between', 'border-y')
-            || closestByClassSet(node, 'flex-row', 'items-end', 'justify-between', 'border-y');
+        return readCspMessagePart('novelUserRow', node, () => resolveCspFindNovelUserRow(node));
+    }
+
+    function resolveCspFindNovelUserRow(node) {
+        // 6개 클래스 조건은 4개 클래스 조건에 포함되고 호출부는 참/거짓만 보므로 4개 기준으로 한 번만 찾는다.
+        const closest = closestByClassSet(node, 'flex-row', 'items-end', 'justify-between', 'border-y');
         if (closest) return closest;
 
         const el = getMutationElement(node);
-        const rows = Array.from(el?.querySelectorAll?.('div') || []);
-        return rows.find(row => classSetHas(row, 'flex-row', 'gap-4', 'w-full', 'items-end', 'justify-between', 'border-y')
-            || classSetHas(row, 'flex-row', 'items-end', 'justify-between', 'border-y')) || null;
+        return el?.querySelector?.('div.flex-row.items-end.justify-between.border-y') || null;
     }
 
     function getMessageSideRole(node) {
@@ -7830,6 +5912,10 @@ director.lightingIntent:
     }
 
     function isLikelyAssistantMarkdown(markdown) {
+        return readCspMessagePart('likelyAssistant', markdown, () => resolveCspIsLikelyAssistantMarkdown(markdown));
+    }
+
+    function resolveCspIsLikelyAssistantMarkdown(markdown) {
         if (!isMainMarkdown(markdown)) return false;
         if (isUserMarkdown(markdown)) return false;
         const group = getMessageGroupContainer(markdown);
@@ -7849,21 +5935,18 @@ director.lightingIntent:
     }
 
     function cleanupNonAssistantMessageButtons(scope = document) {
-        queryAllIncludingRoot(scope, '.csp-inline-action-footer').forEach(footer => {
-            const markdown = findPreviousMarkdown(footer)
-                || footer.parentElement?.querySelector?.(':scope > .wrtn-markdown, .wrtn-markdown')
-                || null;
-            if (!markdown || !isLikelyAssistantMarkdown(markdown)) footer.remove();
-        });
-
         queryAllIncludingRoot(scope, '.csp-message-generate-btn, .csp-message-speed-btn, .csp-message-comic-btn').forEach(btn => {
             const group = getMessageGroupContainer(btn);
-            const markdown = group ? getDirectMarkdown(group) : (btn.closest('.wrtn-markdown') || findPreviousMarkdown(btn.closest('.csp-inline-action-footer')));
+            const markdown = group ? getDirectMarkdown(group) : btn.closest('.wrtn-markdown');
             if (!markdown || !isLikelyAssistantMarkdown(markdown) || (group && !isAssistantMessageGroup(group))) btn.remove();
         });
     }
 
     function isUserBubble(bubble) {
+        return readCspMessagePart('userBubble', bubble, () => resolveCspIsUserBubble(bubble));
+    }
+
+    function resolveCspIsUserBubble(bubble) {
         if (!bubble) return false;
         if (isUserMarkdown(bubble)) return true;
         const group = (bubble.matches?.('[data-message-group-id]') ? bubble : null) || getMessageGroupContainer(bubble);
@@ -7887,16 +5970,18 @@ director.lightingIntent:
         });
 
         // message-group을 아직 못 받은 순간을 위한 보조 후보. 추천답변/입력창/유저 말풍선은 위 필터에서 제거한다.
-        queryAllIncludingRoot(root, 'div.wrtn-markdown')
-            .filter(isMainMarkdown)
-            .filter(markdown => String(markdown.textContent || '').trim().length >= 5)
-            .forEach(markdown => {
-                if (!isLikelyAssistantMarkdown(markdown)) return;
-                const group = getMessageGroupContainer(markdown);
-                const candidate = group || markdown;
-                if (isUserBubble(candidate) || isSuggestionNode(candidate) || isComposerNode(candidate) || isChatListNode(candidate)) return;
-                set.add(candidate);
-            });
+        // v5.3.0: 그룹이 이미 판정된 markdown(첫 루프에서 수집됐거나 assistant가 아닌 그룹)은 textContent 직렬화 전에 건너뛴다.
+        // scope 밖의 그룹이어도 isAssistantMessageGroup으로 직접 판정하므로 결과는 기존과 같다.
+        queryAllIncludingRoot(root, 'div.wrtn-markdown').forEach(markdown => {
+            const group = getMessageGroupContainer(markdown);
+            if (group && (set.has(group) || !isAssistantMessageGroup(group))) return;
+            if (!isMainMarkdown(markdown)) return;
+            if (String(markdown.textContent || '').trim().length < 5) return;
+            if (!isLikelyAssistantMarkdown(markdown)) return;
+            const candidate = group || markdown;
+            if (isUserBubble(candidate) || isSuggestionNode(candidate) || isComposerNode(candidate) || isChatListNode(candidate)) return;
+            set.add(candidate);
+        });
 
         return Array.from(set).sort(compareDocumentOrder);
     }
@@ -7935,7 +6020,8 @@ director.lightingIntent:
         if (!markdown) return [];
 
         const children = Array.from(markdown.children || []).filter(el => {
-            if (!el || el.classList?.contains('csp-generated-scene-image')) return false;
+            // 삽화 기록 행(‹ 1 / 2 ›)도 본문 문단이 아니므로 빼야 문단 번호가 밀리지 않는다.
+            if (!el || el.classList?.contains('csp-generated-scene-image') || el.classList?.contains('csp-image-history-row')) return false;
             if (el.matches?.('pre, .wrtn-codeblock, .not-wrtn-markdown')) return false;
             if (el.matches?.('p, blockquote, ul, ol, table')) return true;
             if (el.tagName === 'DIV') {
@@ -8143,7 +6229,7 @@ director.lightingIntent:
         const fallbackCurrentTurn = {
             id: '',
             role: 'assistant',
-            content: String(markdown || ''),
+            content: targetText,
             createdAt: ''
         };
 
@@ -8254,14 +6340,14 @@ ${JSON.stringify(bundle.worldProfile, null, 2)}`);
         return list.slice(0, maxItems).map(item => normalizeCspProvenanceValue(item, '', 'inferred', maxLength)).filter(item => item.value);
     }
 
-    function normalizeResolvedVisualContext(rawPlan = {}, bundle = null, room = null) {
+    function normalizeResolvedVisualContext(rawPlan = {}, bundle = null, room = null, model = getGlobalSettings().naiModel) {
         const source = rawPlan?.visualContext && typeof rawPlan.visualContext === 'object' ? rawPlan.visualContext : {};
         const state = bundle?.currentState || {};
         const world = bundle?.worldProfile || {};
         const fallbackWorld = [world?.summary, world?.eraTech, world?.regionCulture].filter(Boolean).join(' · ');
         const characterStates = [];
         const rawChars = Array.isArray(source.characterStates) ? source.characterStates : [];
-        rawChars.slice(0, getNaiModelCapability(getGlobalSettings().naiModel).maxCharacters + 1).forEach(item => {
+        rawChars.slice(0, getNaiModelCapability(model).maxCharacters + 1).forEach(item => {
             if (!item || typeof item !== 'object') return;
             let characterId = String(item.characterId || item.slotId || '').trim();
             if (!characterId && item.name && room) {
@@ -8377,13 +6463,15 @@ ${JSON.stringify(bundle.worldProfile, null, 2)}`);
         if (!archiveId) return null;
         try {
             if (promptArchiveMemoryCache.has(archiveId)) {
-                return promptArchiveMemoryCache.get(archiveId);
+                const cached = promptArchiveMemoryCache.get(archiveId);
+                rememberPromptArchive(archiveId, cached);
+                return cached;
             }
         } catch (_) {}
         try {
             const archive = await getStoredMeta(archiveId);
             if (archive) {
-                try { promptArchiveMemoryCache.set(archiveId, archive); } catch (_) {}
+                try { rememberPromptArchive(archiveId, archive); } catch (_) {}
             }
             return archive;
         } catch (err) {
@@ -8427,7 +6515,7 @@ ${JSON.stringify(bundle.worldProfile, null, 2)}`);
             .filter(char => char.prompt || char.uc || hasUsableReference(char));
     }
 
-    function buildPromptStateFromSnapshot(source = {}, room = null) {
+    function buildPromptStateFromSnapshot(source = {}) {
         if (source.plan?.outputKind === 'comic' || source.naiSettings?.outputKind === 'comic') return cspComicSnapshot(source);
         const charPrompts = normalizeSnapshotCharPrompts(source.charPrompts || []);
         const mergedCharacterPrompt = buildCommaPrompt(charPrompts.map(char => stripSubjectCountTags(char.prompt || '')));
@@ -8464,7 +6552,7 @@ ${JSON.stringify(bundle.worldProfile, null, 2)}`);
         const source = await getRecordPromptSource(record);
         const hasSnapshot = hasGeneratedPromptSnapshot(source);
         const promptState = hasSnapshot
-            ? buildPromptStateFromSnapshot(source, room)
+            ? buildPromptStateFromSnapshot(source)
             : buildStoredRecordPromptState(source, room || getRoomSettings());
         // 기존 리롤/정보/설정 호출부 호환을 위해 promptState 값을 top-level에도 미러링한다.
         // 새로 만드는 조회 경로는 가능하면 promptSource.promptState.*를 기준으로 읽는다.
@@ -8510,8 +6598,9 @@ ${JSON.stringify(bundle.worldProfile, null, 2)}`);
     function insertSceneImageIntoMarkdown(markdown, imageUrl, paragraphIndex, options = {}) {
         if (!markdown) return { ok: false, reason: 'markdown-not-found' };
 
-        const blocks = getInsertableContentBlocks(markdown);
+        // 이전 삽화/기록 행을 먼저 지운 뒤 문단을 세야 getParagraphs()가 준 번호와 같은 기준이 된다.
         removeSceneImage(markdown);
+        const blocks = getInsertableContentBlocks(markdown);
 
         let index = 0;
         let target = null;
@@ -8554,34 +6643,21 @@ ${JSON.stringify(bundle.worldProfile, null, 2)}`);
         return { ok: true, index: Number(paragraphIndex) || 0, target: markdown, box, historyRow, fallback: true };
     }
 
-    function openImageLightbox(src, title = 'Scene Painter 이미지') {
-        return openV35Viewer({ src, title });
-    }
-    function getRoomGalleryEntries(limit = 60) {
-        const records = getSceneRecords();
-        const entries = Object.entries(records || {})
-            .map(([messageKey, record]) => {
-                const normalized = normalizeSceneRecordHistory(record, messageKey);
-                const history = Array.isArray(normalized?.history) ? normalized.history : [];
-                if (!history.length) return null;
-                return {
-                    messageKey,
-                    record: normalized,
-                    historyCount: history.length,
-                    currentIndex: clampHistoryIndex(normalized),
-                    createdAt: Number(normalized.createdAt || history[history.length - 1]?.createdAt || 0)
-                };
-            })
-            .filter(Boolean)
-            .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-
-        return entries.slice(0, limit);
-    }
-
     function getRoomGalleryStats() {
-        const entries = getRoomGalleryEntries(9999);
-        const imageCount = entries.reduce((sum, item) => sum + item.historyCount, 0);
-        return { sceneCount: entries.length, imageCount };
+        // v5.3.0: 배지 숫자만 필요하므로 기록을 정규화·정렬하지 않고, normalizeSceneRecordHistory와 같은 기준으로 개수만 센다.
+        let sceneCount = 0;
+        let imageCount = 0;
+        Object.values(getSceneRecords() || {}).forEach(record => {
+            if (!record || typeof record !== 'object') return;
+            let count = Array.isArray(record.history)
+                ? record.history.filter(item => item && (item.imageId || item.imageUrl)).length
+                : 0;
+            if (!count && (record.imageId || record.imageUrl)) count = 1;
+            if (!count) return;
+            sceneCount++;
+            imageCount += Math.min(count, CSP_MAX_IMAGE_HISTORY);
+        });
+        return { sceneCount, imageCount };
     }
 
     function updateGalleryRowCountNow() {
@@ -8590,8 +6666,11 @@ ${JSON.stringify(bundle.worldProfile, null, 2)}`);
         const badge = row.querySelector('.csp-gallery-count-badge');
         if (!badge) return;
         const stats = getRoomGalleryStats();
-        badge.textContent = String(stats.imageCount || 0);
-        badge.title = `현재 방 삽화 ${stats.sceneCount}개 / 이미지 기록 ${stats.imageCount}장`;
+        const text = String(stats.imageCount || 0);
+        const title = `현재 방 삽화 ${stats.sceneCount}개 / 이미지 기록 ${stats.imageCount}장`;
+        // 값이 그대로면 다시 쓰지 않는다(메뉴 재주입마다 불필요한 DOM 변경을 만들지 않도록).
+        if (badge.textContent !== text) badge.textContent = text;
+        if (badge.title !== title) badge.title = title;
     }
 
     function updateGalleryRowCount() {
@@ -8613,65 +6692,10 @@ ${JSON.stringify(bundle.worldProfile, null, 2)}`);
         }
     }
 
-    async function deleteGalleryHistoryImage(messageKey, index) {
-        const records = getSceneRecords();
-        const record = normalizeSceneRecordHistory(records[messageKey], messageKey);
-        if (!record || !Array.isArray(record.history) || !record.history.length) {
-            await clearSceneRecordForMessage(messageKey);
-            return { removedAll: true, remaining: 0 };
-        }
-
-        const deleteIndex = Math.max(0, Math.min(Math.trunc(Number(index) || 0), record.history.length - 1));
-        const previousCurrent = clampHistoryIndex(record);
-        const [removed] = record.history.splice(deleteIndex, 1);
-
-        if (removed?.imageId) {
-            try {
-                await deleteStoredImage(removed.imageId);
-            } catch (err) {
-                console.warn('[Crack Scene Painter] gallery history image delete failed:', err);
-            }
-        }
-        if (removed?.promptArchiveId) {
-            await deletePromptArchiveById(removed.promptArchiveId);
-        }
-
-        if (!record.history.length) {
-            await deleteRecordPromptArchives(record);
-            delete records[messageKey];
-            saveSceneRecords(records);
-            document
-                .querySelectorAll(`.csp-generated-scene-image[data-message-key="${CSS.escape(messageKey)}"], .csp-image-history-row[data-message-key="${CSS.escape(messageKey)}"]`)
-                .forEach(el => el.remove());
-            markSceneButtons(messageKey, false);
-            return { removedAll: true, remaining: 0 };
-        }
-
-        if (deleteIndex < previousCurrent) {
-            record.currentIndex = previousCurrent - 1;
-        } else if (deleteIndex === previousCurrent) {
-            record.currentIndex = Math.min(deleteIndex, record.history.length - 1);
-        } else {
-            record.currentIndex = previousCurrent;
-        }
-
-        syncCurrentImageFieldsFromHistory(record);
-        records[messageKey] = record;
-        saveSceneRecords(records);
-
-        const targetBox = document.querySelector(`.csp-generated-scene-image[data-message-key="${CSS.escape(messageKey)}"]`);
-        const img = targetBox?.querySelector('img');
-        const src = await getRecordImageSrc(record);
-        if (img && src) img.src = src;
-        refreshImageHistoryControls(messageKey, targetBox, record);
-        markSceneButtons(messageKey, true);
-
-        return { removedAll: false, remaining: record.history.length, currentIndex: clampHistoryIndex(record) };
+    function deleteGalleryHistoryImage(messageKey, index) {
+        return deleteSceneHistoryImage(messageKey, Number(index) || 0);
     }
 
-    function openGalleryModal() {
-        return openV35Gallery();
-    }
     function extractJsonLoose(text) {
         const raw = String(text || '').trim()
             .replace(/^```json\s*/i, '')
@@ -9338,7 +7362,7 @@ ${getScenePlanV2OutputContract(null)}`;
         const globalContext = normalizeGlobalSceneContext(contextPlan, fallbackGlobalContext);
         const globalContextPrompt = isV3 ? '' : buildGlobalContextPromptTags(globalContext);
         const contextAudit = isV3 ? normalizeCspContextAudit(rawPlan, visualBundle) : { targetMode: visualBundle?.targetMode || 'unmatched', targetMessageId: visualBundle?.targetMessageId || '', usedRefs: [] };
-        const resolvedVisualContext = isV3 ? normalizeResolvedVisualContext(rawPlan, visualBundle, room) : null;
+        const resolvedVisualContext = isV3 ? normalizeResolvedVisualContext(rawPlan, visualBundle, room, model) : null;
         const captionForbiddenNames = getV5CaptionForbiddenNames(room);
         const captionLimits = getV5CaptionLimits(model);
         const director = normalizeSceneDirectorBrief(rawPlan);
@@ -9361,7 +7385,8 @@ ${getScenePlanV2OutputContract(null)}`;
         let compositionPrompt = isV2
             ? stripForbiddenSceneTags(compositionV2.tags || '')
             : limitCommaTags(sanitizeScenePrompt(rawPlan?.composition || ''), 3);
-        let scenePrompt = isV2 && isV5
+        // 같은 조립식을 strip 전(빈 값 검사용)과 strip 후에 한 번씩 쓴다.
+        const assembleScenePrompt = () => (isV2 && isV5
             ? cleanScenePromptTags(buildCommaPrompt([
                 compositionPrompt,
                 interactionPrompt,
@@ -9369,10 +7394,11 @@ ${getScenePlanV2OutputContract(null)}`;
                 globalContextPrompt,
                 buildV5CaptionBlock([compositionV2.caption, renderV2.caption])
             ]))
-            : cleanScenePromptTags(buildCommaPrompt([compositionPrompt, interactionPrompt, baseScenePrompt, globalContextPrompt]));
+            : cleanScenePromptTags(buildCommaPrompt([compositionPrompt, interactionPrompt, baseScenePrompt, globalContextPrompt])));
+        let scenePrompt = assembleScenePrompt();
 
         if (!scenePrompt) {
-            scenePrompt = sanitizeScenePrompt(buildMinimalScenePromptFallback(getSceneWindowText(markdown, idx, 1) || cleanMarkdownText(markdown), 1));
+            scenePrompt = sanitizeScenePrompt(buildMinimalScenePromptFallback(getSceneWindowText(markdown, idx, 1) || cleanMarkdownText(markdown)));
             baseScenePrompt = scenePrompt;
             interactionPrompt = '';
             compositionPrompt = '';
@@ -9381,27 +7407,21 @@ ${getScenePlanV2OutputContract(null)}`;
         baseScenePrompt = isV2 ? stripForbiddenSceneTags(baseScenePrompt || '') : limitCommaTags(stripForbiddenSceneTags(baseScenePrompt || ''), 4);
         interactionPrompt = isV2 ? stripForbiddenSceneTags(interactionPrompt || '') : limitCommaTags(stripForbiddenSceneTags(interactionPrompt || ''), 4);
         compositionPrompt = isV2 ? stripForbiddenSceneTags(compositionPrompt || '') : limitCommaTags(stripForbiddenSceneTags(compositionPrompt || ''), 3);
-        scenePrompt = isV2 && isV5
-            ? cleanScenePromptTags(buildCommaPrompt([
-                compositionPrompt,
-                interactionPrompt,
-                baseScenePrompt,
-                globalContextPrompt,
-                buildV5CaptionBlock([compositionV2.caption, renderV2.caption])
-            ]))
-            : cleanScenePromptTags(buildCommaPrompt([compositionPrompt, interactionPrompt, baseScenePrompt, globalContextPrompt]));
+        scenePrompt = assembleScenePrompt();
 
         const characterDirectives = isV2 ? normalizeScenePlanCharacterDirectives(rawPlan, room, model) : [];
         const visibleCharacters = isV2
             ? characterDirectives.map(item => item.name).filter(Boolean)
-            : normalizeVisibleCharacters(rawPlan, room, markdown, idx);
+            : normalizeVisibleCharacters(rawPlan, room, markdown, idx, model);
         const temporaryOutfitPrompt = sanitizeScenePrompt(
             rawPlan?.temporaryOutfitPrompt || rawPlan?.temporary_outfit_prompt || rawPlan?.outfitPrompt || rawPlan?.sceneOutfitPrompt || rawPlan?.costumePrompt || ''
         );
         const characterPromptAddon = extractCharacterPromptAddonCandidate(rawPlan);
         const pcPromptAddon = extractPcPromptAddonCandidate(rawPlan);
-        const pc = isV2 ? normalizeScenePlanPc(rawPlan, room, model) : normalizeScenePlanPc(rawPlan, room, model);
-        const pcResolvedMode = pc.mode === 'none' ? 'none' : pc.mode;
+        const pc = normalizeScenePlanPc(rawPlan, room, model);
+        const pcResolvedMode = pc.mode;
+        // anchor 문장이 없으면 문단 DOM을 다시 읽으므로 한 번만 계산한다.
+        const visualAnchor = normalizeVisualAnchor(rawPlan, markdown, idx);
         return {
             schemaVersion: isV3 ? 3 : (isV2 ? 2 : 1),
             contextAudit,
@@ -9409,7 +7429,7 @@ ${getScenePlanV2OutputContract(null)}`;
             contextSnapshot: isV3 ? buildCspContextSnapshot(contextAudit, resolvedVisualContext, visualBundle) : null,
             director,
             anchor: {
-                moment: normalizeVisualAnchor(rawPlan, markdown, idx),
+                moment: visualAnchor,
                 evidence: String(rawPlan?.anchor?.evidence || '').replace(/\s+/g, ' ').trim().slice(0, 300)
             },
             pc,
@@ -9418,7 +7438,7 @@ ${getScenePlanV2OutputContract(null)}`;
             renderV2,
             sceneTitle: String(rawPlan.sceneTitle || '장면 삽화'),
             insertAfterParagraph: idx,
-            visualAnchor: normalizeVisualAnchor(rawPlan, markdown, idx),
+            visualAnchor,
             characterCount: Math.max(visibleCharacters.length || 0, 1),
             visibleCharacters,
             charactersInScene: visibleCharacters,
@@ -9688,7 +7708,7 @@ ${getSceneRefineSystemInstruction()}` }]
         return '';
     }
 
-    function sanitizeScenePrompt(prompt) {
+    function filterBannedPromptTags(prompt, banSubjects = false) {
         const bannedExact = new Set([
             'masterpiece', 'best quality', 'amazing quality', 'very aesthetic', 'absurdres',
             'highres', 'ultra detailed', 'incredibly absurdres',
@@ -9700,9 +7720,7 @@ ${getSceneRefineSystemInstruction()}` }]
             'full body viewer', 'viewer body', 'second person body', 'full viewer'
         ]);
 
-        const flattened = flattenPromptValue(prompt);
-
-        const cleaned = normalizeNaiWeightSyntax(flattened)
+        return normalizeNaiWeightSyntax(flattenPromptValue(prompt))
             .split(',')
             .map(tag => tag.trim())
             .filter(Boolean)
@@ -9711,14 +7729,17 @@ ${getSceneRefineSystemInstruction()}` }]
                 const bare = low.replace(/^[0-9]*\.?[0-9]+::/, '').replace(/::$/, '').trim();
                 if (bare === '[object object]' || bare === 'object object') return false;
                 if (bannedExact.has(low) || bannedExact.has(bare)) return false;
-                if (bannedSubjectExact.has(bare)) return false;
+                if (banSubjects && bannedSubjectExact.has(bare)) return false;
                 if (bare.startsWith('artist:')) return false;
                 if (/^year\s*\d{4}$/.test(bare)) return false;
                 if (bare === 'quality' || /^(?:low|normal|high|best|amazing)\s+quality$/.test(bare)) return false;
                 return true;
             })
             .join(', ');
-        return cleanScenePromptTags(cleaned);
+    }
+
+    function sanitizeScenePrompt(prompt) {
+        return cleanScenePromptTags(filterBannedPromptTags(prompt, true));
     }
 
 
@@ -9834,7 +7855,7 @@ ${getSceneRefineSystemInstruction()}` }]
         return '';
     }
 
-    function buildMinimalScenePromptFallback(text, characterCount) {
+    function buildMinimalScenePromptFallback(text) {
         const source = String(text || '').toLowerCase();
         const tags = [];
 
@@ -9946,29 +7967,7 @@ ${JSON.stringify(safePlan, null, 2)}
     }
 
     function sanitizeCharacterSlotAddonPrompt(prompt) {
-        const bannedExact = new Set([
-            'masterpiece', 'best quality', 'amazing quality', 'very aesthetic', 'absurdres',
-            'highres', 'ultra detailed', 'incredibly absurdres',
-            'boyfriend and girlfriend'
-        ]);
-
-        return dedupeCommaTags(
-            normalizeNaiWeightSyntax(flattenPromptValue(prompt))
-                .split(',')
-                .map(tag => tag.trim())
-                .filter(Boolean)
-                .filter(tag => {
-                    const low = tag.toLowerCase();
-                    const bare = low.replace(/^[0-9]*\.?[0-9]+::/, '').replace(/::$/, '').trim();
-                    if (bare === '[object object]' || bare === 'object object') return false;
-                    if (bannedExact.has(low) || bannedExact.has(bare)) return false;
-                    if (bare.startsWith('artist:')) return false;
-                    if (/^year\s*\d{4}$/.test(bare)) return false;
-                    if (bare === 'quality' || /^(?:low|normal|high|best|amazing)\s+quality$/.test(bare)) return false;
-                    return true;
-                })
-                .join(', ')
-        );
+        return dedupeCommaTags(filterBannedPromptTags(prompt, false));
     }
 
     function extractCharacterPromptAddonCandidate(plan) {
@@ -10047,10 +8046,10 @@ ${JSON.stringify(safePlan, null, 2)}
         return parts.join(', ');
     }
 
-    function selectCharactersForPlan(room, plan) {
+    function selectCharactersForPlan(room, plan, model = getGlobalSettings().naiModel, reservedSlots = 0) {
         const characters = (room.characters || []).filter(hasCharacterSlotContent);
         if (!characters.length) return [];
-        const capability = getNaiModelCapability(getGlobalSettings().naiModel);
+        const capability = getNaiModelCapability(model);
         let selected = [];
 
         if (Array.isArray(plan?.characters) && plan.characters.length) {
@@ -10070,7 +8069,8 @@ ${JSON.stringify(safePlan, null, 2)}
             if (characters.length === 1) selected = characters.slice(0, 1);
             else selected = [];
         }
-        return selected.slice(0, capability.maxCharacters);
+        // PC처럼 뒤에 따로 붙는 슬롯(reservedSlots)도 char_captions 한 칸을 쓰므로 모델 최대 슬롯 안에 함께 맞춘다.
+        return selected.slice(0, Math.max(0, capability.maxCharacters - reservedSlots));
     }
 
     function removePromptTags(basePrompt, removePrompt) {
@@ -10097,15 +8097,26 @@ ${JSON.stringify(safePlan, null, 2)}
         return buildCommaPrompt([appearance, defaultOutfit]);
     }
 
-    function buildCharacterPromptState(room, plan) {
-        const selectedCharacters = selectCharactersForPlan(room, plan);
+    function buildCharacterPromptState(room, plan, global = getGlobalSettings()) {
         const pcUsage = resolvePcUsageForPlan(room, plan);
         const useSlotAddons = plan?.sceneSummarySelection?.slotAddons !== false;
-        const global = getGlobalSettings();
         const model = global.naiModel;
         const isV5 = isNaiV5Model(model);
         const v2Pc = plan?.pc && typeof plan.pc === 'object' ? normalizeScenePlanPc(plan, room, model) : null;
 
+        // PC 슬롯 프롬프트·addon은 여기서 한 번만 만들고 아래 charPrompts에서 그대로 쓴다.
+        let pcSource = null;
+        if (pcUsage.includePc) {
+            const pcTags = buildPcCharacterPromptForPlan(pcUsage.pcCharacter);
+            const pcSlotAddon = useSlotAddons ? sanitizeCharacterSlotAddonPrompt(v2Pc?.tags || plan?.pcPromptAddon || '') : '';
+            const pcEffectivePrompt = buildCommaPrompt([pcTags, pcSlotAddon, isV5 ? v2Pc?.caption || '' : '']);
+            if (pcEffectivePrompt) {
+                pcSource = { type: 'pc', source: pcUsage.pcCharacter, mode: pcUsage.mode, directive: v2Pc, basePrompt: pcTags, slotAddon: pcSlotAddon };
+            }
+        }
+
+        // PC 슬롯을 실제로 붙일 때는 한 칸을 예약해 둔다(selectCharactersForPlan의 reservedSlots).
+        const selectedCharacters = selectCharactersForPlan(room, plan, model, pcSource ? 1 : 0);
         const selectionForCount = selectedCharacters.map(char => ({ tags: char.tags }));
         const charSources = selectedCharacters.map(char => ({
             type: 'character',
@@ -10114,17 +8125,12 @@ ${JSON.stringify(safePlan, null, 2)}
             directive: getPlanDirectiveForCharacter(plan, room, char)
         }));
 
-        if (pcUsage.includePc) {
-            const pcTags = buildPcCharacterPromptForPlan(pcUsage.pcCharacter, pcUsage.mode);
-            const pcBaseCountTags = buildCommaPrompt([getCharacterAppearanceTags(pcUsage.pcCharacter), getCharacterOutfitTags(pcUsage.pcCharacter)]);
-            const pcSlotAddon = useSlotAddons ? sanitizeCharacterSlotAddonPrompt(v2Pc?.tags || plan?.pcPromptAddon || '') : '';
-            const pcEffectivePrompt = buildCommaPrompt([pcTags, pcSlotAddon, isV5 ? v2Pc?.caption || '' : '']);
-            if (pcEffectivePrompt) {
-                if (pcBaseCountTags) {
-                    selectionForCount.push({ tags: pcBaseCountTags });
-                }
-                charSources.push({ type: 'pc', source: pcUsage.pcCharacter, mode: pcUsage.mode, directive: v2Pc });
+        if (pcSource) {
+            // buildPcCharacterPromptForPlan은 외형+기본 의상 태그라 인원수 계산용 태그와 같다.
+            if (pcSource.basePrompt) {
+                selectionForCount.push({ tags: pcSource.basePrompt });
             }
+            charSources.push(pcSource);
         }
 
         const subjectCount = buildSubjectCountTag(selectionForCount);
@@ -10133,13 +8139,13 @@ ${JSON.stringify(safePlan, null, 2)}
         const charPrompts = charSources.map((entry, index) => {
             const char = entry.source;
             const basePrompt = entry.type === 'pc'
-                ? stripSubjectCountTags(buildPcCharacterPromptForPlan(char, entry.mode))
+                ? stripSubjectCountTags(entry.basePrompt)
                 : stripSubjectCountTags(buildCharacterBasePromptWithOutfit(char, entry.directive, plan));
-            const slotAddon = useSlotAddons
-                ? (entry.type === 'pc'
-                    ? sanitizeCharacterSlotAddonPrompt(entry.directive?.tags || plan?.pcPromptAddon || '')
-                    : sanitizeCharacterSlotAddonPrompt(entry.directive?.tags || (!plan?.characters?.length && index === 0 ? plan?.characterPromptAddon || '' : '')))
-                : '';
+            const slotAddon = entry.type === 'pc'
+                ? entry.slotAddon
+                : (useSlotAddons
+                    ? sanitizeCharacterSlotAddonPrompt(entry.directive?.tags || (!plan?.characters?.length && index === 0 ? plan?.characterPromptAddon || '' : ''))
+                    : '');
             const prompt = normalizeNaiWeightSyntax(normalizePrompt(buildCommaPrompt([
                 basePrompt,
                 slotAddon,
@@ -10175,8 +8181,8 @@ ${JSON.stringify(safePlan, null, 2)}
         }).join('\n\n');
     }
 
-    function inferVisibleCharactersFromText(room, textValue) {
-        return findCharacterNamesInText(room, textValue).slice(0, getNaiModelCapability(getGlobalSettings().naiModel).maxCharacters);
+    function inferVisibleCharactersFromText(room, textValue, model = getGlobalSettings().naiModel) {
+        return findCharacterNamesInText(room, textValue).slice(0, getNaiModelCapability(model).maxCharacters);
     }
 
     function getCanonicalCharacterName(room, nameValue) {
@@ -10195,13 +8201,11 @@ ${JSON.stringify(safePlan, null, 2)}
         return aliasMatch?.name ? String(aliasMatch.name).trim() : '';
     }
 
-    function normalizeVisibleCharacters(plan, room, markdown, insertAfterParagraph) {
-        const fromPlan = Array.isArray(plan.visibleCharacters) ? plan.visibleCharacters : (
-            Array.isArray(plan.charactersInScene) ? plan.charactersInScene : []
-        );
+    function normalizeVisibleCharacters(plan, room, markdown, insertAfterParagraph, model = getGlobalSettings().naiModel) {
+        const fromPlan = getPlanVisibleNames(plan);
 
         const sceneWindowText = getSceneWindowText(markdown, insertAfterParagraph, 1);
-        const namesInSceneWindow = inferVisibleCharactersFromText(room, sceneWindowText);
+        const namesInSceneWindow = inferVisibleCharactersFromText(room, sceneWindowText, model);
         const canonicalFromPlan = fromPlan
             .map(name => getCanonicalCharacterName(room, name))
             .filter(Boolean);
@@ -10230,7 +8234,7 @@ ${JSON.stringify(safePlan, null, 2)}
             visible = [String(roomCharacters[0].name).trim()];
         }
 
-        return Array.from(new Set(visible)).slice(0, getNaiModelCapability(getGlobalSettings().naiModel).maxCharacters);
+        return Array.from(new Set(visible)).slice(0, getNaiModelCapability(model).maxCharacters);
     }
 
     async function generateScenePlanWithGemini(targetBubble, markdown, options = {}) {
@@ -10278,7 +8282,7 @@ ${JSON.stringify(safePlan, null, 2)}
         }
 
         if (!normalized.scenePrompt) {
-            const fallback = sanitizeScenePrompt(buildMinimalScenePromptFallback(cleanMarkdownText(markdown), 1));
+            const fallback = sanitizeScenePrompt(buildMinimalScenePromptFallback(cleanMarkdownText(markdown)));
             normalized.baseScenePrompt = fallback;
             normalized.interactionPrompt = '';
             normalized.scenePrompt = fallback;
@@ -10313,7 +8317,7 @@ ${JSON.stringify(safePlan, null, 2)}
         const global = getGlobalSettings();
         const fixedPositive = normalizeNaiWeightSyntax(normalizePrompt(global.basePositive || ''));
         const fixedNegative = normalizeNaiWeightSyntax(normalizePrompt(global.baseNegative || ''));
-        const charState = buildCharacterPromptState(room, plan);
+        const charState = buildCharacterPromptState(room, plan, global);
         const temporaryOutfitPrompt = normalizeNaiWeightSyntax(normalizePrompt(plan?.temporaryOutfitPrompt || ''));
         const globalContextPrompt = buildGlobalContextPromptTags(plan.globalContext);
         const scenePromptSource = plan.scenePrompt || buildCommaPrompt([plan.composition, plan.interactionPrompt, plan.baseScenePrompt, globalContextPrompt]);
@@ -10389,7 +8393,7 @@ ${JSON.stringify(safePlan, null, 2)}
     function buildStoredRecordPromptState(record, room) {
         if(record?.plan?.outputKind === 'comic' && !record.basePrompt) throw new Error('만화의 저장된 전송 프롬프트를 찾지 못했어요. 만화 편집창에서 콘티를 확인하고 다시 조립해줘.');
         if (hasGeneratedPromptSnapshot(record || {})) {
-            return buildPromptStateFromSnapshot(record || {}, room);
+            return buildPromptStateFromSnapshot(record || {});
         }
 
         let promptState = null;
@@ -10806,25 +8810,28 @@ ${JSON.stringify(safePlan, null, 2)}
         const signature = detectBinarySignature(bytes);
 
         if (signature === 'zip') {
+            let unzipped = null;
             try {
-                const unzipped = window.fflate.unzipSync(bytes);
-                const firstImageEntry = Object.entries(unzipped).find(([name]) => /\.(png|jpg|jpeg|webp)$/i.test(name));
-                if (firstImageEntry) {
-                    const [, fileBytes] = firstImageEntry;
-                    const lower = firstImageEntry[0].toLowerCase();
-                    const mime = lower.endsWith('.webp') ? 'image/webp' : lower.endsWith('.jpg') || lower.endsWith('.jpeg') ? 'image/jpeg' : 'image/png';
-                    extractedBlob = new Blob([fileBytes], { type: mime });
-                } else {
-                    const textEntry = Object.entries(unzipped).find(([name]) => /\.(txt|json|html)$/i.test(name));
-                    if (textEntry) {
-                        const [, fileBytes] = textEntry;
-                        const message = extractErrorMessageFromBytes(fileBytes) || 'NAI가 이미지 파일을 돌려주지 않았어요.';
-                        throw new Error(message);
-                    }
-                }
+                unzipped = window.fflate.unzipSync(bytes);
             } catch (zipErr) {
-                console.warn('[Crack Scene Painter] unzip failed, trying raw image fallback', zipErr);
-                if (!extractedBlob && zipErr instanceof Error && zipErr.message) throw zipErr;
+                // 압축 해제 실패 시 다른 형식으로 다시 시도하지 않는다. 메시지가 있으면 그대로, 없으면 아래 공통 오류로 끝난다.
+                console.warn('[Crack Scene Painter] NAI zip unzip failed:', zipErr);
+                if (zipErr instanceof Error && zipErr.message) throw zipErr;
+            }
+            const entries = Object.entries(unzipped || {});
+            const firstImageEntry = entries.find(([name]) => /\.(png|jpg|jpeg|webp)$/i.test(name));
+            if (firstImageEntry) {
+                const [, fileBytes] = firstImageEntry;
+                const lower = firstImageEntry[0].toLowerCase();
+                const mime = lower.endsWith('.webp') ? 'image/webp' : lower.endsWith('.jpg') || lower.endsWith('.jpeg') ? 'image/jpeg' : 'image/png';
+                extractedBlob = new Blob([fileBytes], { type: mime });
+            } else {
+                const textEntry = entries.find(([name]) => /\.(txt|json|html)$/i.test(name));
+                if (textEntry) {
+                    const [, fileBytes] = textEntry;
+                    const message = extractErrorMessageFromBytes(fileBytes) || 'NAI가 이미지 파일을 돌려주지 않았어요.';
+                    throw new Error(message);
+                }
             }
         } else if (signature === 'png') {
             extractedBlob = new Blob([bytes], { type: 'image/png' });
@@ -10885,11 +8892,12 @@ ${JSON.stringify(safePlan, null, 2)}
             createdAt: Date.now()
         };
 
-        const currentHistoryItem = await appendSceneHistoryImage(messageKey, record, imageUrl, roomId);
+        await appendSceneHistoryImage(messageKey, record, imageUrl, roomId);
         const nextRecords = getSceneRecords(roomId);
         const replacedRecord = nextRecords[messageKey];
         nextRecords[messageKey] = record;
         saveSceneRecords(nextRecords, { roomId });
+        // 이 메시지에 이미 기록이 있었으면 새 기록으로 교체되므로, 원래 방 기준으로 이전 기록의 이미지·프롬프트를 정리한다.
         if (replacedRecord && replacedRecord !== record) cleanupPrunedSceneRecords({ [messageKey]: replacedRecord }, {}, roomId);
         if (!isCurrentCspWorkTarget(workTarget) || !result.box?.isConnected) {
             showToast('🖼️ 생성한 삽화를 원래 방의 갤러리에 저장했어요.');
@@ -10911,9 +8919,7 @@ ${JSON.stringify(safePlan, null, 2)}
             event.stopPropagation();
             if (event.stopImmediatePropagation) event.stopImmediatePropagation();
             const group = getMessageGroupContainer(messageButton);
-            const markdown = group
-                ? getDirectMarkdown(group)
-                : findPreviousMarkdown(messageButton.closest('.csp-inline-action-footer'));
+            const markdown = group ? getDirectMarkdown(group) : null;
             if (!markdown || !isLikelyAssistantMarkdown(markdown)) return;
             const bubble = group || markdown;
             if (messageButton.classList.contains('csp-message-comic-btn')) {
@@ -10942,7 +8948,7 @@ ${JSON.stringify(safePlan, null, 2)}
             const box = clickedImage.closest('.csp-generated-scene-image');
             const key = box?.getAttribute('data-message-key') || '';
             const record = key ? getSceneRecords()[key] : null;
-            openImageLightbox(clickedImage.src, record?.plan?.sceneTitle || clickedImage.alt || 'scene-image');
+            openV35Viewer({ src: clickedImage.src, title: record?.plan?.sceneTitle || clickedImage.alt || 'scene-image' });
             return;
         }
 
@@ -10990,12 +8996,7 @@ ${JSON.stringify(safePlan, null, 2)}
                 return;
             }
             try {
-                const a = document.createElement('a');
-                a.href = src;
-                a.download = `${sanitizeFileName(record?.plan?.sceneTitle || 'scene-image')}.png`;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
+                v35다운로드(src, record?.plan?.sceneTitle || 'scene-image');
                 showToast('⬇️ 다운로드를 시작했어요.');
             } catch (err) {
                 console.error('[Crack Scene Painter] download failed:', err);
@@ -11016,10 +9017,6 @@ ${JSON.stringify(safePlan, null, 2)}
         }
     }
 
-
-    function showScenePlanModal(args) {
-        return openV35Studio(args);
-    }
     let cspImageActionsBound = false;
 
     function bindImageActionDelegates() {
@@ -11060,7 +9057,7 @@ ${JSON.stringify(safePlan, null, 2)}
                 visibleCharacters: plan?.visibleCharacters?.length || 0
             });
             updateTaskHud({ title: '분석 완료', message: 'Gemini 분석이 끝났어. 생성 전에 확인창을 열어줄게.', progress: 100, status: 'success' });
-            showScenePlanModal({ targetBubble: bubble, markdown, plan });
+            openV35Studio({ targetBubble: bubble, markdown, plan });
             showToast('✅ Gemini 분석 완료. 생성 전 확인창을 열었어요.');
             setTimeout(() => { if (currentTaskHud === hud) hideTaskHud(); }, 360);
         } catch (err) {
@@ -11099,6 +9096,13 @@ ${JSON.stringify(safePlan, null, 2)}
 
         if (!isEnabled()) {
             showToast('⏸️ AI 삽화 생성이 OFF 상태예요.');
+            return;
+        }
+
+        // 이미 삽화가 있으면 스튜디오 생성·리롤처럼 기록에 추가하므로, 기록이 꽉 찼으면 분석(API 호출) 전에 멈춘다.
+        const existingRecord = getSceneRecords(workTarget.roomId)[workTarget.messageKey];
+        if (existingRecord && isSceneHistoryFull(existingRecord)) {
+            showToast(`⚠️ 이 삽화 기록이 ${CSP_MAX_IMAGE_HISTORY}장으로 가득 찼어요. 휴지통으로 이미지 하나를 지운 뒤 다시 퀵 생성해줘.`);
             return;
         }
 
@@ -11157,20 +9161,47 @@ ${JSON.stringify(safePlan, null, 2)}
             });
 
             throwIfCspAborted(controller.signal);
-            await insertFinalSceneImage({
-                workTarget,
-                markdown,
-                imageUrl: generatedImageUrl,
-                plan,
-                mode: 'nai',
-                basePrompt: promptState.basePrompt,
-                baseNegative: promptState.baseNegative,
-                finalPrompt: promptState.finalPrompt,
-                finalNegative: promptState.finalNegative,
-                charPrompts,
-                referenceInfo: referenceInfoForRequest,
-                naiSettings
-            });
+            const currentRecord = getSceneRecords(workTarget.roomId)[workTarget.messageKey];
+            if (currentRecord) {
+                // 기존 삽화 기록은 지우지 않고 스튜디오 생성·리롤처럼 히스토리에 추가한다(삽화 위치는 기존 자리 유지).
+                const record = normalizeSceneRecordHistory(currentRecord, workTarget.messageKey);
+                const box = isCurrentCspWorkTarget(workTarget)
+                    ? markdown.querySelector(`.csp-generated-scene-image[data-message-key="${CSS.escape(workTarget.messageKey)}"]`)
+                    : null;
+                await commitGeneratedImageReroll({
+                    roomId: workTarget.roomId,
+                    messageKey: workTarget.messageKey,
+                    record,
+                    imageUrl: generatedImageUrl,
+                    plan,
+                    promptState: { ...promptState, charPrompts, referenceInfo: referenceInfoForRequest },
+                    settings: naiSettings,
+                    box,
+                    mode: 'nai'
+                });
+                if (isCurrentCspWorkTarget(workTarget)) {
+                    if (!box?.isConnected) await reapplySavedScene(markdown, null, null, workTarget.messageKey);
+                    try { if (plan?.outputKind !== 'comic') commitCurrentSceneStateFromPlan(plan); } catch (stateErr) { console.warn('[Crack Scene Painter] Visual Context state commit skipped:', stateErr); }
+                    showToast(`🖼️ 퀵 생성 이미지를 기록에 추가했어요 (${getSceneHistoryCount(record)}/${CSP_MAX_IMAGE_HISTORY})`);
+                } else {
+                    showToast('🖼️ 생성한 삽화를 원래 방의 갤러리에 저장했어요.');
+                }
+            } else {
+                await insertFinalSceneImage({
+                    workTarget,
+                    markdown,
+                    imageUrl: generatedImageUrl,
+                    plan,
+                    mode: 'nai',
+                    basePrompt: promptState.basePrompt,
+                    baseNegative: promptState.baseNegative,
+                    finalPrompt: promptState.finalPrompt,
+                    finalNegative: promptState.finalNegative,
+                    charPrompts,
+                    referenceInfo: referenceInfoForRequest,
+                    naiSettings
+                });
+            }
 
             throwIfCspAborted(controller.signal);
             if (isCurrentCspWorkTarget(workTarget)) markSceneButtons(messageKey, true);
@@ -11340,16 +9371,8 @@ ${JSON.stringify(safePlan, null, 2)}
         insertSceneImageIntoMarkdown(markdown, imageUrl, record.paragraphIndex, {
             mode: record.mode || 'gemini',
             messageKey: key,
-            captionHtml: buildCaption(record.plan || {}, record.paragraphIndex, 'restore', {
-                basePrompt: record.basePrompt || '',
-                baseNegative: record.baseNegative || '',
-                finalPrompt: record.finalPrompt || '',
-                charPrompts: record.charPrompts || [],
-                referenceInfo: supportsNaiPreciseReference(record.naiSettings?.model || getGlobalSettings().naiModel)
-                    ? (record.referenceInfo || getAppliedReferenceSummary(record.charPrompts || [], record.naiSettings?.model || getGlobalSettings().naiModel))
-                    : null,
-                naiSettings: record.naiSettings || null
-            }, key),
+            // buildCaption은 messageKey만 쓰므로 promptInfo(전역 설정 파싱·참조 요약 포함)는 만들지 않는다.
+            captionHtml: buildCaption(record.plan || {}, record.paragraphIndex, 'restore', null, key),
             historyHtml: buildImageHistoryControls(key, record)
         });
         markSceneButtons(key, true);
@@ -11489,6 +9512,38 @@ ${JSON.stringify(safePlan, null, 2)}
         return (Array.isArray(slots) ? slots : []).find(slot => String(slot.name || '').trim() === target) || null;
     }
 
+    // 세계관 & 설정 프리셋: worldProfile + visualLoreEntries만 정규화된 새 객체로 복사한다.
+    // currentState는 장면마다 바뀌는 방별 상태라 프리셋에 넣지 않는다.
+    function cloneWorldPresetData(source = {}) {
+        const normalized = normalizeVisualContextSettings({
+            worldProfile: source?.worldProfile || {},
+            visualLoreEntries: source?.visualLoreEntries || []
+        });
+        return { worldProfile: normalized.worldProfile, visualLoreEntries: normalized.visualLoreEntries };
+    }
+
+    function hasWorldPresetContent(preset = {}) {
+        const world = preset?.worldProfile || {};
+        return ['summary', 'eraTech', 'regionCulture', 'architecture', 'defaultDressCulture', 'visualRules'].some(key => String(world[key] || '').trim())
+            || (Array.isArray(preset?.visualLoreEntries) && preset.visualLoreEntries.length > 0);
+    }
+
+    function buildWorldPresetOptions(presets = [], selectedName = '') {
+        const list = Array.isArray(presets) ? presets : [];
+        if (!list.length) return '<option value="">저장된 프리셋 없음</option>';
+        return list.map(preset => {
+            const name = String(preset.name || '').trim();
+            const summary = String(preset.worldProfile?.summary || '').replace(/\s+/g, ' ').trim();
+            const loreCount = Array.isArray(preset.visualLoreEntries) ? preset.visualLoreEntries.length : 0;
+            const preview = [
+                summary ? summary.slice(0, 16) + (summary.length > 16 ? '…' : '') : '',
+                loreCount ? `시각 설정 ${loreCount}개` : ''
+            ].filter(Boolean).join(' · ');
+            const suffix = preview ? ` (${preview})` : '';
+            return `<option value="${escapeHtml(name)}" ${name === selectedName ? 'selected' : ''}>${escapeHtml(name + suffix)}</option>`;
+        }).join('');
+    }
+
     async function clearRoomSceneRecords() {
         const records = getSceneRecords();
         for (const [messageKey, record] of Object.entries(records || {})) {
@@ -11502,9 +9557,6 @@ ${JSON.stringify(safePlan, null, 2)}
         updateGalleryRowCount();
     }
 
-    function openSettingsModal() {
-        return openV35Settings();
-    }
     function setSwitchVisual(switchBtn, thumb, value) {
         if (!switchBtn) return;
         switchBtn.setAttribute('aria-checked', value ? 'true' : 'false');
@@ -11512,26 +9564,6 @@ ${JSON.stringify(safePlan, null, 2)}
         if (thumb) thumb.setAttribute('data-state', value ? 'checked' : 'unchecked');
     }
 
-    function makeFallbackRow() {
-        const row = document.createElement('div');
-        row.className = 'px-2.5 h-4 box-content py-[18px] csp-toggle-row';
-        row.innerHTML = `
-            <div role="button" tabindex="0" class="w-full flex h-4 items-center justify-between typo-text-base_leading-none_medium space-x-2 [&_svg]:fill-icon_tertiary ring-offset-4 ring-offset-sidebar cursor-pointer">
-                <span class="flex space-x-2 items-center">
-                    <span style="width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;font-size:18px;">🎨</span>
-                    <span class="whitespace-nowrap overflow-hidden text-ellipsis typo-text-sm_leading-none_medium">AI 삽화 생성</span>
-                </span>
-                <span>
-                    <button type="button" role="switch" aria-checked="true" data-state="checked" value="on"
-                        class="peer inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full p-0.5 transition-colors border data-[state=unchecked]:border-bg-input-80 data-[state=unchecked]:bg-bg-input-80 data-[state=checked]:border-primary data-[state=checked]:bg-primary focus-visible:border-focus focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50"
-                        tabindex="-1">
-                        <span data-state="checked" class="pointer-events-none block size-4 rounded-full bg-background shadow-sm ring-0 transition-transform data-[state=checked]:translate-x-[15px] data-[state=unchecked]:translate-x-[-1px]"></span>
-                    </button>
-                </span>
-            </div>
-        `;
-        return row;
-    }
 
     function makeGalleryRow() {
         const row = document.createElement('div');
@@ -11556,12 +9588,12 @@ ${JSON.stringify(safePlan, null, 2)}
             rootButton.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                openGalleryModal();
+                openV35Gallery();
             });
             rootButton.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
-                    openGalleryModal();
+                    openV35Gallery();
                 }
             });
         }
@@ -11570,18 +9602,14 @@ ${JSON.stringify(safePlan, null, 2)}
     }
 
     function createScenePainterRow(originContainer) {
-        let row;
-        if (originContainer) {
-            row = originContainer.cloneNode(true);
-            row.classList.add('csp-toggle-row');
-            const textSpan = row.querySelector('.typo-text-sm_leading-none_medium');
-            if (textSpan) textSpan.textContent = 'AI 삽화 생성';
-            const svg = row.querySelector('svg');
-            if (svg) {
-                svg.outerHTML = `<span style="width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;font-size:18px;">🎨</span>`;
-            }
-        } else {
-            row = makeFallbackRow();
+        // 호출부(injectScenePainterRow)는 원본 행을 찾았을 때만 부르므로 항상 원본 행을 복제해서 만든다.
+        const row = originContainer.cloneNode(true);
+        row.classList.add('csp-toggle-row');
+        const textSpan = row.querySelector('.typo-text-sm_leading-none_medium');
+        if (textSpan) textSpan.textContent = 'AI 삽화 생성';
+        const svg = row.querySelector('svg');
+        if (svg) {
+            svg.outerHTML = `<span style="width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;font-size:18px;">🎨</span>`;
         }
 
         row.id = 'csp-scene-painter-row';
@@ -11611,7 +9639,7 @@ ${JSON.stringify(safePlan, null, 2)}
                     toggleEnabled(!isEnabled());
                     return;
                 }
-                openSettingsModal();
+                openV35Settings();
             });
         }
 
@@ -11640,25 +9668,21 @@ ${JSON.stringify(safePlan, null, 2)}
         return null;
     }
 
+    function isSituationImageRow(row) {
+        if (!row || !row.querySelector?.('button[role="switch"]')) return false;
+        const label = Array.from(row.querySelectorAll('span'))
+            .find(span => String(span.textContent || '').replace(/\s+/g, ' ').trim() === '상황 이미지 보기');
+        if (!label || isChatListNode(label) || isComposerNode(label) || isSuggestionNode(label)) return false;
+        return !!findRightSettingsMenuRoot(row);
+    }
+
     function findSituationImageContainer(root = document) {
-        const candidates = [];
-        const walker = document.createTreeWalker(root === document ? document.body : root, NodeFilter.SHOW_ELEMENT, {
-            acceptNode(node) {
-                if (!node || node.tagName !== 'SPAN') return NodeFilter.FILTER_SKIP;
-                const text = String(node.textContent || '').replace(/\s+/g, ' ').trim();
-                return text === '상황 이미지 보기' ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
-            }
-        });
-
-        while (walker.nextNode()) candidates.push(walker.currentNode);
-
-        for (const span of candidates) {
-            if (isChatListNode(span) || isComposerNode(span) || isSuggestionNode(span)) continue;
-            const row = closestByClassSet(span, 'px-2.5', 'h-4', 'box-content') || span.closest?.('.px-2\\.5');
-            if (!row || !row.querySelector?.('button[role="switch"]')) continue;
-            const menuRoot = findRightSettingsMenuRoot(row);
-            if (!menuRoot) continue;
-            return row;
+        const scope = root === document ? document.body : root;
+        // v5.3.0: 모든 요소를 TreeWalker로 훑지 않고, 페이지에 몇 개뿐인 스위치에서 행을 거슬러 올라가 확인한다.
+        const switches = Array.from(scope?.querySelectorAll?.('button[role="switch"]') || []);
+        for (const switchBtn of switches) {
+            const row = closestByClassSet(switchBtn, 'px-2.5', 'h-4', 'box-content') || switchBtn.closest?.('.px-2\\.5');
+            if (isSituationImageRow(row)) return row;
         }
 
         return null;
@@ -11676,9 +9700,18 @@ ${JSON.stringify(safePlan, null, 2)}
 
     function injectScenePainterRow() {
         injectStyles();
-        const originContainer = findSituationImageContainer();
         const existingPainter = document.getElementById('csp-scene-painter-row');
         const existingGallery = document.getElementById('csp-scene-gallery-row');
+
+        // v5.3.0: 이미 원본 행 바로 뒤(갤러리 행까지)에 붙어 있으면 메뉴를 다시 찾지 않고 카운트만 갱신한다.
+        if (existingPainter?.isConnected
+            && existingGallery?.previousElementSibling === existingPainter
+            && isSituationImageRow(existingPainter.previousElementSibling)) {
+            updateGalleryRowCountNow();
+            return;
+        }
+
+        const originContainer = findSituationImageContainer();
 
         if (!originContainer || !originContainer.parentNode) {
             if (existingGallery) updateGalleryRowCountNow();
@@ -11768,23 +9801,20 @@ ${JSON.stringify(safePlan, null, 2)}
         return nodes.some(node => {
             if (isComposerNode(node) || isChatListNode(node) || isSuggestionNode(node)) return false;
             if (node.closest?.('#csp-scene-painter-row, #csp-scene-gallery-row')) return true;
-            const text = String(node.textContent || '');
-            if (text.length > 30000) return false;
-            if (!text.includes('상황 이미지 보기') && !text.includes('AI 삽화 생성') && !text.includes('삽화 갤러리')) return false;
-            return !!findSituationImageContainer(node.ownerDocument === document ? document : node);
+            // v5.3.0: 서브트리 textContent를 통째로 직렬화하지 않고, 바뀐 노드 범위(행 안이면 그 행)의 스위치 행만 확인한다.
+            return !!findSituationImageContainer(closestByClassSet(node, 'px-2.5', 'h-4', 'box-content') || node);
         });
     }
 
     function collectAssistantMutationScopes(mutation) {
+        // 대상이 메시지 그룹 안인 mutation은 handleObservedMutations가 먼저 처리하므로 여기에는 그룹 밖 대상만 온다.
         const target = getMutationElement(mutation.target);
-        const targetGroup = target?.closest?.('[data-message-group-id]');
-        if (targetGroup) return isScenePainterNode(target) ? [] : [targetGroup];
         const scopes = new Set();
         const addedNodes = Array.from(mutation.addedNodes || [])
             .map(getMutationElement)
             .filter(Boolean);
 
-        const targetScope = target?.closest?.('[data-message-group-id], .wrtn-markdown');
+        const targetScope = target?.closest?.('.wrtn-markdown');
         if (targetScope && !isScenePainterNode(targetScope)) scopes.add(targetScope);
 
         addedNodes.forEach(node => {
@@ -11857,7 +9887,6 @@ ${JSON.stringify(safePlan, null, 2)}
     const CSP_V35_UI_KEY = `${CSP_PREFIX}_v35_ui_state`;
     let cspV35Session = null;
     let cspV35Root = null;
-    let cspV35Viewer = null;
     let cspV35RefineDialog = null;
     let cspV35ThemeObserver = null;
     let cspV35ThemeMedia = null;
@@ -11879,7 +9908,8 @@ ${JSON.stringify(safePlan, null, 2)}
     function patchV35Ui(section, patch) {
         const state = getV35UiState();
         state[section] = {...(state[section]||{}),...(patch||{})};
-        setLocalJsonStorage(CSP_V35_UI_KEY, state);
+        // UI 상태 저장 실패(저장공간 부족·못 읽은 압축값)로 화면 조작까지 멈추지 않게 한다.
+        try { setLocalJsonStorage(CSP_V35_UI_KEY, state); } catch (err) { console.warn('[Crack Scene Painter] v35 UI state save skipped:', err); }
         return state;
     }
     function v35ReadThemeToken(el) {
@@ -12001,8 +10031,9 @@ ${JSON.stringify(safePlan, null, 2)}
     }
 
     function v35Toast(msg,type='info',ttl=3000){if(!cspV35Root){showToast(msg);return}let s=cspV35Root.querySelector('.toaststack');if(!s){s=document.createElement('div');s.className='toaststack';cspV35Root.appendChild(s)}const t=document.createElement('div');t.className=`toast ${type}`;t.textContent=String(msg||'');s.appendChild(t);while(s.children.length>3)s.firstElementChild?.remove();if(ttl>0)setTimeout(()=>t.remove(),ttl)}
-    function closeV35(){stopV35ThemeSync();cspV35RefineDialog?.close?.(null);cspV35RefineDialog=null;cspV35Root?.remove();cspV35Root=null;cspV35Viewer=null;document.documentElement.style.overflow=''}
+    function closeV35(){stopV35ThemeSync();cspV35RefineDialog?.close?.(null);cspV35RefineDialog=null;try{cspV35Root?.__v35ThumbObserver?.disconnect()}catch(_){}releaseGalleryThumbUrls();cspV35Root?.remove();cspV35Root=null;document.documentElement.style.overflow=''}
     function exitV35Studio(){closeV35();cspV35Session=null}
+
     function v35Model(){return normalizeNaiModel(cspV35Session?.generation?.model||getGlobalSettings().naiModel)}
 
     // ── 모바일 할당량 · 프롬프트 예산 표시 (UI 전용) ──
@@ -12095,7 +10126,7 @@ ${JSON.stringify(safePlan, null, 2)}
 
     function v35MobileSharedBudgetGauge(s = cspV35Session) {
         const b = v35MobilePromptBudget(s);
-        const tone = b.status === 'over' ? 'dgr' : (b.status === 'tight' ? 'warn' : 'ok');
+        const tone = v35MobileBudgetTone(b.percent);
         if (!b.shared) {
             return v35MobileGaugeHtml({
                 thin: true,
@@ -12201,8 +10232,29 @@ ${JSON.stringify(safePlan, null, 2)}
             }
         }
         if (cspV35Session !== s || s.__mobileQuotaRequestId !== requestId) return null;
-        if (rerender && cspV35Root?.dataset.view === 'studio') renderV35Studio();
+        // 응답이 늦게 와도 전체를 다시 그리지 않는다(입력 중인 값·열린 편집기·요청 재분석 창이 사라졌다). 할당량을 쓰는 곳만 바꾼다.
+        if (rerender) patchV35MobileQuotaViews();
         return s.quota;
+    }
+
+    // 할당량·예상 비용에 걸린 곳(할당량 칩, 생성 버튼, 열린 할당량 시트)만 제자리에서 바꾼다.
+    function patchV35MobileQuotaViews(root = cspV35Root) {
+        const s = cspV35Session;
+        if (!s || !root?.isConnected || root.dataset.view !== 'studio') return;
+        const chip = root.querySelector('#v35m-quota-chip');
+        if (chip) {
+            const t = document.createElement('template');
+            t.innerHTML = v35MobileQuotaChipHtml(s);
+            const next = t.content.firstElementChild;
+            // 버튼은 그대로 두고 모양만 바꿔 click 핸들러를 다시 걸지 않는다.
+            if (next) { chip.className = next.className; chip.innerHTML = next.innerHTML; }
+        }
+        const gen = root.querySelector('#v35m-generate');
+        if (gen && ['idle','ready'].includes(s.status)) {
+            gen.className = `btn ${v35MobileGenerateToneClass(s)}`;
+            gen.innerHTML = v35MobileGenerateLabelHtml(s);
+        }
+        root.querySelector('.v35m-sheet-backdrop[data-quota-sheet]')?.__v35mRender?.();
     }
 
     function v35MobileQuotaChipHtml(s = cspV35Session) {
@@ -12270,7 +10322,7 @@ ${JSON.stringify(safePlan, null, 2)}
             if (est.referenceExtra > 0) costFootParts.push(`레퍼런스 ${est.references}장 +${est.referenceExtra}`);
             if (est.usesQuotaFirst) costFootParts.push('배터리 사용 가능 시 우선 무료 처리');
             body += `<div class="v35m-sheet-div"></div><div class="v35m-sheet-row"><b>예상 생성 비용</b><span class="badge accent">${escapeHtml(est.display)}</span></div>${costFootParts.length ? `<div class="v35m-gfoot">${escapeHtml(costFootParts.join(' · '))}</div>` : ''}`;
-            const btone = b.status === 'over' ? 'dgr' : (b.status === 'tight' ? 'warn' : 'ok');
+            const btone = v35MobileBudgetTone(b.percent);
             body += `<div class="v35m-sheet-div"></div>` + v35MobileGaugeHtml({
                 label: `✍ 프롬프트 예산`,
                 right: `약 ${b.used} / ${b.limit}`,
@@ -12294,10 +10346,11 @@ ${JSON.stringify(safePlan, null, 2)}
                 btn.textContent = '확인 중…';
                 if (cspV35Session === s) s.quota = null;
                 await refreshV35MobileQuota({ rerender: false, force: true });
-                if (cspV35Session === s && overlay.isConnected) renderSheet();
-                if (cspV35Root?.dataset.view === 'studio' && cspV35Session === s) renderV35Studio();
+                // 시트는 연 채로 칩·생성 버튼·이 시트만 새 값으로 바꾼다(전체를 다시 그리면 방금 다시 그린 시트가 닫혔다).
+                if (cspV35Session === s) patchV35MobileQuotaViews();
             });
         };
+        overlay.__v35mRender = renderSheet;
 
         overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
         cspV35Root.appendChild(overlay);
@@ -12311,11 +10364,112 @@ ${JSON.stringify(safePlan, null, 2)}
         return ({target:'현재 장면',recent:'최근 대화',state:'현재 상태',world:'세계관 설정',visuallore:'시각 설정',inferred:'장면 추론',context:'장면 정보'})[key] || String(value||'장면 정보');
     }
     function v35ContextRows(plan={}){const vc=plan.visualContext||{},rows=[];const add=(ic,val,src)=>{const v=typeof val==='string'?val.trim():'';if(v)rows.push({ic,v,src:String(src||'CONTEXT').toUpperCase()})};add('📍',vc.location?.value||vc.location||plan.globalContext?.locationPrompt,vc.location?.basis||'RECENT');add('🌍',vc.region?.value||vc.region,vc.region?.basis||'WORLD');add('🌙',vc.time?.value||vc.timeOfDay?.value||vc.timeOfDay||plan.globalContext?.timePrompt,vc.time?.basis||vc.timeOfDay?.basis||'STATE');add('🌧',vc.weather?.value||vc.weather,vc.weather?.basis||'RECENT');(Array.isArray(vc.lighting)?vc.lighting:[]).slice(0,3).forEach(x=>add('💡',typeof x==='string'?x:(x?.value||x?.text),typeof x==='string'?'STATE':(x?.basis||'STATE')));(Array.isArray(vc.environment)?vc.environment:[]).slice(0,3).forEach(x=>add('🏛',typeof x==='string'?x:(x?.value||x?.text),typeof x==='string'?'시각 설정':(x?.basis||'시각 설정')));if(!rows.length){add('📍',plan.globalContext?.locationPrompt,'CONTEXT');add('🌙',plan.globalContext?.timePrompt,'CONTEXT');add('🏛',plan.globalContext?.atmospherePrompt,'CONTEXT')}return rows}
-    function openV35Studio(args){cspV35Session=createV35StudioSession(args||{});const session=cspV35Session;if(cspV35Session.messageKey){const rec=normalizeSceneRecordHistory(getSceneRecords()[cspV35Session.messageKey],cspV35Session.messageKey);if(rec?.history?.length){cspV35Session.currentHistoryIndex=clampHistoryIndex(rec);getRecordImageSrc(rec,cspV35Session.currentHistoryIndex).then(src=>{if(cspV35Session===session&&isCurrentCspWorkTarget(session.workTarget)){session.currentImageSrc=src;if(cspV35Root?.dataset.view==='studio')renderV35Studio()}}).catch(()=>{})}}renderV35Studio();refreshV35MobileQuota()}
+    function openV35Studio(args){cspV35Session=createV35StudioSession(args||{});const session=cspV35Session;if(cspV35Session.messageKey){const rec=normalizeSceneRecordHistory(getSceneRecords()[cspV35Session.messageKey],cspV35Session.messageKey);if(rec?.history?.length){cspV35Session.currentHistoryIndex=clampHistoryIndex(rec);getV35StudioImageSrc(rec,cspV35Session.currentHistoryIndex).then(src=>{if(cspV35Session===session&&isCurrentCspWorkTarget(session.workTarget)){session.currentImageSrc=src;if(cspV35Root?.dataset.view==='studio')renderV35Studio()}}).catch(()=>{})}}renderV35Studio();refreshV35MobileQuota()}
+
     function v35SamplerOptions(cur){const vals=['k_euler_ancestral','k_euler','k_dpmpp_2s_ancestral','k_dpmpp_2m','k_dpmpp_sde','ddim_v3'];cur=String(cur||'k_euler_ancestral');if(!vals.includes(cur))vals.unshift(cur);return vals.map(v=>`<option value="${escapeHtml(v)}" ${v===cur?'selected':''}>${escapeHtml(v)}</option>`).join('')}
     function v35NoiseOptions(cur){const vals=['karras','native','exponential','polyexponential'];cur=String(cur||'karras');if(!vals.includes(cur))vals.unshift(cur);return vals.map(v=>`<option value="${escapeHtml(v)}" ${v===cur?'selected':''}>${escapeHtml(v)}</option>`).join('')}
+
+    // ── 갤러리 썸네일 캐시 (v5.3.0) ── 원본(1~2MB data URL) 대신 작은 WebP를 IndexedDB meta에 보관해 갤러리·기록 줄에 쓴다.
+    // 폰 화면은 픽셀 밀도가 높아 PC(360px)보다 크게 만든다. 키 접두사도 따로 둬서 크기가 다른 썸네일이 섞이지 않게 한다.
+    const CSP_THUMB_META_PREFIX = 'thumb_m720_v1::';
+
+    const CSP_THUMB_MAX_EDGE = 720;
+
+    const CSP_THUMB_CONCURRENCY = 3;
+
+    const cspThumbUrlCache = new Map();   // imageId → object URL (갤러리가 닫힐 때 해제)
+
+    const cspThumbPending = new Map();    // imageId → Promise<string>
+
+    const cspThumbDeletedIds = new Set(); // 만드는 도중 지워진 이미지의 썸네일은 저장하지 않는다
+
+    let cspThumbActive = 0;
+
+    const cspThumbWaiters = [];
+
+    async function cspThumbWithSlot(task) {
+        while (cspThumbActive >= CSP_THUMB_CONCURRENCY) await new Promise(resolve => cspThumbWaiters.push(resolve));
+        cspThumbActive++;
+        try { return await task(); }
+        finally { cspThumbActive--; cspThumbWaiters.shift()?.(); }
+    }
+
+    function dataUrlToBlob(dataUrl) {
+        const [header, base64] = String(dataUrl || '').split(',');
+        const mimeMatch = header.match(/data:([^;]+);base64/);
+        const mime = mimeMatch ? mimeMatch[1] : 'image/png';
+        return new Blob([base64ToBytes(base64)], { type: mime });
+    }
+
+    async function createThumbnailBlob(src) {
+        const source = String(src || '').startsWith('data:') ? dataUrlToBlob(src) : await (await fetch(src)).blob();
+        const bitmap = await createImageBitmap(source);
+        try {
+            const scale = Math.min(1, CSP_THUMB_MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+            const width = Math.max(1, Math.round(bitmap.width * scale));
+            const height = Math.max(1, Math.round(bitmap.height * scale));
+            const canvas = typeof OffscreenCanvas === 'function'
+                ? new OffscreenCanvas(width, height)
+                : Object.assign(document.createElement('canvas'), { width, height });
+            canvas.getContext('2d').drawImage(bitmap, 0, 0, width, height);
+            if (canvas.convertToBlob) return await canvas.convertToBlob({ type: 'image/webp', quality: 0.82 });
+            return await new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('thumbnail encode failed')), 'image/webp', 0.82));
+        } finally {
+            bitmap.close?.();
+        }
+    }
+
+    function getGalleryThumbUrl(imageId, loadFullSrc) {
+        const id = String(imageId || '');
+        if (!id) return loadFullSrc();
+        const cached = cspThumbUrlCache.get(id);
+        if (cached) return Promise.resolve(cached);
+        if (cspThumbPending.has(id)) return cspThumbPending.get(id);
+        const pending = (async () => {
+            let blob = null;
+            try {
+                const stored = await getStoredMeta(CSP_THUMB_META_PREFIX + id);
+                if (stored instanceof Blob && stored.size > 0) blob = stored;
+            } catch (_) {}
+            if (!blob) {
+                let src = '';
+                try {
+                    // 원본 읽기도 슬롯 안에서 해야 처음 열 때 메모리에 동시에 올라가는 원본이 3장으로 묶인다.
+                    blob = await cspThumbWithSlot(async () => {
+                        src = await loadFullSrc();
+                        return src ? createThumbnailBlob(src) : null;
+                    });
+                } catch (err) {
+                    console.warn('[Crack Scene Painter] thumbnail build failed, falling back to full image:', err?.message || err);
+                    return src;
+                }
+                if (!blob || cspThumbDeletedIds.has(id)) return '';
+                putStoredMeta(CSP_THUMB_META_PREFIX + id, blob).catch(() => {});
+            }
+            if (cspThumbDeletedIds.has(id)) return '';
+            const url = URL.createObjectURL(blob);
+            cspThumbUrlCache.set(id, url);
+            return url;
+        })().finally(() => cspThumbPending.delete(id));
+        cspThumbPending.set(id, pending);
+        return pending;
+    }
+
+    function releaseGalleryThumbUrls() {
+        cspThumbUrlCache.forEach(url => { try { URL.revokeObjectURL(url); } catch (_) {} });
+        cspThumbUrlCache.clear();
+    }
+
+    async function deleteStoredThumbnail(imageId) {
+        const id = String(imageId || '');
+        if (!id) return;
+        cspThumbDeletedIds.add(id);
+        const url = cspThumbUrlCache.get(id);
+        if (url) { try { URL.revokeObjectURL(url); } catch (_) {} cspThumbUrlCache.delete(id); }
+        try { await deleteStoredMeta(CSP_THUMB_META_PREFIX + id); } catch (_) {}
+    }
     function v35GalleryItems(){
-        const out=[];Object.entries(getSceneRecords()||{}).forEach(([messageKey,raw])=>{const rec=normalizeSceneRecordHistory(raw,messageKey),h=rec?.history||[];h.forEach((x,i)=>out.push({messageKey,record:rec,index:i,createdAt:Number(x?.createdAt||rec?.createdAt||0),title:rec?.plan?.sceneTitle||'장면 삽화',model:rec?.naiSettings?.model||getGlobalSettings().naiModel,chars:(rec?.plan?.visibleCharacters||rec?.plan?.charactersInScene||rec?.plan?.characters||[]).map?.(v=>typeof v==='string'?v:(v?.name||v?.characterId||'')).join(' ')||''}))});return out.sort((a,b)=>b.createdAt-a.createdAt)
+        const out=[],defaultModel=getGlobalSettings().naiModel;Object.entries(getSceneRecords()||{}).forEach(([messageKey,raw])=>{const rec=normalizeSceneRecordHistory(raw,messageKey),h=rec?.history||[];h.forEach((x,i)=>out.push({messageKey,record:rec,index:i,createdAt:Number(x?.createdAt||rec?.createdAt||0),title:rec?.plan?.sceneTitle||'장면 삽화',model:rec?.naiSettings?.model||defaultModel,chars:(rec?.plan?.visibleCharacters||rec?.plan?.charactersInScene||rec?.plan?.characters||[]).map?.(v=>typeof v==='string'?v:(v?.name||v?.characterId||'')).join(' ')||''}))});return out.sort((a,b)=>b.createdAt-a.createdAt)
     }
     function v35PromptRequest(){const s=cspV35Session,ps=s.promptState,chars=(ps.charPrompts||[]).map(c=>({...c,prompt:dedupePromptString(c.prompt||''),uc:dedupePromptString(c.uc||'')})),charPrompt=dedupePromptString(buildCommaPrompt(chars.map(c=>stripSubjectCountTags(c.prompt||'')))),charUc=dedupePromptString(buildCommaPrompt(chars.map(c=>c.uc||'')));let basePrompt=dedupePromptString(ps.basePrompt||''),baseNegative=dedupePromptString(ps.baseNegative||'');let finalPrompt=s.promptDirty?dedupePromptString(ps.finalPrompt||''):dedupePromptString(buildCommaPrompt([basePrompt,charPrompt]));let finalNegative=s.negativeDirty?dedupePromptString(ps.finalNegative||''):dedupePromptString(buildCommaPrompt([baseNegative,charUc]));if(s.promptDirty)basePrompt=removePromptTokens(finalPrompt,charPrompt)||finalPrompt;if(s.negativeDirty)baseNegative=removePromptTokens(finalNegative,charUc)||finalNegative;return{basePrompt,baseNegative,finalPrompt,finalNegative,charPrompts:chars}}
     function v35Decode(src){return new Promise((resolve,reject)=>{const img=new Image();img.onload=()=>resolve(src);img.onerror=()=>reject(new Error('생성 이미지를 디코딩하지 못했어요.'));img.src=src;if(img.decode)img.decode().then(()=>resolve(src)).catch(()=>{})})}
@@ -12438,11 +10592,55 @@ ${JSON.stringify(safePlan, null, 2)}
     }
     function renderV35SettingsPage(root,page){const h=root.querySelector('#v35-settings-page');if(page==='connection')renderV35Connections(h);else if(page==='world')renderV35World(h);else if(page==='generation')renderV35GenerationDefaults(h);else if(page==='storage')renderV35Storage(h);else renderV35Advanced(h)}
     function renderV35World(h){
-        const r=getRoomSettings(),vc=normalizeVisualContextSettings(r.visualContext||{});
+        const g=getGlobalSettings(),r=getRoomSettings(),vc=normalizeVisualContextSettings(r.visualContext||{});
         let tab=getV35UiState().settings.worldTab||'world';
         if(!['world','lore','state'].includes(tab))tab='world';
-        h.innerHTML=`<h2 class="page-title">🌍 세계관 & 설정</h2><div class="page-desc">세계관 기본 설정, 반복되는 시각 설정, 현재 장면 상태를 관리해.</div><div style="display:flex;border-bottom:1px solid var(--line);margin-bottom:16px">${[['world','세계관 기본 설정'],['lore','시각 설정'],['state','현재 상태']].map(([id,l])=>`<button class="tab ${tab===id?'active':''}" data-wtab="${id}">${l}</button>`).join('')}</div><div id="wbody"></div>`;
+        h.innerHTML=`<h2 class="page-title">🌍 세계관 & 설정</h2><div class="page-desc">세계관 기본 설정, 반복되는 시각 설정, 현재 장면 상태를 관리해.</div>
+    <div class="qbox wpbox">
+    <div class="qhead">세계관 & 설정 프리셋<span class="grow"></span><span class="badge">전역</span></div>
+    <div class="help">세계관 기본 설정과 시각 설정을 이름 붙여 보관해. 다른 방에서도 불러올 수 있어. 현재 상태는 저장하지 않아.</div>
+    <div class="wprow"><select class="select" id="wp-select">${buildWorldPresetOptions(g.worldPresets||[],h.dataset.wpSel||'')}</select><input class="input" id="wp-name" placeholder="새 이름으로 저장"></div>
+    <div class="qbtns"><button class="btn tiny" id="wp-load">불러오기</button><button class="btn tiny" id="wp-save">현재 구성 저장</button><span class="grow"></span><button class="btn tiny ghost" id="wp-del">삭제</button></div>
+    </div>
+    <div style="display:flex;border-bottom:1px solid var(--line);margin-bottom:16px">${[['world','세계관 기본 설정'],['lore','시각 설정'],['state','현재 상태']].map(([id,l])=>`<button class="tab ${tab===id?'active':''}" data-wtab="${id}">${l}</button>`).join('')}</div><div id="wbody"></div>`;
         h.querySelectorAll('[data-wtab]').forEach(b=>b.onclick=()=>{patchV35Ui('settings',{worldTab:b.dataset.wtab});renderV35World(h)});
+        // 페이지 전체를 다시 그리면 '현재 상태' 탭의 저장 전 입력과 시각 설정 선택이 날아가므로, 저장·삭제 뒤에는 목록만 갱신한다.
+        const refreshPresetSelect=list=>{const sel=h.querySelector('#wp-select');if(sel)sel.innerHTML=buildWorldPresetOptions(list||[],h.dataset.wpSel||'')};
+        h.querySelector('#wp-save').onclick=()=>{
+            const name=h.querySelector('#wp-name').value.trim();
+            if(!name){v35Toast('프리셋 이름을 입력해.','error');return}
+            const data=cloneWorldPresetData(getRoomSettings().visualContext||{});
+            if(!hasWorldPresetContent(data)){v35Toast('저장할 세계관 · 시각 설정이 없어.','error');return}
+            const gg=getGlobalSettings(),list=[...(gg.worldPresets||[])],preset={name,...data,updatedAt:Date.now()};
+            const at=list.findIndex(x=>String(x.name||'').trim()===name);
+            if(at>=0)list[at]=preset;else list.push(preset);
+            try{saveGlobalSettings({...gg,worldPresets:list})}catch(err){v35Toast('프리셋 저장 실패: '+(err?.message||err),'error',0);return}
+            h.dataset.wpSel=name;
+            refreshPresetSelect(list);
+            v35Toast(`프리셋 저장: ${name}`,'success');
+        };
+        h.querySelector('#wp-load').onclick=()=>{
+            const name=h.querySelector('#wp-select').value;
+            const preset=getQuickSlotByName(getGlobalSettings().worldPresets||[],name);
+            if(!preset){v35Toast('불러올 프리셋이 없어.','error');return}
+            if(hasWorldPresetContent(cloneWorldPresetData(getRoomSettings().visualContext||{}))&&!confirm(`이 방의 세계관 기본 설정과 시각 설정을 "${name}" 프리셋으로 바꿀까요?`))return;
+            // 세계관 기본 설정과 시각 설정만 바꾸고, 현재 상태 등 나머지 visualContext는 그대로 둔다.
+            const next=normalizeVisualContextSettings(getRoomSettings().visualContext||{}),data=cloneWorldPresetData(preset);
+            next.worldProfile=data.worldProfile;next.visualLoreEntries=data.visualLoreEntries;
+            try{saveV35Vc(next)}catch(err){v35Toast('프리셋 불러오기 실패: '+(err?.message||err),'error',0);return}
+            h.dataset.wpSel=name;
+            if(tab==='state')refreshPresetSelect(getGlobalSettings().worldPresets);else renderV35World(h);
+            v35Toast(`프리셋 불러옴: ${name}`,'success');
+        };
+        h.querySelector('#wp-del').onclick=()=>{
+            const name=h.querySelector('#wp-select').value;
+            if(!name||!confirm(`"${name}" 프리셋을 삭제할까요?`))return;
+            const gg=getGlobalSettings();
+            gg.worldPresets=(gg.worldPresets||[]).filter(x=>String(x.name||'').trim()!==name);
+            try{saveGlobalSettings(gg)}catch(err){v35Toast('프리셋 삭제 실패: '+(err?.message||err),'error',0);return}
+            delete h.dataset.wpSel;
+            refreshPresetSelect(gg.worldPresets);
+        };
         const b=h.querySelector('#wbody');
         if(tab==='world')renderV35WorldProfile(b,vc);else if(tab==='lore')renderV35Lore(b,vc);else renderV35State(b,vc);
     }
@@ -12636,8 +10834,6 @@ ${JSON.stringify(safePlan, null, 2)}
 #csp-v35-root .tagtyper{flex:1;min-width:90px;height:24px;border:0;background:transparent;outline:none;color:var(--tx);font-size:12px;padding:0 var(--s1)}
 #csp-v35-root .labelnote{color:var(--tx3);font-weight:400;opacity:.8}
 
-/* 좌측 레일 */
-
 /* 편집 영역 */
 #csp-v35-root .chartop{display:flex;align-items:center;gap:var(--s3);margin-bottom:var(--s2)}
 #csp-v35-root .charname{font-size:15px;font-weight:600}
@@ -12671,7 +10867,6 @@ ${JSON.stringify(safePlan, null, 2)}
 #csp-v35-root .stat span{display:block;font-size:12px;line-height:16px;color:var(--tx3)}
 #csp-v35-root .stat b{display:block;font-size:20px;line-height:26px;font-weight:600;margin-top:2px}
 #csp-v35-root .stat b em{font-style:normal;font-size:13px;font-weight:400;color:var(--tx3);margin-left:2px}
-#csp-v35-root .folder-foot{display:flex;align-items:center;gap:var(--s2)}
 #csp-v35-root .mlist{display:flex;flex-direction:column}
 #csp-v35-root .mrow{display:flex;align-items:center;gap:var(--s4);padding:var(--s3) 0;border-top:1px solid var(--line2)}
 #csp-v35-root .mrow:first-child{border-top:0}
@@ -12684,13 +10879,7 @@ ${JSON.stringify(safePlan, null, 2)}
 #csp-v35-root .setting-row{display:grid;grid-template-columns:minmax(180px,280px) minmax(280px,1fr);gap:20px;align-items:start;padding:8px 0;border-bottom:0}
 #csp-v35-root .setting-row:last-child{border-bottom:0}
 #csp-v35-root .setting-row .setting-label b{display:block;margin-bottom:3px}
-#csp-v35-root .gimg img{width:100%;height:100%;object-fit:cover;display:block}
-
-
-
 #csp-v35-root .btn.primary.connection-test{height:30px;padding:0 10px}
-
-
         `;document.head.appendChild(style)
     }
     function v35ConnectionDraft(h,{preserveSecrets=true}={}){
@@ -12699,7 +10888,8 @@ ${JSON.stringify(safePlan, null, 2)}
             googleModel:normalizeGeminiModelId(h.querySelector('#s-google-model')?.value||g.googleModel),
             geminiThinkingMode:normalizeGeminiThinkingMode(h.querySelector('#s-thinking')?.value||g.geminiThinkingMode),
             deepseekModel:normalizeDeepSeekModelId(h.querySelector('#s-deep-model')?.value||g.deepseekModel),
-            firebaseLocation:h.querySelector('#s-floc')?.value.trim()||'global',firebaseSdkVersion:h.querySelector('#s-fsdk')?.value.trim()||'12.5.0',
+            // Firebase 칸은 Firebase를 골랐을 때만 그려지므로, 칸이 없으면 저장된 리전/SDK를 그대로 둔다.
+            firebaseLocation:(h.querySelector('#s-floc')?h.querySelector('#s-floc').value.trim():g.firebaseLocation)||'global',firebaseSdkVersion:(h.querySelector('#s-fsdk')?h.querySelector('#s-fsdk').value.trim():g.firebaseSdkVersion)||'12.5.0',
             googleApiKey:h.querySelector('#s-google-key')?.value.trim()||(preserveSecrets?g.googleApiKey:''),
             deepseekApiKey:h.querySelector('#s-deep-key')?.value.trim()||(preserveSecrets?g.deepseekApiKey:''),
             firebaseConfigJson:h.querySelector('#s-firebase')?.value.trim()||(preserveSecrets?g.firebaseConfigJson:''),
@@ -12881,6 +11071,80 @@ ${JSON.stringify(safePlan, null, 2)}
     // =========================================================================
     let cspV35MobileHelpersBound = false;
 
+    // 스튜디오가 열려 있는 동안 기록 원본(data URL)을 imageId별로 한 번만 IndexedDB에서 읽는다(세션에 붙여 두고 최대 기록 장수만큼).
+    // 세션이 바뀌면 새 캐시를 쓰고, 스튜디오를 닫거나 갤러리·설정으로 가면 비운다.
+    function getV35StudioImageSrc(rec, index) {
+        const s = cspV35Session, id = String(rec?.history?.[index]?.imageId || '');
+        if (!s || !id) return getRecordImageSrc(rec, index);
+        const cache = s.__imageSrcCache || (s.__imageSrcCache = new Map());
+        if (!cache.has(id)) {
+            const drop = () => { if (cache.get(id) === pending) cache.delete(id); };
+            const pending = getRecordImageSrc(rec, index).then(src => { if (!src) drop(); return src; }, err => { drop(); throw err; });
+            cache.set(id, pending);
+            while (cache.size > CSP_MAX_IMAGE_HISTORY) cache.delete(cache.keys().next().value);
+        }
+        return cache.get(id);
+    }
+
+    function clearV35StudioImageCache(s = cspV35Session) {
+        s?.__imageSrcCache?.clear();
+    }
+
+    // 수 MB data URL을 HTML 문자열에 넣지 않고 속성으로 붙인다. 같은 이미지면 이전 <img>를 옮겨 다시 디코딩하지 않는다.
+    function placeV35MobileImage(slot, src, prev) {
+        if (!slot) return;
+        if (prev && prev !== slot && prev.__v35Src === src) { slot.replaceWith(prev); return; }
+        slot.__v35Src = src;
+        slot.src = src;
+    }
+
+    // 같은 세션을 다시 그릴 때는 #csp-v35-root를 두고 .v35m-app만 다시 채운다. 루트를 새로 만들면 테마 감시가 다시 붙고,
+    // 열린 시트·프롬프트/위치 편집기·뷰어가 닫히고, 요청 재분석 창은 취소되고, 키보드 상태가 풀렸다.
+    function reuseV35MobileStudioRoot(s) {
+        const root = cspV35Root;
+        // 요청 재분석으로 promptState가 바뀌었으면 열린 편집기가 옛 값을 들고 있으므로 예전처럼 새로 만든다.
+        if (!root?.isConnected || root.dataset.view !== 'studio' || root.__v35mSession !== s || root.__v35mPromptState !== s.promptState) return null;
+        const app = root.querySelector(':scope>.v35m-app');
+        if (!app) return null;
+        // 루트를 새로 만들던 때처럼 토스트는 지운다(시간 제한 없는 오류 토스트가 쌓이지 않게).
+        root.querySelector(':scope>.toaststack')?.remove();
+        return { root, app };
+    }
+
+    // 다시 그리기 전 화면 상태(메인 이미지, 탭 스크롤, 입력 중인 칸)를 잡아 둔다.
+    function captureV35MobileStudioView(root, app) {
+        const body = app.querySelector('#v35m-tab-body');
+        const keep = { img: app.querySelector('#v35m-main-img'), tab: root.__v35mTab, scrollTop: body?.scrollTop || 0, focus: null };
+        const el = document.activeElement;
+        if (!el?.id || !app.contains(el) || !/^(INPUT|TEXTAREA)$/.test(el.tagName)) return keep;
+        // 키보드가 떠 있을 때(입력 중)만 포커스를 돌려준다. 내려 둔 키보드를 다시 띄우지 않게.
+        if (!root.classList.contains('keyboard-open')) {
+            // change로만 반영되는 칸(생성 탭 숫자·시드)은 blur된 것처럼 먼저 반영해 둔다.
+            if (el.value !== el.defaultValue) el.dispatchEvent(new Event('change', { bubbles: true }));
+            return keep;
+        }
+        // 입력 중인 칸은 반만 친 값(예: 너비 "8")이 보정되지 않게 지금 반영하지 않고, 되살린 칸에서 포커스가 빠질 때 반영한다.
+        let start = null, end = null;
+        try { start = el.selectionStart; end = el.selectionEnd; } catch (_) {}
+        keep.focus = { id: el.id, value: el.value, defaultValue: el.defaultValue, start, end, scrollTop: el.scrollTop };
+        return keep;
+    }
+
+    function restoreV35MobileStudioView(app, keep, tab) {
+        if (!keep) return;
+        const body = app.querySelector('#v35m-tab-body');
+        if (body && keep.tab === tab) body.scrollTop = keep.scrollTop;
+        const f = keep.focus, el = f && app.querySelector(`#${CSS.escape(f.id)}`);
+        if (!el || !/^(INPUT|TEXTAREA)$/.test(el.tagName)) return;
+        // 상태에 없는 칸이면 화면 값을 되살리고, 상태가 바뀐 칸은 새 값을 둔다.
+        if (f.value !== '' && el.value !== f.value && el.defaultValue === f.defaultValue) el.value = f.value;
+        // 다시 그리기 전에 반영하지 않은 입력은 이 칸을 떠날 때 change로 반영한다(값을 코드로 넣어서 브라우저가 change를 내지 않음).
+        if (el.value !== el.defaultValue) el.addEventListener('blur', () => { if (el.value !== el.defaultValue) el.dispatchEvent(new Event('change', { bubbles: true })); }, { once: true });
+        try { el.focus({ preventScroll: true }); } catch (_) {}
+        try { if (f.start !== null) el.setSelectionRange(f.start, f.end); } catch (_) {}
+        el.scrollTop = f.scrollTop;
+    }
+
     function ensureV35MobileStyles() {
         if (document.getElementById('csp-v35-mobile-style')) return;
         const style = document.createElement('style');
@@ -12982,6 +11246,17 @@ ${JSON.stringify(safePlan, null, 2)}
 #csp-v35-root.v35-mobile .v35m-char-list{display:flex;flex-direction:column;gap:12px}
 #csp-v35-root.v35-mobile .v35m-char-list .v35m-card{padding:10px 12px}
 #csp-v35-root.v35-mobile .v35m-settings-page .refcard{margin-bottom:12px}
+#csp-v35-root.v35-mobile .wpbox{border:1px solid var(--line);border-radius:12px;background:var(--sf);padding:11px;display:flex;flex-direction:column;gap:9px;margin-bottom:12px}
+#csp-v35-root.v35-mobile .wpbox .qhead{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:650}
+#csp-v35-root.v35-mobile .wpbox .wprow{display:flex;flex-direction:column;gap:9px}
+#csp-v35-root.v35-mobile .wpbox .qbtns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+#csp-v35-root.v35-mobile .wpbox .qbtns .grow{display:none}
+#csp-v35-root.v35-mobile .wpbox .qbtns .btn{min-height:38px;height:38px;font-size:inherit}
+#csp-v35-root.v35-mobile .wpbox #wp-del{grid-column:1/-1;color:var(--danger);border-color:var(--line)}
+#csp-v35-root.v35-mobile .master{display:flex;flex-direction:column;gap:12px}
+#csp-v35-root.v35-mobile .master>.list{display:flex;flex-direction:column;gap:6px}
+#csp-v35-root.v35-mobile .listbtn{width:100%;min-height:44px;border:1px solid var(--line);border-radius:10px;background:var(--sf);color:var(--tx2);text-align:left;padding:8px 12px;display:flex;align-items:center;gap:8px;font:inherit}
+#csp-v35-root.v35-mobile .listbtn.active{background:var(--soft);color:var(--tx)}
 #csp-v35-root.v35-mobile .v35m-fullscreen{position:absolute;inset:0;z-index:100;background:var(--bg);display:flex;flex-direction:column}
 #csp-v35-root.v35-mobile .v35m-editor{flex:1;min-height:0;display:flex;flex-direction:column;padding:10px;gap:8px;overflow:hidden}
 #csp-v35-root.v35-mobile .v35m-editor textarea{flex:1;min-height:0;width:100%;resize:none;border:1px solid var(--line);border-radius:10px;background:var(--sf2);padding:10px;color:var(--tx);font:12px/19px var(--mono);outline:none}
@@ -13087,20 +11362,18 @@ ${JSON.stringify(safePlan, null, 2)}
         };
         window.visualViewport?.addEventListener('resize', updateKeyboard, { passive:true });
         window.visualViewport?.addEventListener('scroll', updateKeyboard, { passive:true });
+        // 갤러리·설정은 CSS만으로 회전에 맞춰지므로 다시 만들지 않는다. 다시 만들면 보던 위치·열린 뷰어·입력 중인 값이 사라지고,
+        // 캐릭터 상세에서 목록으로 튕기고, 갤러리는 원본 이미지를 전부 다시 읽었다. 스튜디오는 루트를 그대로 두고 다시 그린다.
         window.addEventListener('orientationchange', () => setTimeout(() => {
-            if (!cspV35Root) return;
-            if (cspV35Root.dataset.view === 'studio' && cspV35Session) renderV35Studio();
-            else if (cspV35Root.dataset.view === 'gallery') openV35Gallery();
-            else if (cspV35Root.dataset.view === 'settings') openV35Settings(cspV35Root.dataset.settingsPage || '');
+            if (cspV35Root?.dataset.view === 'studio' && cspV35Session) renderV35Studio();
         }, 120), { passive:true });
     }
 
     function mountV35Mobile(kind = '') {
-        ensureV35Styles();
-        ensureV35ExtraStyles();
-        ensureV35MobileStyles();
-        bindV35MobileHelpers();
+        installV35Ui();
         closeV35();
+        // 갤러리·설정으로 가면 스튜디오 원본 이미지 캐시를 비운다.
+        if (kind !== 'studio') clearV35StudioImageCache();
         const root = document.createElement('div');
         root.id = 'csp-v35-root';
         root.className = `${v35ThemeClass()} v35-mobile`;
@@ -13162,11 +11435,16 @@ ${JSON.stringify(safePlan, null, 2)}
     function renderV35MobileStudio() {
         if (!cspV35Session) return;
         const s = cspV35Session;
-        const { root, app } = mountV35Mobile('studio');
+        const reused = reuseV35MobileStudioRoot(s);
+        const keep = reused ? captureV35MobileStudioView(reused.root, reused.app) : null;
+        const { root, app } = reused || mountV35Mobile('studio');
         root.dataset.view = 'studio';
+        root.__v35mSession = s;
+        root.__v35mPromptState = s.promptState;
         const ui = getV35UiState();
         const tab = ['scene','characters','prompt','generate'].includes(ui.studio.mobileTab) ? ui.studio.mobileTab : 'scene';
         s.mobileTab = tab;
+        root.__v35mTab = tab;
         const busy = !['idle','ready'].includes(s.status);
         const canReanalyze = !!(s.markdown && s.targetBubble);
         const aspectW = Math.max(1, Number(s.generation.width || 832));
@@ -13185,7 +11463,7 @@ ${JSON.stringify(safePlan, null, 2)}
             <div class="v35m-media">
                 <div class="v35m-canvas-wrap">
                     ${s.currentImageSrc
-                        ? `<div class="v35m-canvas" style="aspect-ratio:${aspectW}/${aspectH}"><img src="${escapeHtml(s.currentImageSrc)}" id="v35m-main-img"><div class="v35m-canvas-tools"><button class="iconbtn" id="v35m-view">⛶</button><button class="iconbtn" id="v35m-download">↓</button></div>${busy?`<div class="v35m-loading"><div class="v35m-loading-card"><div class="spinner"></div><b>${escapeHtml(s.statusMessage||'처리 중…')}</b></div></div>`:''}</div>`
+                        ? `<div class="v35m-canvas" style="aspect-ratio:${aspectW}/${aspectH}"><img id="v35m-main-img"><div class="v35m-canvas-tools"><button class="iconbtn" id="v35m-view">⛶</button><button class="iconbtn" id="v35m-download">↓</button></div>${busy?`<div class="v35m-loading"><div class="v35m-loading-card"><div class="spinner"></div><b>${escapeHtml(s.statusMessage||'처리 중…')}</b></div></div>`:''}</div>`
                         : `<div class="v35m-canvas-empty" style="aspect-ratio:${aspectW}/${aspectH}"><span><b>생성 준비 완료</b>장면 분석이 끝났어.<br>아래에서 확인하고 생성하면 돼.</span>${busy?`<div class="v35m-loading"><div class="v35m-loading-card"><div class="spinner"></div><b>${escapeHtml(s.statusMessage||'처리 중…')}</b></div></div>`:''}</div>`}
                 </div>
                 ${s.error ? `<div class="v35m-error">${escapeHtml(s.error)}</div>` : ''}
@@ -13207,8 +11485,10 @@ ${JSON.stringify(safePlan, null, 2)}
             </div>
         </div>`;
 
+        placeV35MobileImage(app.querySelector('#v35m-main-img'), s.currentImageSrc, keep?.img);
         renderV35MobileStudioTab(root, tab);
         bindV35MobileStudio(root);
+        restoreV35MobileStudioView(app, keep, tab);
         renderV35MobileHistory(root);
     }
 
@@ -13335,6 +11615,8 @@ ${JSON.stringify(safePlan, null, 2)}
             if (topQuality && q) topQuality.value = g.v5QualityPreset;
             const topUc = cspV35Root?.querySelector('#v35m-q-uc');
             if (topUc && u && previousModel === g.model) topUc.value = String(g.ucPreset);
+            const topSize = cspV35Root?.querySelector('#v35m-q-size');
+            if (topSize && (w || h)) topSize.value = v35MobileSizeValue(g);
         };
         body.querySelectorAll('#v35-g-model,#v35-g-width,#v35-g-height,#v35-g-quality,#v35-g-uc,#v35-g-seed,#v35-g-steps,#v35-g-scale,#v35-g-sampler,#v35-g-noise,#v35-g-rescale').forEach(el => el.addEventListener('change', () => {
             const modelChanged = el.id === 'v35-g-model';
@@ -13342,6 +11624,9 @@ ${JSON.stringify(safePlan, null, 2)}
             if (modelChanged) {
                 s.generation.ucPreset = getNaiUcPresetForModel(s.generation, s.generation.model);
                 renderV35Studio();
+            } else {
+                // 크기·스텝 등이 바뀌면 생성 버튼의 예상 Anlas를 바로 맞춘다(다음 전체 렌더까지 옛 값이 보였다).
+                patchV35MobileQuotaViews();
             }
         }));
         body.querySelector('#v35-g-quality-toggle')?.addEventListener('click', () => { s.generation.qualityToggle = !s.generation.qualityToggle; renderV35Studio(); });
@@ -13352,7 +11637,7 @@ ${JSON.stringify(safePlan, null, 2)}
         cspComicBindIllustrationShortcut(root);
         const s = cspV35Session;
         if (!s) return;
-        root.querySelector('#v35m-close')?.addEventListener('click', exitV35Studio);
+        root.querySelector('#v35m-close')?.addEventListener('click', () => { clearV35StudioImageCache(s); exitV35Studio(); });
         root.querySelector('#v35m-gallery-open')?.addEventListener('click', openV35Gallery);
         root.querySelector('#v35m-settings-open')?.addEventListener('click', () => openV35Settings(''));
         root.querySelector('#v35m-quota-chip')?.addEventListener('click', openV35MobileQuotaSheet);
@@ -13398,16 +11683,17 @@ ${JSON.stringify(safePlan, null, 2)}
         row.innerHTML = `<span class="badge">🎞 ${history.length}장</span>` + history.map((_,i)=>`<div class="v35m-hitem"><button class="v35m-hthumb ${i===current?'active':''}" data-mhist="${i}"><span class="help">…</span></button><button class="v35m-hmenu" data-mhist-menu="${i}" aria-label="기록 메뉴">⋯</button></div>`).join('');
         row.querySelectorAll('[data-mhist]').forEach(btn => btn.addEventListener('click', async () => {
             const i = Number(btn.dataset.mhist);
-            try { s.currentImageSrc = await getRecordImageSrc(rec,i); s.currentHistoryIndex=i; renderV35Studio(); }
+            try { s.currentImageSrc = await getV35StudioImageSrc(rec,i); s.currentHistoryIndex=i; renderV35Studio(); }
             catch(err){ v35Toast('이미지 로드 실패: '+(err?.message||err),'error',0); }
         }));
         row.querySelectorAll('[data-mhist-menu]').forEach(btn => {
             const i = Number(btn.dataset.mhistMenu);
             btn.addEventListener('click', e => { e.stopPropagation(); openV35MobileHistorySheet(i); });
         });
-        await Promise.all(history.map(async(_,i)=>{
+        // 52px 기록 칸에는 원본 data URL(장당 1~2MB) 대신 갤러리와 같은 작은 썸네일을 속성으로 넣는다. 기록은 최대 3칸이라 모두 화면 안에 있어 지연 로드는 하지 않는다.
+        await Promise.all(history.map(async(x,i)=>{
             const btn=row.querySelector(`[data-mhist="${i}"]`); if(!btn)return;
-            try { const src=await getRecordImageSrc(rec,i); if(btn.isConnected) btn.innerHTML=`<img src="${escapeHtml(src)}">`; }
+            try { const src=await getGalleryThumbUrl(x?.imageId,()=>getRecordImageSrc(rec,i)); if(!btn.isConnected)return; if(!src){btn.textContent='×';return} const img=document.createElement('img'); img.src=src; img.decoding='async'; btn.replaceChildren(img); }
             catch(_){ if(btn.isConnected) btn.textContent='×'; }
         }));
     }
@@ -13434,9 +11720,9 @@ ${JSON.stringify(safePlan, null, 2)}
         const s=cspV35Session;
         if(!s?.messageKey)return;
         openV35MobileActionSheet({ title:`장면 기록 ${Number(index)+1}`, actions:[
-            {icon:'⛶',label:'크게 보기',run:async()=>{const rec=normalizeSceneRecordHistory(getSceneRecords()[s.messageKey],s.messageKey);const src=await getRecordImageSrc(rec,index);openV35Viewer({src,title:s.plan.sceneTitle||'Scene image',item:{messageKey:s.messageKey,record:rec,index,model:rec?.naiSettings?.model||v35Model()}})}},
-            {icon:'⬇',label:'다운로드',run:async()=>{const rec=normalizeSceneRecordHistory(getSceneRecords()[s.messageKey],s.messageKey);v35다운로드(await getRecordImageSrc(rec,index),s.plan.sceneTitle||'scene-image')}},
-            {icon:'🗑',label:'이 이미지 삭제',note:'되돌릴 수 없어',danger:true,run:async()=>{if(!confirm(`이 장면의 ${Number(index)+1}번째 이미지를 삭제할까요?`))return;await deleteGalleryHistoryImage(s.messageKey,index);const next=normalizeSceneRecordHistory(getSceneRecords()[s.messageKey],s.messageKey);if(next?.history?.length){s.currentHistoryIndex=clampHistoryIndex(next);s.currentImageSrc=await getRecordImageSrc(next,s.currentHistoryIndex)}else{s.currentHistoryIndex=null;s.currentImageSrc=''}renderV35Studio();}}
+            {icon:'⛶',label:'크게 보기',run:async()=>{const rec=normalizeSceneRecordHistory(getSceneRecords()[s.messageKey],s.messageKey);const src=await getV35StudioImageSrc(rec,index);openV35Viewer({src,title:s.plan.sceneTitle||'Scene image',item:{messageKey:s.messageKey,record:rec,index,model:rec?.naiSettings?.model||v35Model()}})}},
+            {icon:'⬇',label:'다운로드',run:async()=>{const rec=normalizeSceneRecordHistory(getSceneRecords()[s.messageKey],s.messageKey);v35다운로드(await getV35StudioImageSrc(rec,index),s.plan.sceneTitle||'scene-image')}},
+            {icon:'🗑',label:'이 이미지 삭제',note:'되돌릴 수 없어',danger:true,run:async()=>{if(!confirm(`이 장면의 ${Number(index)+1}번째 이미지를 삭제할까요?`))return;await deleteGalleryHistoryImage(s.messageKey,index);const next=normalizeSceneRecordHistory(getSceneRecords()[s.messageKey],s.messageKey);if(next?.history?.length){s.currentHistoryIndex=clampHistoryIndex(next);s.currentImageSrc=await getV35StudioImageSrc(next,s.currentHistoryIndex)}else{s.currentHistoryIndex=null;s.currentImageSrc=''}renderV35Studio();}}
         ]});
     }
 
@@ -13488,12 +11774,15 @@ ${JSON.stringify(safePlan, null, 2)}
         const original=chars.map(c=>c.center?{...c.center}:null);let active=0;
         const pane=document.createElement('div');pane.className='v35m-fullscreen';pane.dataset.positionEditor='1';
         const render=()=>{
+            const prevImg=pane.querySelector('img[data-pos-img]');
             const activeChar=chars[active],center=normalizeNaiCharacterCenter(activeChar.center,model)||makeDefaultCenter(active,chars.length);
             pane.innerHTML=`<div class="v35m-top"><button class="btn" id="v35m-pos-cancel">취소</button><div class="grow"></div><div class="v35m-title">화면 위치</div><div class="grow"></div><button class="btn primary" id="v35m-pos-done">완료</button></div><div class="v35m-scroll"><div class="v35m-quick" style="padding:0;background:transparent;border:0">${chars.map((c,i)=>`<button class="v35m-chipbtn ${i===active?'accent':''}" data-pos-char="${i}">${i+1} ${escapeHtml(c.name||'Character')}</button>`).join('')}</div>${grid5?renderGrid5():renderFree()}<div class="v35m-row"><div class="v35m-row-main"><b>${escapeHtml(activeChar.name||`Character ${active+1}`)}</b><small>${center.x.toFixed(2)} / ${center.y.toFixed(2)}</small></div>${!grid5?`<div class="v35m-pad"><span></span><button data-nudge="up">↑</button><span></span><button data-nudge="left">←</button><button data-nudge="center">·</button><button data-nudge="right">→</button><span></span><button data-nudge="down">↓</button><span></span></div>`:''}</div><div class="help">${grid5?'V4.5는 선택한 인물의 칸을 눌러 지정해.':'마커를 끌어서 옮기고, 손가락에 가리면 방향키로 0.01씩 미세 조정해.'}</div><div class="v35m-grid2"><button class="btn" id="v35m-pos-center">선택 인물 가운데로</button><button class="btn" id="v35m-pos-reset">전체 초기화</button></div></div>`;
+            // 배경 이미지는 수 MB data URL이라 HTML에 넣지 않고, 다시 그릴 때(탭·방향키·드래그 끝마다) 이전 <img>를 옮겨 쓴다.
+            placeV35MobileImage(pane.querySelector('img[data-pos-img]'),s.currentImageSrc,prevImg);
             bind();
         };
         const renderGrid5=()=>{const placements=new Map();chars.forEach((c,i)=>{const cc=normalizeNaiCharacterCenter(c.center,model)||makeDefaultCenter(i,chars.length),col=Math.max(0,Math.min(4,Math.round(cc.x*4))),row=Math.max(0,Math.min(4,Math.round(cc.y*4))),k=`${row}:${col}`;placements.set(k,[...(placements.get(k)||[]),i]);});return `<div class="v35m-card"><div class="v35m-label">V4.5 · 5×5 격자</div><div class="v35m-grid5">${Array.from({length:25},(_,n)=>{const row=Math.floor(n/5),col=n%5,ids=placements.get(`${row}:${col}`)||[],activeHere=ids.includes(active);return `<button class="${activeHere?'active':''}" data-grid-cell="${n}">${ids.length?ids.map(i=>i+1).join('·'):''}</button>`}).join('')}</div></div>`};
-        const renderFree=()=>`<div class="v35m-pos-stage" id="v35m-pos-stage" style="--iw:${Number(s.generation.width)||832};--ih:${Number(s.generation.height)||1216}">${s.currentImageSrc?`<img src="${escapeHtml(s.currentImageSrc)}">`:''}${chars.map((c,i)=>{const cc=normalizeNaiCharacterCenter(c.center,model)||makeDefaultCenter(i,chars.length);return `<button class="v35m-pos-dot ${i===active?'':'ghost'}" data-pos-dot="${i}" style="left:${cc.x*100}%;top:${cc.y*100}%">${i+1}</button>`}).join('')}</div>`;
+        const renderFree=()=>`<div class="v35m-pos-stage" id="v35m-pos-stage" style="--iw:${Number(s.generation.width)||832};--ih:${Number(s.generation.height)||1216}">${s.currentImageSrc?'<img data-pos-img>':''}${chars.map((c,i)=>{const cc=normalizeNaiCharacterCenter(c.center,model)||makeDefaultCenter(i,chars.length);return `<button class="v35m-pos-dot ${i===active?'':'ghost'}" data-pos-dot="${i}" style="left:${cc.x*100}%;top:${cc.y*100}%">${i+1}</button>`}).join('')}</div>`;
         const setCenter=(idx,x,y)=>{x=Math.max(0,Math.min(1,x));y=Math.max(0,Math.min(1,y));if(grid5){x=Math.round(x*4)/4;y=Math.round(y*4)/4}chars[idx].center={x:Number(x.toFixed(3)),y:Number(y.toFixed(3))};s.generation.useCoords=true;s.characterDirty=true;};
         const bind=()=>{
             pane.querySelector('#v35m-pos-cancel').onclick=()=>{chars.forEach((c,i)=>{if(original[i])c.center={...original[i]};else delete c.center});pane.remove();renderV35Studio()};
@@ -13542,11 +11831,9 @@ ${JSON.stringify(safePlan, null, 2)}
         if (ui.sort === 'oldest') items.reverse();
 
         const imageIdOf = x => String(x?.record?.history?.[x.index]?.imageId || '');
-        const previousImages = new Map();
-        (root.__v35Items || []).forEach((item, i) => {
-            const id = imageIdOf(item), img = id && grid.querySelector(`[data-mg-view="${i}"] > img`);
-            if (img) previousImages.set(id, img);
-        });
+        // 다시 그리기 전에 이전 그리드의 썸네일 관찰자를 끊는다(같은 속성을 closeV35도 끊는다).
+        try { root.__v35ThumbObserver?.disconnect(); } catch (_) {}
+        root.__v35ThumbObserver = null;
         count.textContent = String(items.length);
         root.__v35Items = items;
         if (!items.length) {
@@ -13574,34 +11861,51 @@ ${JSON.stringify(safePlan, null, 2)}
                 if (isCurrent()) openV35MobileGallerySheet(item);
             });
         });
-        await Promise.all(items.map(async (item, i) => {
-            const button = buttons[i], placeholder = button.querySelector('.help');
-            const reuse = previousImages.get(imageIdOf(item));
-            if (reuse) {
-                previousImages.delete(imageIdOf(item));
-                reuse.alt = item.title;
-                placeholder.replaceWith(reuse);
-                return;
-            }
+        // 카드에는 원본 data URL 대신 360px 썸네일 object URL을 쓰고, 화면 근처에 온 카드만 만든다(동시 생성은 getGalleryThumbUrl이 3장으로 묶는다). 이미 캐시된 썸네일은 바로 붙인다.
+        const loadThumb = async button => {
+            if (button.dataset.mgLoaded) return;
+            button.dataset.mgLoaded = '1';
+            const item = items[Number(button.dataset.mgView)], placeholder = button.querySelector('.help');
+            if (!item || !placeholder) return;
             try {
-                const src = await getRecordImageSrc(item.record, item.index);
+                const src = await getGalleryThumbUrl(imageIdOf(item), () => getRecordImageSrc(item.record, item.index));
                 if (!isCurrent() || !button.isConnected) return;
+                if (!src) { placeholder.textContent = '불러오기 실패'; return; }
                 const img = document.createElement('img');
                 img.src = src;
                 img.alt = item.title;
+                img.decoding = 'async';
                 // Keep the existing menu node and its single event handler.
                 placeholder.replaceWith(img);
             } catch (_) {
                 if (isCurrent() && button.isConnected) placeholder.textContent = '불러오기 실패';
             }
-        }));
+        };
+        if (typeof IntersectionObserver === 'function') {
+            const io = new IntersectionObserver(entries => {
+                if (!isCurrent()) { io.disconnect(); return; }
+                entries.forEach(entry => {
+                    if (!entry.isIntersecting) return;
+                    io.unobserve(entry.target);
+                    loadThumb(entry.target);
+                });
+            }, { root: grid, rootMargin: '320px 0px' });
+            buttons.forEach(button => {
+                const id = imageIdOf(items[Number(button.dataset.mgView)]);
+                if (id && cspThumbUrlCache.has(id)) loadThumb(button);
+                else io.observe(button);
+            });
+            root.__v35ThumbObserver = io;
+        } else {
+            await Promise.all(buttons.map(loadThumb));
+        }
     }
 
     function openV35MobileGallerySheet(item) {
         if(!item)return;
         openV35MobileActionSheet({title:item.title,actions:[
             {icon:'🎨',label:'스튜디오에서 열기',run:()=>openV35StudioFromRecord(item.messageKey,item.index)},
-            {icon:'↩',label:'원래 메시지로 이동',run:()=>{closeV35();const key=CSS.escape(item.messageKey);const trigger=document.querySelector(`.csp-message-generate-btn[data-message-key="${key}"],.csp-message-speed-btn[data-message-key="${key}"]`);const el=trigger?(getMessageGroupContainer(trigger)||trigger.closest('[data-message-group-id]')):null;if(!el)throw new Error('원래 메시지를 현재 화면에서 찾지 못했어.');el.scrollIntoView({behavior:'smooth',block:'center'});el.animate?.([{background:'rgba(167,139,250,.18)'},{background:'transparent'}],{duration:1200})}},
+            {icon:'↩',label:'원래 메시지로 이동',run:()=>{closeV35();const key=CSS.escape(item.messageKey);const trigger=document.querySelector(`.csp-message-generate-btn[data-message-key="${key}"],.csp-message-speed-btn[data-message-key="${key}"]`);const el=getMessageGroupContainer(trigger);if(!el)throw new Error('원래 메시지를 현재 화면에서 찾지 못했어.');el.scrollIntoView({behavior:'smooth',block:'center'});el.animate?.([{background:'rgba(167,139,250,.18)'},{background:'transparent'}],{duration:1200})}},
             {icon:'⬇',label:'다운로드',run:async()=>v35다운로드(await getRecordImageSrc(item.record,item.index),item.title)},
             {icon:'🗑',label:'삭제',note:'되돌릴 수 없어',danger:true,run:async()=>{if(!confirm(`"${item.title}" 이미지를 삭제할까요?`))return;await deleteGalleryHistoryImage(item.messageKey,item.index);openV35Gallery();}}
         ]});
@@ -13614,16 +11918,16 @@ ${JSON.stringify(safePlan, null, 2)}
         host.querySelector('.v35m-viewer')?.remove();
         const historyItem=item?.record?.history?.[item?.index];
         const settings=item?.record?.naiSettings||{};
-        const state={scale:1,x:0,y:0,pointers:new Map(),panStart:null,pinchDist:0,pinchScale:1,standalone,lastTap:0};cspV35Viewer=state;
+        const state={scale:1,x:0,y:0,pointers:new Map(),panStart:null,pinchDist:0,pinchScale:1,lastTap:0};
         const view=document.createElement('div');view.className='v35m-viewer';
         const list=host.__v35Items||[];const listIndex=item?list.findIndex(x=>x.messageKey===item.messageKey&&x.index===item.index):-1;
-        view.innerHTML=`<div class="v35m-top"><button class="iconbtn" id="v35m-v-close">×</button><div class="v35m-title">${escapeHtml(title)}</div>${listIndex>=0?`<span class="help">${listIndex+1}/${list.length}</span>`:''}<div class="grow"></div><button class="iconbtn" id="v35m-v-download">↓</button><button class="iconbtn" id="v35m-v-more">⋯</button></div><div class="v35m-view-main" id="v35m-view-main"><img class="v35m-view-img" id="v35m-v-img" src="${escapeHtml(src)}"></div><div class="v35m-view-footer"><div class="v35m-quick" style="padding:0;background:transparent;border:0"><span class="chip">${escapeHtml(v35MobileModelLabel(item?.model||settings.model||v35Model()))}</span>${historyItem?.seed||settings.seed?`<button class="chip" id="v35m-v-seed">seed ${escapeHtml(String(historyItem?.seed||settings.seed))}</button>`:''}${settings.width&&settings.height?`<span class="chip">${Number(settings.width)}×${Number(settings.height)}</span>`:''}</div><div class="v35m-view-actions">${item?'<button class="btn" id="v35m-v-studio">이 설정 불러오기</button>':''}<button class="btn primary" id="v35m-v-reroll" ${item?'':'disabled'}>🎲 리롤</button></div></div>`;
+        view.innerHTML=`<div class="v35m-top"><button class="iconbtn" id="v35m-v-close">×</button><div class="v35m-title">${escapeHtml(title)}</div>${listIndex>=0?`<span class="help">${listIndex+1}/${list.length}</span>`:''}<div class="grow"></div><button class="iconbtn" id="v35m-v-download">↓</button><button class="iconbtn" id="v35m-v-more">⋯</button></div><div class="v35m-view-main" id="v35m-view-main"><img class="v35m-view-img" id="v35m-v-img"></div><div class="v35m-view-footer"><div class="v35m-quick" style="padding:0;background:transparent;border:0"><span class="chip">${escapeHtml(v35MobileModelLabel(item?.model||settings.model||v35Model()))}</span>${historyItem?.seed||settings.seed?`<button class="chip" id="v35m-v-seed">seed ${escapeHtml(String(historyItem?.seed||settings.seed))}</button>`:''}${settings.width&&settings.height?`<span class="chip">${Number(settings.width)}×${Number(settings.height)}</span>`:''}</div><div class="v35m-view-actions">${item?'<button class="btn" id="v35m-v-studio">이 설정 불러오기</button>':''}<button class="btn primary" id="v35m-v-reroll" ${item?'':'disabled'}>🎲 리롤</button></div></div>`;
         host.appendChild(view);
-        const close=()=>{if(standalone)closeV35();else{view.remove();cspV35Viewer=null}};
+        const close=()=>{if(standalone)closeV35();else view.remove()};
         const img=view.querySelector('#v35m-v-img'),main=view.querySelector('#v35m-view-main');
+        img.src=src; // 원본(수 MB data URL)은 HTML 문자열에 넣지 않고 속성으로 넣는다.
         const apply=()=>{img.style.transform=`translate(${state.x}px,${state.y}px) scale(${state.scale})`};
-        const reset=()=>{state.scale=1;state.x=state.y=0;apply()};
-        const navigate=async dir=>{if(listIndex<0||state.scale>1.01)return;const nextIndex=listIndex+dir;if(nextIndex<0||nextIndex>=list.length)return;const next=list[nextIndex];try{const nextSrc=await getRecordImageSrc(next.record,next.index);openV35ViewerMobile({src:nextSrc,title:next.title,item:next})}catch(err){v35Toast('이미지 로드 실패: '+(err?.message||err),'error',0)}};
+        const navigate=async dir=>{if(listIndex<0||state.scale>1.01)return;const nextIndex=listIndex+dir;if(nextIndex<0||nextIndex>=list.length)return;const next=list[nextIndex];try{const nextSrc=await getRecordImageSrc(next.record,next.index);/* 읽는 사이 닫혔거나 이미 넘긴 뷰어면 다시 열지 않는다 */if(!view.isConnected)return;openV35ViewerMobile({src:nextSrc,title:next.title,item:next})}catch(err){if(view.isConnected)v35Toast('이미지 로드 실패: '+(err?.message||err),'error',0)}};
         view.querySelector('#v35m-v-close').onclick=close;view.querySelector('#v35m-v-download').onclick=()=>v35다운로드(src,title);view.querySelector('#v35m-v-studio')?.addEventListener('click',()=>openV35StudioFromRecord(item.messageKey,item.index));view.querySelector('#v35m-v-reroll')?.addEventListener('click',async()=>{if(!item)return;const result=await runCspQuickReroll({messageKey:item.messageKey,index:item.index,button:view.querySelector('#v35m-v-reroll')});if(result){src=result.imageUrl;view.querySelector('#v35m-v-img').src=src;const rec=getSceneRecords()[item.messageKey];if(rec)item.index=clampHistoryIndex(rec);}});
         view.querySelector('#v35m-v-seed')?.addEventListener('click',async()=>{await copyTextToClipboard(String(historyItem?.seed||settings.seed));v35Toast('seed 복사 완료','success')});
         view.querySelector('#v35m-v-more').onclick=()=>openV35MobileActionSheet({title,actions:[{icon:'⬇',label:'다운로드',run:()=>v35다운로드(src,title)},...(item?[{icon:'🎨',label:'스튜디오에서 열기',run:()=>openV35StudioFromRecord(item.messageKey,item.index)}]:[])]});
@@ -13634,8 +11938,7 @@ ${JSON.stringify(safePlan, null, 2)}
         main.addEventListener('pointerup',end);main.addEventListener('pointercancel',end);
     }
 
-    function v35MobileSettingsMeta(page) {
-        const g=getGlobalSettings(),r=getRoomSettings();
+    function v35MobileSettingsMeta(page,g=getGlobalSettings(),r=getRoomSettings()) {
         if(page==='connection'){const p=normalizeSceneAnalyzerProvider(g.geminiProvider);return p==='deepseek'?`DeepSeek · ${g.deepseekApiKey?'설정됨':'미설정'}`:p==='firebase'?`Firebase · ${g.firebaseConfigJson?'설정됨':'미설정'}`:`Gemini · ${g.googleApiKey?'설정됨':'미설정'}`;}
         if(page==='characters')return `저장 슬롯 ${(r.characters||[]).length} · PC ${r.pcCharacter?.enabled?getPcModeLabel(r.pcCharacter?.mode):'꺼짐'}`;
         if(page==='world')return '세계관 · 시각 설정 · 현재 상태';
@@ -13648,8 +11951,9 @@ ${JSON.stringify(safePlan, null, 2)}
         if(page==='characters')return openV35MobileCharacterSettings();
         const {root,app}=mountV35Mobile('settings');root.dataset.view='settings';root.dataset.settingsPage=page||'';
         if(!page){
+            const g=getGlobalSettings(),r=getRoomSettings();
             const pages=[['connection','🔌','연결'],['characters','🎭','캐릭터'],['world','🌍','세계관 & 시각 설정'],['generation','🎨','생성'],['storage','💾','저장'],['advanced','🛠','고급']];
-            app.innerHTML=`<div class="v35m-top"><button class="iconbtn" id="v35m-s-back">←</button><div class="v35m-title">설정</div><div class="grow"></div><span class="badge ok">● 자동 저장</span></div><div class="v35m-settings-home"><div class="v35m-settings-list">${pages.map(([id,ic,label])=>`<button class="v35m-row" data-msettings="${id}"><span>${ic}</span><div class="v35m-row-main"><b>${label}</b><small>${escapeHtml(v35MobileSettingsMeta(id))}</small></div><span>›</span></button>`).join('')}</div></div>`;
+            app.innerHTML=`<div class="v35m-top"><button class="iconbtn" id="v35m-s-back">←</button><div class="v35m-title">설정</div><div class="grow"></div><span class="badge ok">● 자동 저장</span></div><div class="v35m-settings-home"><div class="v35m-settings-list">${pages.map(([id,ic,label])=>`<button class="v35m-row" data-msettings="${id}"><span>${ic}</span><div class="v35m-row-main"><b>${label}</b><small>${escapeHtml(v35MobileSettingsMeta(id,g,r))}</small></div><span>›</span></button>`).join('')}</div></div>`;
             root.querySelector('#v35m-s-back').onclick=()=>cspV35Session?renderV35Studio():closeV35();root.querySelectorAll('[data-msettings]').forEach(b=>b.onclick=()=>openV35Settings(b.dataset.msettings));return;
         }
         const labels={connection:'연결',world:'세계관 & 시각 설정',generation:'생성',storage:'저장',advanced:'고급'};
@@ -13769,6 +12073,10 @@ ${JSON.stringify(safePlan, null, 2)}
     let cspComicSession = null;
     let cspComicHost = null;
     let cspComicThemeCleanup = null;
+
+    let cspComicThemeCssCache = '';
+
+    let cspComicResultImg = null;
 
     function cspComicClone(value) { return JSON.parse(JSON.stringify(value)); }
     function cspComicEqual(a,b) {
@@ -13965,8 +12273,10 @@ ${JSON.stringify(safePlan, null, 2)}
             finalNegative:source.finalNegative||source.baseNegative||'',charPrompts:cspComicClone(source.charPrompts||[]),referenceInfo:null};
     }
     function cspComicStoredPlan(s) {
+        // 기록에는 검증·재생성에 쓰는 입력만 남긴다. 최근 대화·설정집·상태는 콘티를 다시 만들 때 새로 모은다.
+        const {recentMessages,worldVisualProfile,relevantVisualLore,stateBeforeTarget,...input}=s.input||{};
         return {...cspComicCore(s.plan),sceneTitle:s.plan.titleKo,insertAfterParagraph:s.insertAfterParagraph,
-            comicEditor:{options:cspComicClone(s.options),registry:cspComicClone(s.registry),input:cspComicClone(s.input),fixedPositive:s.fixedPositive,fixedNegative:s.fixedNegative,locked:[...s.locked],targetText:s.targetText}};
+            comicEditor:{options:cspComicClone(s.options),registry:cspComicClone(s.registry),input:s.input?cspComicClone(input):null,fixedPositive:s.fixedPositive,fixedNegative:s.fixedNegative,locked:[...s.locked],targetText:s.targetText}};
     }
     async function cspComicAnalyze(s, selectedId='') {
         cspComicTargetValid(s);
@@ -14049,13 +12359,17 @@ ${JSON.stringify(safePlan, null, 2)}
         if(s.busy)return;
         s.busy=true;s.error='';s.notice=message;s.controller=new AbortController();cspComicRender(s);
         try {await task();} catch(err) {s.error=s.controller.signal.aborted?'작업을 취소했어요.':String(err.message||err);}
-        finally {s.busy=false;s.controller=null;if(cspComicSession===s)cspComicRender(s);}
+        finally {s.busy=false;s.controller=null;if(cspComicSession===s)cspComicRender(s);else{s.markdown=null;s.bubble=null;}}
     }
     function cspComicClose() {
         cspComicThemeCleanup?.();cspComicThemeCleanup=null;
         if(cspComicSession?.busy) cspComicSession.controller?.abort();
-        if(cspComicSession)cspComicDrafts.set(`${cspComicSession.roomId}:${cspComicSession.messageKey}`,cspComicSession);
-        cspComicHost?.remove();cspComicHost=null;cspComicSession=null;
+        if(cspComicSession){
+            cspComicDrafts.set(`${cspComicSession.roomId}:${cspComicSession.messageKey}`,cspComicSession);
+            // 닫힌 초안은 메시지 DOM을 붙잡지 않는다. 다시 열 때 호출부가 markdown/bubble을 새로 넘긴다(작업 중이면 cspComicRun이 끝난 뒤 비운다).
+            if(!cspComicSession.busy){cspComicSession.markdown=null;cspComicSession.bubble=null;}
+        }
+        cspComicHost?.remove();cspComicHost=null;cspComicSession=null;cspComicResultImg=null;
     }
     function openCspComicStudio({bubble=null,markdown=null,messageKey='',source=null,imageSrc=''}) {
         cspComicClose();
@@ -14091,7 +12405,7 @@ ${JSON.stringify(safePlan, null, 2)}
         if(source.plan?.outputKind!=='comic')return false;
         const btn=document.querySelector(`.csp-message-comic-btn[data-message-key="${CSS.escape(messageKey)}"]`);
         const group=btn?getMessageGroupContainer(btn):null;
-        const markdown=group?getDirectMarkdown(group):btn?findPreviousMarkdown(btn.closest('.csp-inline-action-footer')):null;
+        const markdown=group?getDirectMarkdown(group):null;
         openCspComicStudio({messageKey,source,markdown,bubble:group||markdown,imageSrc:await getRecordImageSrc(rec)});
         return true;
     }
@@ -14107,10 +12421,6 @@ ${JSON.stringify(safePlan, null, 2)}
         btn.disabled=!cspV35Session?.markdown||!['idle','ready'].includes(cspV35Session?.status);
         btn.onclick=()=>{const s=cspV35Session;if(!s?.markdown)return;const args={bubble:s.targetBubble,markdown:s.markdown};closeV35();openCspComicStudio(args);};
     }
-    function cspComicSelect(id,value,choices) {
-        return `<select id="${id}">${Object.entries(choices).map(([k,v])=>`<option value="${escapeHtml(k)}" ${String(value)===k?'selected':''}>${escapeHtml(v)}</option>`).join('')}</select>`;
-    }
-    const CSP_COMIC_MOBILE_UI = true;
     // Comic studio view ported from the supplied Claude HTML. No preview data or simulated API calls.
     const cspComicUi = (()=>{
     const esc=v=>escapeHtml(String(v??''));
@@ -14118,12 +12428,11 @@ ${JSON.stringify(safePlan, null, 2)}
     const LAYOUTS=CSP_COMIC_LAYOUTS,LAYOUT_LABELS=CSP_COMIC_LAYOUT_LABELS;
     const SHOT={wide:'원경',medium:'중경',close:'근접',detail:'디테일',over_shoulder:'어깨 너머',pov:'시점'};
 const KIND={speech:'대사',thought:'속마음',narration:'내레이션',sfx:'효과음'};
-const KIND_EN={speech:'speech balloon',thought:'thought balloon',narration:'narration box',sfx:'sound effect'};
 const POS={left:'왼쪽',center:'가운데',right:'오른쪽',foreground:'앞',background:'뒤'};
 const ACT={explicit:'원문 연기',emotion:'감정 반영',neutral:'중립'};
 const SIZES=[['832x1216','세로','832 × 1216'],['1024x1024','정사각','1024 × 1024'],['1216x832','가로','1216 × 832']];
 
-    function sel(id,value,choices,cls='select'){return `<select class="${cls}" id="${id}">${Object.entries(choices).map(([k,v])=>`<option value="${esc(k)}" ${String(value)===k?'selected':''}>${esc(v)}</option>`).join('')}</select>`}
+    function sel(id,value,choices,cls='select'){return `<select class="${cls}" id="${id}">${opts(choices,value)}</select>`}
 function opts(choices,value){return Object.entries(choices).map(([k,v])=>`<option value="${esc(k)}" ${String(value)===k?'selected':''}>${esc(v)}</option>`).join('')}
 const sizeKey=g=>`${g.width}x${g.height}`;
 const isCustom=s=>s.comicCustomSize===true||!SIZES.some(x=>x[0]===sizeKey(s.generation));
@@ -14131,13 +12440,11 @@ function sizeOpts(s){const k=sizeKey(s.generation),c=isCustom(s);return SIZES.ma
 const nameOf=(s,id)=>s.registry.find(r=>r.characterId===id)?.name||id||'화자 없음';
 const nameIds=(s,str)=>String(str||'').replace(/\b(c\d+|pc)\b/g,id=>s.registry.find(r=>r.characterId===id)?.name||id);
 const textLimit=s=>s.generation.model===MODEL_CURATED?374:750;
-const samplerOpts=v35SamplerOptions;
-const noiseOpts=v35NoiseOptions;
 const quotaHtml=cspComicQuotaHtml;
-function statusOf(s,m){
+function statusOf(s){
   if(s.busy)return{tone:'busy',text:s.notice||'처리 중…'};
   if(s.needsReplan)return{tone:'warn',text:'● 옵션이 바뀌었어 · 콘티를 다시 만들어줘'};
-  if(s.error)return{tone:'err',text:m?'● 위 메시지를 확인해줘':'● 캔버스 아래 메시지를 확인해줘'};
+  if(s.error)return{tone:'err',text:'● 위 메시지를 확인해줘'};
   if(s.restoredOnly)return{tone:'',text:'기록에서 열었어 · 콘티 분석은 할 수 없어'};
   if(s.notice)return{tone:'',text:s.notice};
   if(s.promptOverride)return{tone:'accent',text:'● 프롬프트 직접 수정됨'};
@@ -14161,20 +12468,19 @@ function boardHtml(s){
   const p=s.plan,g=s.generation;
   return `<div class="board ${p.page.layout}" style="--iw:${g.width};--ih:${g.height};direction:${p.page.readingDirection==='rtl'?'rtl':'ltr'}">${p.panels.map((x,i)=>cellHtml(s,x,i)).join('')}</div>`;
 }
-function ghostHtml(s,m){
+function ghostHtml(s){
   const o=s.options,lay=o.layout!=='auto'?o.layout:({1:'single',2:'vertical2',3:'vertical3',4:'grid4'}[o.panelCount]||'vertical3'),g=s.generation;
-  return `<div class="board ghost ${lay}" style="--iw:${g.width};--ih:${g.height}" aria-hidden="true">${Array.from({length:LAYOUTS[lay]},(_,i)=>`<span class="cell"><span class="cell-head"><b class="cell-no">${i+1}</b></span></span>`).join('')}</div><div class="ghost-note"><b>대화에서 한 페이지로</b><span>${m?'아래 콘티 탭에서':'오른쪽에서'} 컷 수와 연출을 정하고 ‘콘티 만들기’를 눌러줘.</span><small>${o.layout==='auto'&&o.panelCount==='auto'?'자동이면 보통 2~4컷으로 나눠':'고른 배치의 모양이야'}</small></div>`;
+  return `<div class="board ghost ${lay}" style="--iw:${g.width};--ih:${g.height}" aria-hidden="true">${Array.from({length:LAYOUTS[lay]},(_,i)=>`<span class="cell"><span class="cell-head"><b class="cell-no">${i+1}</b></span></span>`).join('')}</div><div class="ghost-note"><b>대화에서 한 페이지로</b><span>아래 콘티 탭에서 컷 수와 연출을 정하고 ‘콘티 만들기’를 눌러줘.</span><small>${o.layout==='auto'&&o.panelCount==='auto'?'자동이면 보통 2~4컷으로 나눠':'고른 배치의 모양이야'}</small></div>`;
 }
-function canvasHtml(s,m){
+function canvasHtml(s){
   const hasImg=!!s.imageSrc,view=hasImg&&s.comicView!=='board'?'result':'board';
   const seg=hasImg?`<div class="viewseg" role="group" aria-label="캔버스 보기"><button type="button" data-cc-view="result" class="${view==='result'?'on':''}" aria-pressed="${view==='result'}">결과</button><button type="button" data-cc-view="board" class="${view==='board'?'on':''}" aria-pressed="${view==='board'}">콘티</button></div>`:'';
-  const inner=view==='result'?`<div class="canvas"><img class="result-img" src="${esc(s.imageSrc)}" alt="생성된 만화"><div class="canvas-tools"><button type="button" class="iconbtn glass" id="cc-download" title="PNG로 저장" aria-label="PNG로 저장">↓</button></div></div>`:s.plan?`<div class="canvas">${boardHtml(s)}</div>`:`<div class="canvas">${ghostHtml(s,m)}</div>`;
+  const inner=view==='result'?`<div class="canvas"><img class="result-img" alt="생성된 만화"><div class="canvas-tools"><button type="button" class="iconbtn glass" id="cc-download" title="PNG로 저장" aria-label="PNG로 저장">↓</button></div></div>`:s.plan?`<div class="canvas">${boardHtml(s)}</div>`:`<div class="canvas">${ghostHtml(s)}</div>`;
   const loading=s.busy?`<div class="loading" role="status"><div class="loading-card"><div class="spinner"></div><strong>${esc(s.notice)}</strong><small>아래 ‘작업 취소’로 멈출 수 있어</small></div></div>`:'';
-  const err=s.error&&!m?`<div class="canvas-error" role="alert">${esc(s.error)}</div>`:'';
-  return `<div class="canvas-wrap ${seg?'has-seg':''}">${seg}<div class="canvas-stage">${inner}</div>${loading}${err}</div>`;
+  return `<div class="canvas-wrap ${seg?'has-seg':''}">${seg}<div class="canvas-stage">${inner}</div>${loading}</div>`;
 }
 
-/* ───────── 탭 내용 (PC·모바일 공용) ───────── */
+/* ───────── 탭 내용 ───────── */
 function optionsHtml(s){
   const o=s.options;
   const fields=`<div class="grid2"><div class="field"><label for="cc-count">컷 수</label>${sel('cc-count',o.panelCount,{auto:'자동',1:'1컷',2:'2컷',3:'3컷',4:'4컷'})}</div><div class="field"><label for="cc-layout">배치</label>${sel('cc-layout',o.layout,LAYOUT_LABELS)}</div><div class="field"><label for="cc-language">만화 언어</label>${sel('cc-language',o.dialogueLanguage||'original',CSP_COMIC_LANGUAGES)}</div><div class="field"><label for="cc-direction">읽는 방향</label>${sel('cc-direction',o.readingDirection,{ltr:'왼쪽부터',rtl:'오른쪽부터'})}</div></div><div class="field"><label for="cc-request">연출 요청 <span class="opt">선택</span></label><textarea class="ta compact" id="cc-request" rows="3" placeholder="예: 첫 컷은 두 사람, 마지막 컷은 손에 초점. 속마음은 생략.">${esc(o.directionRequest)}</textarea></div>`;
@@ -14191,24 +12497,24 @@ function planHeadHtml(s){
   const warns=(p.warnings||[]).map(w=>{const i=p.panels.findIndex(x=>x.id===w.panelId);return `<div class="notebox warn">${i>=0?`<button type="button" class="linkbtn" data-cc-panel="${i}">${i+1}컷</button> `:''}${esc(w.messageKo)}</div>`}).join('');
   return `<section class="blk planhead"><div class="ph-row"><h3 title="${esc(p.titleKo)}">${esc(p.titleKo)}</h3><span class="badge ${ready&&!s.needsReplan?'ok':'warnb'}">${s.needsReplan?'다시 만들어야 함':ready?'생성 준비됨':'확인 필요'}</span></div><div data-cc-gauge class="gauge ${r>1?'over':r>.85?'near':''}" title="이미지에 들어갈 문구 글자 수. 넘으면 생성이 막혀."><span>이미지 속 문구</span><span class="gtrack"><i style="width:${Math.min(100,r*100).toFixed(1)}%"></i></span><b>${len} / ${limit}자</b></div>${cont.length?`<details class="fold"><summary class="slotline">컷끼리 유지할 것 <span class="badge">${cont.length}</span><span class="grow"></span><span class="chev" aria-hidden="true"></span></summary><div class="foldbody"><ul class="contlist">${cont.map(c=>`<li>${esc(nameIds(s,c))}</li>`).join('')}</ul></div></details>`:''}${warns}</section>`;
 }
-function panelCardHtml(s,p,i,m){
+function panelCardHtml(s,p,i){
   const locked=s.locked.has(p.id),on=s.comicSel===i;
   const lines=p.texts.length?p.texts.map((t,j)=>`<div class="tline"><div class="tl-head"><span class="kind ${t.kind}">${KIND[t.kind]}</span>${t.speakerId?`<span class="who">${esc(nameOf(s,t.speakerId))}</span>`:(t.kind==='speech'||t.kind==='thought')?'<span class="who">화자 없음</span>':''}${t.speakerVisibility==='off_panel'?'<span class="badge">화면 밖</span>':''}</div><textarea class="ta line" data-text="${i}:${j}" rows="2" aria-label="${i+1}컷 ${KIND[t.kind]}">${esc(t.renderText)}</textarea><div class="src">원문 · ${esc(t.sourceText)}</div></div>`).join(''):'<div class="slotline is-static">대사 없음 · 그림으로만 보여줘</div>';
-  const cast=p.cast.map((c,j)=>`<div class="castblk"><div class="cb-head"><span class="avatar">${esc(nameOf(s,c.characterId).slice(0,1))}</span><b>${esc(nameOf(s,c.characterId))}</b><span class="badge">${POS[c.position]||esc(c.position)}</span><span class="badge ${c.actingBasis==='explicit'?'accent':''}">${ACT[c.actingBasis]||esc(c.actingBasis)}</span></div><div class="field"><label>자세 · 표정 <span class="opt">NAI 영어</span></label><textarea class="ta compact mono" data-pose="${i}:${j}" rows="2" spellcheck="false">${esc(c.poseEn)}</textarea></div><div class="grid2 ${m?'stack':''}"><div class="field"><label>이 컷의 의상</label><input class="input" data-outfit="${i}:${j}" value="${esc(c.outfitDeltaEn||'')}" placeholder="비워두면 등록 의상"></div><div class="field"><label>소지품</label><input class="input" data-props="${i}:${j}" value="${esc((c.heldPropsEn||[]).join(', '))}" placeholder="쉼표로 구분"></div></div></div>`).join('');
+  const cast=p.cast.map((c,j)=>`<div class="castblk"><div class="cb-head"><span class="avatar">${esc(nameOf(s,c.characterId).slice(0,1))}</span><b>${esc(nameOf(s,c.characterId))}</b><span class="badge">${POS[c.position]||esc(c.position)}</span><span class="badge ${c.actingBasis==='explicit'?'accent':''}">${ACT[c.actingBasis]||esc(c.actingBasis)}</span></div><div class="field"><label>자세 · 표정 <span class="opt">NAI 영어</span></label><textarea class="ta compact mono" data-pose="${i}:${j}" rows="2" spellcheck="false">${esc(c.poseEn)}</textarea></div><div class="grid2 stack"><div class="field"><label>이 컷의 의상</label><input class="input" data-outfit="${i}:${j}" value="${esc(c.outfitDeltaEn||'')}" placeholder="비워두면 등록 의상"></div><div class="field"><label>소지품</label><input class="input" data-props="${i}:${j}" value="${esc((c.heldPropsEn||[]).join(', '))}" placeholder="쉼표로 구분"></div></div></div>`).join('');
   return `<article class="pcard ${on?'on':''} ${locked?'locked':''}" data-panel-card="${i}" aria-label="${i+1}컷"><div class="pc-head"><span class="pno">${i+1}</span><span class="badge">${SHOT[p.shot]||esc(p.shot)}</span><span class="grow"></span><label class="locktog ${locked?'on':''}" title="고정하면 콘티를 다시 만들어도 이 컷은 그대로야"><input type="checkbox" data-lock="${i}" ${locked?'checked':''}>${locked?'🔒 고정됨':'🔓 고정'}</label><button type="button" class="btn tiny" data-refine="${i}" ${locked||s.restoredOnly?'disabled':''} title="이 컷만 다시 분석">↻ 재분석</button></div><p class="beat">${esc(p.beatKo)}</p><p class="focus">${esc(p.focusKo)}</p><div class="tlines">${lines}</div><details class="fold"><summary class="slotline">구도 · 인물 · 근거<span class="grow"></span><span class="badge">인물 ${p.cast.length}</span><span class="badge">근거 ${p.basis.length}</span><span class="chev" aria-hidden="true"></span></summary><div class="foldbody"><div class="field"><label>컷 구도 <span class="opt">NAI 영어</span></label><textarea class="ta compact mono" data-frame="${i}" rows="3" spellcheck="false">${esc(p.frameEn)}</textarea></div>${cast}<div class="field"><label>PC 부분 묘사 <span class="opt">POV일 때 손 · 팔</span></label><textarea class="ta compact mono" data-fragment="${i}" rows="2" placeholder="필요 없으면 비워둬" spellcheck="false">${esc(p.pcFragmentEn)}</textarea></div>${p.basis.map(b=>`<blockquote class="quote">${esc(b.quote)}</blockquote>`).join('')}</div></details></article>`;
 }
-function storyHtml(s,m){
+function storyHtml(s){
   let h='';
   if(s.needsReplan)h+='<div class="notebox warn">연출 옵션이 바뀌었어. ‘콘티 다시 만들기’를 눌러야 생성할 수 있어.</div>';
   if(s.restoredOnly)h+='<div class="notebox">기록에서 연 만화야. 원래 메시지가 화면에 없어서 콘티 분석은 못 해. 대사 · 구도를 고쳐 다시 생성하는 건 돼.</div>';
   h+=optionsHtml(s);
   if(!s.plan)return h+guideHtml();
-  return h+planHeadHtml(s)+s.plan.panels.map((x,i)=>panelCardHtml(s,x,i,m)).join('');
+  return h+planHeadHtml(s)+s.plan.panels.map((x,i)=>panelCardHtml(s,x,i)).join('');
 }
 function jsonHtml(s){
   return `<p class="lead">구조를 직접 고칠 때만 써. 적용하면 형식 검사를 통과해야 반영돼.</p><textarea class="ta editor json" id="cc-json" spellcheck="false" aria-label="ComicPlan JSON">${esc(s.plan?JSON.stringify(s.plan,null,2):'')}</textarea><button type="button" class="btn" id="cc-json-apply" ${s.input?'':'disabled'}>JSON 적용</button>`;
 }
-function promptHtml(s,m){
+function promptHtml(s){
   let ps=null,err='';
   if(s.plan){try{ps=s.promptOverride||cspComicCompile(s)}catch(e){err=e.message}}
   let h='<p class="lead">콘티가 영어 프롬프트로 조립돼. 아래 문장을 직접 고치면 그대로 보내고, 콘티 · 인물 · 품질을 바꾸면 다시 조립돼.</p>';
@@ -14222,14 +12528,14 @@ function promptHtml(s,m){
     h+=`<section class="blk"><div class="blk-title">캐릭터 <span class="badge accent">${ps.charPrompts.length}</span></div>${ps.charPrompts.map((c,i)=>`<div class="field"><label>${esc(c.name)}</label><textarea class="ta default mono" data-charprompt="${i}" spellcheck="false">${esc(c.prompt)}</textarea></div>`).join('')}</section>`;
     h+='<div class="row2"><button type="button" class="btn" id="cc-recompile" title="직접 고친 내용을 버리고 콘티에서 다시 만들기">↺ 콘티에서 다시 조립</button><button type="button" class="btn" id="cc-copy">⧉ 프롬프트 복사</button></div>';
   }
-  if(m)h+=`<details class="fold"><summary class="slotline"><b>ComicPlan JSON 편집</b><span class="grow"></span><span class="chev" aria-hidden="true"></span></summary><div class="foldbody">${jsonHtml(s)}</div></details>`;
+  h+=`<details class="fold"><summary class="slotline"><b>ComicPlan JSON 편집</b><span class="grow"></span><span class="chev" aria-hidden="true"></span></summary><div class="foldbody">${jsonHtml(s)}</div></details>`;
   return h;
 }
 function generateHtml(s){
   const g=s.generation,k=sizeKey(g),c=isCustom(s),n=Math.max(1,s.input?.targetParagraphs?.length||100);
   return `<section class="blk"><div class="blk-title">이미지 크기</div><div class="chips">${SIZES.map(([key,name,detail])=>`<button type="button" class="chip ${key===k&&!c?'on':''}" data-cc-size="${key}" aria-pressed="${key===k&&!c}">${name} <small>${detail}</small></button>`).join('')}<button type="button" class="chip ${c?'on':''}" id="cc-size-custom" aria-pressed="${c}">직접 입력</button></div>${c?`<div class="grid2"><div class="field"><label>너비</label><input class="input" data-gen="width" type="number" min="64" max="4096" step="64" value="${g.width}"></div><div class="field"><label>높이</label><input class="input" data-gen="height" type="number" min="64" max="4096" step="64" value="${g.height}"></div></div><p class="help">64 단위로 맞춰줘.</p>`:''}</section>
 <section class="blk"><div class="blk-title">샘플링</div><div class="grid2"><div class="field"><label>스텝</label><input class="input" data-gen="steps" type="number" min="1" max="50" step="1" value="${g.steps}"></div><div class="field"><label for="cc-seed">Seed</label><input class="input" id="cc-seed" type="number" min="0" max="4294967295" value="${esc(g.seed)}" placeholder="비우면 랜덤"></div></div></section>
-<section class="blk"><details class="fold cc-advanced" ${s.comicAdvanced?'open':''}><summary class="slotline"><b>고급 설정</b><span class="optsum">가이던스 ${g.scale} · 리스케일 ${g.guidanceRescale}</span><span class="grow"></span><span class="chev" aria-hidden="true"></span></summary><div class="foldbody"><div class="grid2"><div class="field"><label>가이던스 (CFG)</label><input class="input" data-gen="scale" type="number" min="0" max="10" step="0.1" value="${g.scale}"></div><div class="field"><label>리스케일</label><input class="input" data-gen="guidanceRescale" type="number" min="0" max="1" step="0.01" value="${g.guidanceRescale}"></div></div><div class="grid2"><div class="field"><label for="cc-sampler">샘플러</label><select class="select" id="cc-sampler">${samplerOpts(g.sampler)}</select></div><div class="field"><label for="cc-noise">노이즈 스케줄</label><select class="select" id="cc-noise">${noiseOpts(g.noiseSchedule)}</select></div></div><p class="help">만화용 UC는 라이트로 고정돼.</p></div></details></section>
+<section class="blk"><details class="fold cc-advanced" ${s.comicAdvanced?'open':''}><summary class="slotline"><b>고급 설정</b><span class="optsum">가이던스 ${g.scale} · 리스케일 ${g.guidanceRescale}</span><span class="grow"></span><span class="chev" aria-hidden="true"></span></summary><div class="foldbody"><div class="grid2"><div class="field"><label>가이던스 (CFG)</label><input class="input" data-gen="scale" type="number" min="0" max="10" step="0.1" value="${g.scale}"></div><div class="field"><label>리스케일</label><input class="input" data-gen="guidanceRescale" type="number" min="0" max="1" step="0.01" value="${g.guidanceRescale}"></div></div><div class="grid2"><div class="field"><label for="cc-sampler">샘플러</label><select class="select" id="cc-sampler">${v35SamplerOptions(g.sampler)}</select></div><div class="field"><label for="cc-noise">노이즈 스케줄</label><select class="select" id="cc-noise">${v35NoiseOptions(g.noiseSchedule)}</select></div></div><p class="help">만화용 UC는 라이트로 고정돼.</p></div></details></section>
 <section class="blk"><div class="blk-title">메시지에 넣을 위치</div><div class="grid2"><div class="field"><label for="cc-insert">몇 번째 문단 뒤</label><input class="input" id="cc-insert" type="number" min="1" max="${n}" value="${s.insertAfterParagraph+1}"></div></div>${s.input?`<p class="help">이 답변은 문단이 ${n}개야. 처음엔 마지막 문단 뒤로 잡혀 있어.</p>`:''}</section>`;
 }
 function charactersHtml(s){
@@ -14241,50 +12547,30 @@ function instructionsHtml(){
   return `<p class="lead">만화에만 쓰는 지침이야. 삽화 지침과 따로 저장되고, JSON 출력 형식은 프로그램이 알아서 붙여.</p><section class="blk"><div class="field"><label for="cc-director">만화 디렉터 지침</label><textarea class="ta editor" id="cc-director" spellcheck="false">${esc(DIRECTOR)}</textarea></div><div class="field"><label for="cc-renderer">NAI V5 만화 작성 지침</label><textarea class="ta editor" id="cc-renderer" spellcheck="false">${esc(RENDERER)}</textarea></div></section><div class="row2"><button type="button" class="btn" id="cc-save-instructions">지침 저장</button><button type="button" class="btn danger" id="cc-reset-instructions">기본 지침으로 복원</button></div>`;
 }
 
-/* ───────── PC 화면 ───────── */
-function pcHtml(s){
-  const d=s.busy?'disabled':'',p=s.plan,st=statusOf(s,false),next=nextStep(s);
-  const tab=['story','prompt','generate'].includes(s.tab)?s.tab:'story';
-  const tabBtn=(k,label,extra='')=>`<button type="button" class="tab ${tab===k?'active':''}" data-tab="${k}" role="tab" aria-selected="${tab===k}" ${d}>${label}${extra}</button>`;
-  const body={story:storyHtml,prompt:promptHtml,generate:generateHtml}[tab](s,false);
-  const railBtn=(k,ic,t)=>`<button type="button" class="iconbtn ${s.tool===k?'active':''}" data-tool="${k}" ${d} title="${t}" aria-label="${t}" aria-pressed="${s.tool===k}">${ic}</button>`;
-  const toolTitle={characters:`👥 인물 <span class="badge accent">${s.registry.filter(r=>!r.isPc||r.enabled).length}</span>`,instructions:'📜 만화 지침',json:'⌘ ComicPlan JSON'}[s.tool];
-  const toolBody=s.tool==='characters'?charactersHtml(s):s.tool==='instructions'?instructionsHtml():s.tool==='json'?jsonHtml(s):'';
-  const film=p?`<span class="film-label">컷</span><div class="pchips">${p.panels.map((x,i)=>`<button type="button" class="pchip ${s.comicSel===i?'on':''}" data-cc-panel="${i}" title="${esc(x.beatKo)}"><b>${i+1}</b>${SHOT[x.shot]||esc(x.shot)}${s.locked.has(x.id)?' 🔒':''}${x.texts.length?`<span class="pc-t">💬${x.texts.length}</span>`:''}</button>`).join('')}</div><div class="grow"></div><span class="film-meta">${LAYOUT_LABELS[p.page.layout]} · ${p.page.readingDirection==='rtl'?'오른쪽부터':'왼쪽부터'} 읽기 · 배치는 실제 그림과 다를 수 있어</span>`:'<span class="film-label">컷</span><span class="help">콘티를 만들면 컷이 여기 나란히 보여.</span>';
-  return `<div class="veil"><div class="v35-app" role="dialog" aria-modal="true" aria-label="만화 스튜디오">
-<div class="v35-top"><div class="v35-brand"><svg class="comic-brand-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="16" rx="1.3"/><path d="M7.5 7.5h5a1.5 1.5 0 0 1 1.5 1.5v2a1.5 1.5 0 0 1-1.5 1.5h-2L8 14v-1.5h-.5A1.5 1.5 0 0 1 6 11V9a1.5 1.5 0 0 1 1.5-1.5Z"/><path d="m15 17 3-3m0 3h1"/></svg> Scene Painter <small>만화 스튜디오</small></div><span class="topsep" aria-hidden="true"></span><select class="select q" id="cc-model" aria-label="모델" ${d}>${opts({[MODEL_FULL]:'NAI V5 Full',[MODEL_CURATED]:'NAI V5 Curated'},s.generation.model)}</select><select class="select q" id="cc-quality" aria-label="V5 품질" ${d}>${opts({none:'품질 · 없음',light:'품질 · 라이트',standard:'품질 · 표준'},s.generation.v5QualityPreset)}</select><select class="select q" id="cc-q-size" aria-label="이미지 크기" ${d}>${sizeOpts(s)}</select><div class="grow"></div><button type="button" class="iconbtn close" id="cc-close" aria-label="닫기" title="닫기 (Esc)">×</button></div>
-<div class="studio ${s.tool?'panel':''}">
-<div class="rail">${railBtn('characters','👥','인물 외형')}${railBtn('instructions','📜','만화 지침')}<div class="grow"></div>${railBtn('json','⌘','ComicPlan JSON')}</div>
-${s.tool?`<aside class="context-panel" data-scroll="tool" aria-label="도구 패널"><div class="panel-head"><h3>${toolTitle}</h3><button type="button" class="iconbtn" style="margin-left:auto" data-close-tool aria-label="도구 패널 닫기">×</button></div><fieldset ${d}>${toolBody}</fieldset></aside>`:''}
-<main class="output">${canvasHtml(s,false)}<div class="film">${film}</div></main>
-<aside class="inspector"><div class="inspector-tabs" role="tablist">${tabBtn('story','<svg class="csp-comic-icon" style="display:inline-block;width:16px;height:16px;flex:0 0 16px;vertical-align:-3px;color:inherit" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="16" rx="1.3"/><path d="M7.5 7.5h5a1.5 1.5 0 0 1 1.5 1.5v2a1.5 1.5 0 0 1-1.5 1.5h-2L8 14v-1.5h-.5A1.5 1.5 0 0 1 6 11V9a1.5 1.5 0 0 1 1.5-1.5Z"/><path d="m15 17 3-3m0 3h1"/></svg> 콘티',p?` <span class="badge">${p.panels.length}</span>`:'')}${tabBtn('prompt','✍ 프롬프트',s.promptOverride?' <i class="dot" title="직접 수정됨"></i>':'')}${tabBtn('generate','⚙ 생성')}</div><div class="inspector-body" data-scroll="inspector"><fieldset ${d}>${body}</fieldset></div></aside>
-</div>
-<div class="bottom"><button type="button" class="btn" id="cc-illustration" ${s.busy||!s.markdown?'disabled':''} title="같은 답변으로 삽화 스튜디오 열기">🖼 삽화로 전환</button><button type="button" class="btn ghost" id="cc-defaults" ${d} title="지금 컷 수 · 배치 · 만화 언어 · 읽는 방향을 다음 만화의 기본값으로 저장">☆ 옵션을 기본값으로</button><span class="statusline ${st.tone}" role="status" title="${esc(st.text)}">${esc(st.text)}</span><div class="grow"></div>${quotaHtml(s)}${s.busy?'<button type="button" class="btn danger" id="cc-cancel">■ 작업 취소</button>':`<button type="button" class="btn ${next==='analyze'?'primary':''}" id="cc-analyze" ${s.restoredOnly?'disabled':''}>${p?'↻ 콘티 다시 만들기':'✦ 콘티 만들기'}</button><button type="button" class="btn ${next==='generate'?'primary':''}" id="cc-generate" ${canGenerate(s)?'':'disabled'}>${s.imageSrc?'<svg class="csp-comic-icon" style="display:inline-block;width:16px;height:16px;flex:0 0 16px;vertical-align:-3px;color:inherit" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="16" rx="1.3"/><path d="M7.5 7.5h5a1.5 1.5 0 0 1 1.5 1.5v2a1.5 1.5 0 0 1-1.5 1.5h-2L8 14v-1.5h-.5A1.5 1.5 0 0 1 6 11V9a1.5 1.5 0 0 1 1.5-1.5Z"/><path d="m15 17 3-3m0 3h1"/></svg> 만화 다시 생성':'<svg class="csp-comic-icon" style="display:inline-block;width:16px;height:16px;flex:0 0 16px;vertical-align:-3px;color:inherit" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="16" rx="1.3"/><path d="M7.5 7.5h5a1.5 1.5 0 0 1 1.5 1.5v2a1.5 1.5 0 0 1-1.5 1.5h-2L8 14v-1.5h-.5A1.5 1.5 0 0 1 6 11V9a1.5 1.5 0 0 1 1.5-1.5Z"/><path d="m15 17 3-3m0 3h1"/></svg> 만화 1장 생성'}</button>`}</div>
-</div></div>`;
-}
-
 /* ───────── 모바일 화면 ───────── */
 function mobileHtml(s){
-  const d=s.busy?'disabled':'',p=s.plan,st=statusOf(s,true),next=nextStep(s);
+  const d=s.busy?'disabled':'',p=s.plan,st=statusOf(s),next=nextStep(s);
   const tabs=[['story','콘티'],['characters','인물'],['prompt','프롬프트'],['generate','생성'],['instructions','지침']];
   const tab=tabs.some(x=>x[0]===s.tab)?s.tab:'story';
-  const body={story:storyHtml,characters:charactersHtml,prompt:promptHtml,generate:generateHtml,instructions:instructionsHtml}[tab](s,true);
+  const body={story:storyHtml,characters:charactersHtml,prompt:promptHtml,generate:generateHtml,instructions:instructionsHtml}[tab](s);
   const flag=s.needsReplan?'<span class="v35m-dirty warn">● 옵션 바뀜</span>':s.promptOverride?'<span class="v35m-dirty">● 수정됨</span>':'';
   return `<div class="v35m-top"><button type="button" class="iconbtn" id="cc-close" aria-label="닫기">←</button><div class="v35m-titles"><div class="v35m-title"><svg class="comic-brand-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="16" rx="1.3"/><path d="M7.5 7.5h5a1.5 1.5 0 0 1 1.5 1.5v2a1.5 1.5 0 0 1-1.5 1.5h-2L8 14v-1.5h-.5A1.5 1.5 0 0 1 6 11V9a1.5 1.5 0 0 1 1.5-1.5Z"/><path d="m15 17 3-3m0 3h1"/></svg>만화 스튜디오</div>${p?`<div class="v35m-sub">${esc(p.titleKo)}</div>`:''}</div>${flag}<div class="grow"></div>${quotaHtml(s)}<button type="button" class="iconbtn" id="cc-illustration" ${s.busy||!s.markdown?'disabled':''} aria-label="삽화로 전환" title="삽화로 전환">🖼</button></div>
-<div class="v35m-media">${canvasHtml(s,true)}${s.error?`<div class="v35m-error" role="alert">${esc(s.error)}</div>`:''}<div class="v35m-quick"><select class="v35m-chipselect accent" id="cc-model" aria-label="모델" ${d}>${opts({[MODEL_FULL]:'V5 Full',[MODEL_CURATED]:'V5 Curated'},s.generation.model)}</select><select class="v35m-chipselect" id="cc-quality" aria-label="품질" ${d}>${opts({none:'품질 없음',light:'라이트',standard:'표준'},s.generation.v5QualityPreset)}</select><select class="v35m-chipselect" id="cc-q-size" aria-label="크기" ${d}>${sizeOpts(s)}</select></div></div>
+<div class="v35m-media">${canvasHtml(s)}${s.error?`<div class="v35m-error" role="alert">${esc(s.error)}</div>`:''}<div class="v35m-quick"><select class="v35m-chipselect accent" id="cc-model" aria-label="모델" ${d}>${opts({[MODEL_FULL]:'V5 Full',[MODEL_CURATED]:'V5 Curated'},s.generation.model)}</select><select class="v35m-chipselect" id="cc-quality" aria-label="품질" ${d}>${opts({none:'품질 없음',light:'라이트',standard:'표준'},s.generation.v5QualityPreset)}</select><select class="v35m-chipselect" id="cc-q-size" aria-label="크기" ${d}>${sizeOpts(s)}</select></div></div>
 <div class="v35m-tabs"><div class="v35m-seg" role="tablist">${tabs.map(([k,l])=>`<button type="button" data-tab="${k}" class="${tab===k?'active':''}" role="tab" aria-selected="${tab===k}" ${d}>${l}${k==='prompt'&&s.promptOverride?'<i class="dot"></i>':''}</button>`).join('')}</div></div>
 <div class="v35m-scroll" data-scroll="m"><fieldset ${d}>${body}</fieldset></div>
 ${st.text&&!s.busy?`<div class="v35m-reason ${st.tone}">${esc(st.text)}</div>`:''}
 <div class="v35m-action">${s.busy?'<button type="button" class="btn danger wide" id="cc-cancel">■ 작업 취소</button>':`<button type="button" class="btn" id="cc-defaults" aria-label="현재 옵션을 기본값으로" title="옵션을 기본값으로">☆</button><button type="button" class="btn ${next==='analyze'?'primary':''}" id="cc-analyze" ${s.restoredOnly?'disabled':''}>${p?'↻ 콘티':'✦ 콘티 만들기'}</button><button type="button" class="btn ${next==='generate'?'primary':''}" id="cc-generate" ${canGenerate(s)?'':'disabled'}>${s.imageSrc?'<svg class="csp-comic-icon" style="display:inline-block;width:16px;height:16px;flex:0 0 16px;vertical-align:-3px;color:inherit" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="16" rx="1.3"/><path d="M7.5 7.5h5a1.5 1.5 0 0 1 1.5 1.5v2a1.5 1.5 0 0 1-1.5 1.5h-2L8 14v-1.5h-.5A1.5 1.5 0 0 1 6 11V9a1.5 1.5 0 0 1 1.5-1.5Z"/><path d="m15 17 3-3m0 3h1"/></svg> 다시 생성':'<svg class="csp-comic-icon" style="display:inline-block;width:16px;height:16px;flex:0 0 16px;vertical-align:-3px;color:inherit" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="16" rx="1.3"/><path d="M7.5 7.5h5a1.5 1.5 0 0 1 1.5 1.5v2a1.5 1.5 0 0 1-1.5 1.5h-2L8 14v-1.5h-.5A1.5 1.5 0 0 1 6 11V9a1.5 1.5 0 0 1 1.5-1.5Z"/><path d="m15 17 3-3m0 3h1"/></svg> 만화 1장 생성'}</button>`}</div>`;
 }
 
-    return {pcHtml,mobileHtml,canGenerate,textLength,textLimit,css:"/* [공통] */\n.cs{font:13px/20px var(--font);color:var(--tx);-webkit-font-smoothing:antialiased;text-align:left}\n.cs *,.cs *::before,.cs *::after{box-sizing:border-box}\n.cs button,.cs input,.cs select,.cs textarea{font:inherit;color:inherit;margin:0}\n.cs button{cursor:pointer}\n.cs button:disabled{opacity:.45;cursor:default}\n.cs fieldset{border:0;margin:0;padding:0;min-width:0}\n.cs p{margin:0}\n.cs .grow{flex:1}\n.cs :focus-visible{outline:2px solid var(--ac);outline-offset:1px}\n.cs .btn{height:30px;padding:0 10px;border:1px solid var(--line);border-radius:var(--r1);background:var(--sf2);color:var(--tx);display:inline-flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap;font-weight:500}\n.cs .btn:hover:not(:disabled){background:var(--sf3)}\n.cs .btn.ghost{background:transparent;border-color:transparent;color:var(--tx2)}\n.cs .btn.ghost:hover:not(:disabled){background:var(--hover);color:var(--tx)}\n.cs .btn.primary{height:36px;padding:0 16px;background:var(--acs);border-color:transparent;color:#fff;font-weight:600}\n.cs .btn.primary:hover:not(:disabled){background:var(--acs);filter:brightness(1.08)}\n.cs .btn.danger{background:transparent;color:var(--danger);border-color:var(--line)}\n.cs .btn.danger:hover:not(:disabled){background:var(--hover);border-color:var(--danger)}\n.cs .btn.tiny{height:24px;padding:0 8px;font-size:11px}\n.cs .iconbtn{width:30px;height:30px;padding:0;border:1px solid transparent;border-radius:var(--r1);background:transparent;color:var(--tx2);display:grid;place-items:center;font-size:15px;line-height:1}\n.cs .iconbtn:hover:not(:disabled){background:var(--hover);color:var(--tx)}\n.cs .iconbtn.active{background:var(--soft);color:var(--ac)}\n.cs .input,.cs .select,.cs .ta{width:100%;border:1px solid var(--line);border-radius:var(--r2);background:var(--sf2);outline:none;color:var(--tx)}\n.cs .input,.cs .select{height:34px;padding:0 10px}\n.cs .input:focus,.cs .select:focus,.cs .ta:focus{border-color:var(--ac)}\n.cs .input::placeholder,.cs .ta::placeholder{color:var(--tx3)}\n.cs .ta{display:block;padding:8px 10px;line-height:19px;resize:vertical}\n.cs .ta.compact{min-height:64px}\n.cs .ta.line{min-height:48px}\n.cs .ta.default{min-height:104px}\n.cs .ta.mono{font:11.5px/18px var(--mono)}\n.cs .ta.editor{min-height:200px;font:11px/18px var(--mono)}\n.cs .field{display:flex;flex-direction:column;gap:4px;min-width:0}\n.cs .field>label{font-size:12px;line-height:16px;color:var(--tx2);font-weight:600}\n.cs .field>label .opt{font-weight:400;color:var(--tx3);margin-left:4px}\n.cs .help{font-size:11px;line-height:16px;color:var(--tx3)}\n.cs .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}\n.cs .grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}\n.cs .grid3 .select{padding:0 6px 0 8px;font-size:12.5px}\n.cs .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}\n.cs .badge{display:inline-flex;align-items:center;height:20px;padding:0 6px;font-size:10px;font-weight:700;border:1px solid var(--line);border-radius:6px;color:var(--tx3);white-space:nowrap;flex:0 0 auto}\n.cs .badge.accent{background:var(--soft);border-color:transparent;color:var(--ac)}\n.cs .badge.ok{color:var(--ok)}\n.cs .badge.warnb{color:var(--warn);border-color:var(--warn)}\n.cs .blk-title{display:flex;align-items:center;gap:6px;font-size:13px;line-height:20px;font-weight:600}\n.cs .lead{color:var(--tx3);font-size:11.5px;line-height:17px}\n.cs .notebox{padding:9px 11px;border:1px solid var(--line);border-radius:var(--r2);background:var(--sf2);color:var(--tx2);font-size:12px;line-height:18px}\n.cs .notebox.warn{border-color:var(--warn);color:var(--warn);background:transparent}\n.cs .notebox.accent{border-color:transparent;background:var(--soft);color:var(--ac)}\n.cs .linkbtn{border:0;background:none;padding:0;color:inherit;font-weight:700;text-decoration:underline;text-underline-offset:2px}\n\n/* 접기(details) — 삽화 스튜디오 slotline 모양 */\n.cs .fold>summary{list-style:none}\n.cs .fold>summary::-webkit-details-marker{display:none}\n.cs .slotline{min-height:32px;display:flex;align-items:center;gap:6px;padding:0 10px;border:1px solid var(--line);border-radius:var(--r2);background:var(--sf2);font-size:12px;color:var(--tx2);cursor:pointer;user-select:none;min-width:0}\n.cs .slotline b{color:var(--tx);font-weight:600;white-space:nowrap}\n.cs .slotline:hover{background:var(--sf3);color:var(--tx)}\n.cs .slotline.is-static{cursor:default;background:transparent;border-style:dashed;color:var(--tx3)}\n.cs .slotline.is-static:hover{background:transparent;color:var(--tx3)}\n.cs .fold[open]>.slotline{border-radius:var(--r2) var(--r2) 0 0;background:var(--sf3);color:var(--tx)}\n.cs .foldbody{border:1px solid var(--line);border-top:0;border-radius:0 0 var(--r2) var(--r2);padding:12px;display:flex;flex-direction:column;gap:12px}\n.cs .optsum{font-size:11px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}\n.cs .chev{width:7px;height:7px;flex:0 0 7px;margin:0 3px 3px 4px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg);opacity:.7}\n.cs .fold[open]>.slotline .chev{transform:rotate(225deg);margin:3px 3px 0 4px}\n\n/* 캔버스 · 콘티 페이지 */\n.cs .canvas-wrap{position:relative;min-height:0}\n.cs .canvas-stage{position:absolute;inset:14px;container-type:size;display:flex;align-items:center;justify-content:center}\n.cs .canvas-wrap.has-seg .canvas-stage{top:52px}\n.cs .canvas{position:relative;display:flex}\n.cs .result-img{display:block;width:auto;height:auto;max-width:100cqw;max-height:100cqh;border:1px solid var(--line);border-radius:var(--r3);background:#fff}\n.cs .canvas-tools{position:absolute;right:8px;top:8px;display:flex;gap:4px;opacity:.85}\n.cs .canvas:hover .canvas-tools{opacity:1}\n.cs .glass{background:rgba(12,14,20,.62)!important;border:1px solid rgba(255,255,255,.14)!important;color:#e9ebf1!important;backdrop-filter:blur(6px)}\n.cs .viewseg{position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:3;display:flex;gap:2px;padding:2px;border:1px solid var(--line);border-radius:10px;background:var(--sf)}\n.cs .viewseg button{height:28px;min-width:60px;padding:0 12px;border:0;border-radius:8px;background:transparent;color:var(--tx3);font-size:12px}\n.cs .viewseg button.on{background:var(--sf3);color:var(--tx);font-weight:600}\n.cs .board{--gap:8px;width:min(100cqw,calc(100cqh * var(--iw) / var(--ih)));aspect-ratio:var(--iw) / var(--ih);display:grid;gap:var(--gap);padding:var(--gap);background:var(--page);border:1px solid var(--line);border-radius:var(--r3)}\n.cs .board.single{grid-template:minmax(0,1fr) / minmax(0,1fr)}\n.cs .board.vertical2{grid-template-rows:repeat(2,minmax(0,1fr))}\n.cs .board.vertical3{grid-template-rows:repeat(3,minmax(0,1fr))}\n.cs .board.vertical4{grid-template-rows:repeat(4,minmax(0,1fr))}\n.cs .board.grid4{grid-template:repeat(2,minmax(0,1fr)) / repeat(2,minmax(0,1fr))}\n.cs .board.topwide_bottom2{grid-template:minmax(0,1.15fr) minmax(0,1fr) / repeat(2,minmax(0,1fr))}\n.cs .board.topwide_bottom2>.cell:first-child{grid-column:1 / -1}\n.cs .cell{direction:ltr;position:relative;min-width:0;min-height:0;display:flex;flex-direction:column;gap:6px;padding:10px;border:1.5px solid var(--line);border-radius:6px;background:var(--cell);color:var(--tx);text-align:left;overflow:hidden;transition:border-color .15s,box-shadow .15s}\n.cs button.cell:hover{border-color:var(--tx3)}\n.cs .cell.on{border-color:var(--ac);box-shadow:0 0 0 3px var(--soft)}\n.cs .cell-head{display:flex;align-items:center;gap:6px}\n.cs .cell-no{width:20px;height:20px;flex:0 0 20px;border-radius:50%;display:grid;place-items:center;background:var(--soft);color:var(--ac);font-size:11px;font-weight:700}\n.cs .cell.on .cell-no{background:var(--acs);color:#fff}\n.cs .cell-shot{min-width:0;font-size:10.5px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.cs .cell-focus{font-size:11px;line-height:16px;color:var(--tx3);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}\n.cs .cell-lock{margin-left:auto;font-size:11px}\n.cs .cell-beat{font-size:12px;line-height:17px;color:var(--tx2);display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}\n.cs .cell-texts{margin-top:auto;display:flex;flex-wrap:wrap;gap:5px;min-width:0}\n.cs .bub{max-width:100%;padding:3px 9px;font-size:11px;line-height:15px;border:1.5px solid var(--tx2);border-radius:12px;background:var(--sf);color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.cs .bub.thought{border-style:dashed;border-radius:14px}\n.cs .bub.narration{border-radius:3px;border-color:var(--line);background:var(--sf3)}\n.cs .bub.sfx{border:0;background:transparent;padding:0 2px;font-weight:800;font-style:italic;color:var(--ac)}\n.cs .bub-none{font-size:10.5px;color:var(--tx3)}\n.cs .board.ghost .cell{border-style:dashed;background:transparent}\n.cs .board.ghost .cell-no{background:var(--sf3);color:var(--tx3)}\n.cs .ghost-note{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(86%,270px);padding:14px 16px;border:1px solid var(--line);border-radius:var(--r3);background:var(--sf);box-shadow:0 8px 24px rgba(0,0,0,.18);display:flex;flex-direction:column;gap:4px;text-align:center}\n.cs .ghost-note b{font-size:14px;font-weight:600}\n.cs .ghost-note span{font-size:12px;line-height:18px;color:var(--tx2)}\n.cs .ghost-note small{font-size:11px;color:var(--tx3)}\n.cs .loading{position:absolute;inset:0;z-index:5;background:rgba(8,9,13,.62);backdrop-filter:blur(3px);display:grid;place-items:center}\n.cs .loading-card{width:min(320px,82%);padding:18px 20px;text-align:center;background:rgba(15,17,24,.92);border:1px solid rgba(255,255,255,.1);border-radius:var(--r3);color:#e9ebf1;display:flex;flex-direction:column;align-items:center;gap:4px}\n.cs .loading-card small{font-size:11px;color:rgba(233,235,241,.6)}\n.cs .spinner{width:18px;height:18px;margin-bottom:6px;border:2px solid rgba(255,255,255,.2);border-top-color:#fff;border-radius:50%;animation:ccspin .75s linear infinite}\n@keyframes ccspin{to{transform:rotate(360deg)}}\n.cs .canvas-error{position:absolute;left:16px;right:16px;bottom:16px;z-index:6;padding:11px 12px;border:1px solid var(--danger);border-radius:var(--r3);background:var(--sf);color:var(--danger);font-size:12px;line-height:18px}\n\n/* 콘티 탭 */\n.cs .planhead h3{margin:0;font-size:15px;line-height:21px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}\n.cs .ph-row{display:flex;align-items:center;gap:8px}\n.cs .gauge{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--tx3)}\n.cs .gtrack{flex:1;height:5px;border-radius:99px;background:var(--line);overflow:hidden}\n.cs .gtrack i{display:block;height:100%;border-radius:inherit;background:var(--ac)}\n.cs .gauge.near .gtrack i{background:var(--warn)}\n.cs .gauge.over .gtrack i{background:var(--danger)}\n.cs .gauge b{color:var(--tx2);font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}\n.cs .gauge.over b{color:var(--danger)}\n.cs .contlist{margin:0;padding-left:18px;color:var(--tx2);font-size:12px;line-height:19px}\n.cs .steps{margin:0;padding:0;list-style:none;counter-reset:st;display:flex;flex-direction:column;gap:12px}\n.cs .steps li{counter-increment:st;display:grid;grid-template-columns:22px 1fr;column-gap:10px}\n.cs .steps li::before{content:counter(st);grid-row:span 2;width:22px;height:22px;border-radius:50%;display:grid;place-items:center;background:var(--soft);color:var(--ac);font-size:11px;font-weight:700}\n.cs .steps b{font-size:12.5px;font-weight:600}\n.cs .steps span{font-size:11.5px;line-height:17px;color:var(--tx3)}\n.cs .pcard{border:1px solid var(--line);border-radius:var(--r3);background:var(--sf);padding:12px;display:flex;flex-direction:column;gap:9px;scroll-margin-top:12px;transition:border-color .15s,box-shadow .15s}\n.cs .pcard.on{border-color:var(--ac);box-shadow:0 0 0 3px var(--soft)}\n.cs .pcard.locked{background:var(--sf2)}\n.cs .pc-head{display:flex;align-items:center;gap:6px}\n.cs .pno{width:22px;height:22px;flex:0 0 22px;border-radius:50%;display:grid;place-items:center;background:var(--soft);color:var(--ac);font-size:11.5px;font-weight:700}\n.cs .pcard.on .pno{background:var(--acs);color:#fff}\n.cs .locktog{position:relative;height:24px;padding:0 8px;border:1px solid var(--line);border-radius:var(--r1);display:inline-flex;align-items:center;font-size:11px;color:var(--tx2);cursor:pointer;user-select:none;white-space:nowrap}\n.cs .locktog input{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none}\n.cs .locktog:hover{background:var(--hover)}\n.cs .locktog.on{background:var(--soft);border-color:transparent;color:var(--ac);font-weight:600}\n.cs .locktog:has(input:focus-visible){outline:2px solid var(--ac);outline-offset:1px}\n.cs fieldset:disabled .locktog{opacity:.45;cursor:default}\n.cs fieldset:disabled .ta,.cs fieldset:disabled .input,.cs fieldset:disabled .select{opacity:.6}\n.cs .beat{font-size:13px;line-height:19px;font-weight:500;color:var(--tx)}\n.cs .focus{font-size:11.5px;line-height:17px;color:var(--tx3)}\n.cs .tlines{display:flex;flex-direction:column;gap:9px}\n.cs .tline{display:flex;flex-direction:column;gap:4px}\n.cs .tl-head{display:flex;align-items:center;gap:6px;font-size:11.5px}\n.cs .kind{height:18px;padding:0 6px;border-radius:5px;display:inline-flex;align-items:center;font-size:10px;font-weight:700;background:var(--sf3);color:var(--tx2)}\n.cs .kind.speech{background:var(--soft);color:var(--ac)}\n.cs .kind.thought{background:transparent;border:1px dashed var(--tx3)}\n.cs .kind.sfx{color:var(--warn)}\n.cs .who{font-weight:600;color:var(--tx)}\n.cs .src{padding-left:8px;border-left:2px solid var(--line);font-size:11px;line-height:16px;color:var(--tx3)}\n.cs .castblk{padding:10px;border-radius:var(--r2);background:var(--sf2);display:flex;flex-direction:column;gap:10px}\n.cs .pcard.locked .castblk{background:var(--sf3)}\n.cs .cb-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap}\n.cs .cb-head b{font-size:12.5px;font-weight:600}\n.cs .avatar{width:22px;height:22px;flex:0 0 22px;border-radius:50%;display:grid;place-items:center;background:var(--soft);color:var(--ac);font-size:11px;font-weight:700}\n.cs .quote{margin:0;padding:8px 10px;border-left:2px solid var(--ac);border-radius:0 9px 9px 0;background:var(--soft);color:var(--tx);font-size:12px;line-height:18px}\n.cs .empty-mini{display:flex;flex-direction:column;gap:4px;padding:18px 12px;text-align:center;border:1px dashed var(--line);border-radius:var(--r2)}\n.cs .empty-mini b{font-size:12.5px;font-weight:600}\n.cs .empty-mini span{font-size:11.5px;color:var(--tx3)}\n\n/* 생성 탭 칩 (설정창 chips) */\n.cs .chips{display:flex;gap:6px;flex-wrap:wrap}\n.cs .chip{min-height:32px;padding:5px 10px;border:1px solid var(--line);border-radius:var(--r1);background:var(--sf2);color:var(--tx2);font-size:12px;display:inline-flex;align-items:center;gap:6px}\n.cs .chip small{font-size:10.5px;color:var(--tx3)}\n.cs .chip:hover:not(:disabled){background:var(--sf3);color:var(--tx)}\n.cs .chip.on{background:var(--soft);border-color:var(--ac);color:var(--ac);font-weight:600}\n.cs .chip.on small{color:var(--ac)}\n\n/* 할당량 — 안쪽 cq-* 클래스는 cspComicPaintQuota가 찾으므로 이름 유지 */\n.cs .comic-quota{height:30px;display:flex;align-items:center;gap:7px;padding:0 8px;border:1px solid var(--line);border-radius:var(--r1);background:var(--sf2);color:var(--tx3);min-width:0;flex:0 0 auto}\n.cs .comic-quota:hover:not(:disabled){background:var(--sf3);color:var(--tx2)}\n.cs .cq-label,.cs .cq-anlas{font-size:10px;white-space:nowrap}\n.cs .cq-track{width:82px;height:6px;flex:0 0 auto;border-radius:999px;background:var(--line);overflow:hidden}\n.cs .cq-fill{display:block;height:100%;width:0;border-radius:inherit;background:var(--ac);transition:width .22s ease}\n.cs .comic-quota.is-low .cq-fill{background:var(--warn)}\n.cs .comic-quota.is-empty .cq-fill{background:var(--danger)}\n.cs .cq-pct{min-width:32px;text-align:right;font-size:10px;line-height:14px;color:var(--tx2);font-variant-numeric:tabular-nums}\n.cs .comic-quota:disabled{opacity:.7}\n@media (prefers-reduced-motion:reduce){.cs *{transition:none!important}.cs .spinner{animation-duration:2.2s}}\n\n/* [PC 전용] 삽화 스튜디오 틀: 위 바 · 레일 · (도구 패널) · 캔버스 · 인스펙터 · 아래 바 */\n.cs-pc{position:absolute;inset:0}\n.cs-pc .veil{position:absolute;inset:0;display:grid;place-items:center;padding:24px;background:var(--scrim)}\n.cs-pc .v35-app{width:min(100%,1480px);height:min(100%,860px);min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--bg);border:1px solid var(--line);border-radius:var(--r4);box-shadow:var(--shadow)}\n.cs-pc .v35-top{height:46px;flex:0 0 46px;display:flex;align-items:center;gap:6px;padding:0 10px;background:var(--sf);border-bottom:1px solid var(--line)}\n.cs-pc .v35-brand{display:flex;align-items:center;gap:6px;font-size:14px;font-weight:600;white-space:nowrap}\n.cs-pc .v35-brand small{font-size:11px;color:var(--tx3);font-weight:400}\n.cs-pc .topsep{width:1px;height:20px;margin:0 6px;background:var(--line)}\n.cs-pc .select.q{width:auto;height:30px;padding:0 6px 0 9px;font-size:12px}\n.cs-pc .close{font-size:20px}\n.cs-pc .studio{flex:1;min-height:0;display:grid;grid-template-columns:44px minmax(0,1fr) 392px}\n.cs-pc .studio.panel{grid-template-columns:44px 320px minmax(0,1fr) 392px}\n.cs-pc .rail{display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 0;background:var(--sf);border-right:1px solid var(--line)}\n.cs-pc .studio.panel .rail{border-right:0}\n.cs-pc .rail .iconbtn{width:34px;height:34px;font-size:16px}\n.cs-pc .context-panel{min-height:0;overflow:auto;overscroll-behavior:contain;padding:12px;background:var(--sf);border-right:1px solid var(--line);position:relative}\n.cs-pc .context-panel>fieldset{display:flex;flex-direction:column;gap:12px}\n.cs-pc .panel-head{display:flex;align-items:center;gap:6px;margin-bottom:10px}\n.cs-pc .panel-head h3{margin:0;display:flex;align-items:center;gap:6px;font-size:14px;font-weight:600}\n.cs-pc .context-panel .charblk{padding:10px;border-radius:var(--r2);background:var(--sf2);display:flex;flex-direction:column;gap:10px}\n.cs-pc .context-panel .ta.editor{min-height:260px}\n.cs-pc .context-panel .ta.json{min-height:430px}\n.cs-pc .output{min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--sf2)}\n.cs-pc .output .canvas-wrap{flex:1}\n.cs-pc .film{height:52px;flex:0 0 52px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--sf);border-top:1px solid var(--line);min-width:0}\n.cs-pc .film-label{font-size:11px;color:var(--tx3);flex:0 0 auto}\n.cs-pc .pchips{display:flex;gap:6px;flex:0 0 auto}\n.cs-pc .pchip{height:30px;padding:0 10px 0 5px;border:1px solid var(--line);border-radius:var(--r1);background:var(--sf2);color:var(--tx2);display:inline-flex;align-items:center;gap:6px;font-size:12px;white-space:nowrap}\n.cs-pc .pchip b{width:20px;height:20px;border-radius:6px;display:grid;place-items:center;background:var(--sf3);color:var(--tx2);font-size:11px}\n.cs-pc .pchip:hover{color:var(--tx)}\n.cs-pc .pchip.on{background:var(--soft);border-color:var(--ac);color:var(--tx)}\n.cs-pc .pchip.on b{background:var(--acs);color:#fff}\n.cs-pc .pchip .pc-t{font-size:10.5px;color:var(--tx3)}\n.cs-pc .film-meta{min-width:0;font-size:11px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.cs-pc .inspector{min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--sf);border-left:1px solid var(--line)}\n.cs-pc .inspector-tabs{height:40px;flex:0 0 40px;display:flex;padding:0 6px;border-bottom:1px solid var(--line)}\n.cs-pc .tab{height:40px;padding:0 10px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--tx3);display:inline-flex;align-items:center;gap:6px}\n.cs-pc .tab:hover:not(:disabled){color:var(--tx2)}\n.cs-pc .tab.active{border-bottom-color:var(--ac);color:var(--tx);font-weight:600}\n.cs-pc .tab .badge{height:18px}\n.cs-pc .tab .dot,.cs-m .v35m-seg .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ac)}\n.cs-pc .inspector-body{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:12px 14px 18px;position:relative}\n.cs-pc .inspector-body>fieldset{display:flex;flex-direction:column;gap:14px}\n.cs-pc .inspector .blk{display:flex;flex-direction:column;gap:10px;padding-bottom:14px;border-bottom:1px solid var(--line2)}\n.cs-pc .inspector .blk:last-child{border-bottom:0;padding-bottom:0}\n.cs-pc .bottom{height:52px;flex:0 0 52px;display:flex;align-items:center;gap:6px;padding:0 10px;background:var(--sf);border-top:1px solid var(--line)}\n.cs-pc .statusline{display:block;min-width:0;max-width:36%;margin-left:4px;font-size:11.5px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.cs-pc .statusline.warn{color:var(--warn)}\n.cs-pc .statusline.err{color:var(--danger)}\n.cs-pc .statusline.accent{color:var(--ac)}\n.cs-pc .statusline.busy::before{content:\"\";display:inline-block;width:9px;height:9px;margin-right:6px;vertical-align:-1px;border:1.5px solid var(--line);border-top-color:var(--ac);border-radius:50%;animation:ccspin .8s linear infinite}\n\n/* [모바일 전용] V35 모바일 틀: 위 바 · 미디어 · 빠른 칩 · 세그 탭 · 스크롤 카드 · 아래 실행 바 */\n.cs-m{position:absolute;inset:0;display:flex;flex-direction:column;overflow:hidden;background:var(--bg);touch-action:manipulation}\n.cs-m .v35m-top{height:calc(50px + env(safe-area-inset-top,0px));flex:0 0 auto;padding:env(safe-area-inset-top,0px) 6px 0;display:flex;align-items:center;gap:4px;background:var(--sf);border-bottom:1px solid var(--line)}\n.cs-m .v35m-top .iconbtn{width:44px;height:44px;flex:0 0 44px;font-size:17px}\n.cs-m .v35m-titles{min-width:0;display:flex;flex-direction:column;line-height:1.25}\n.cs-m .v35m-title{font-size:14px;font-weight:650;white-space:nowrap}\n.cs-m .v35m-sub{font-size:11px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.cs-m .v35m-dirty{margin-left:4px;font-size:10.5px;font-weight:600;color:var(--ac);white-space:nowrap}\n.cs-m .v35m-dirty.warn{color:var(--warn)}\n.cs-m .comic-quota{height:36px;gap:6px;padding:0 9px;border-radius:9px}\n.cs-m .cq-label,.cs-m .cq-anlas{display:none}\n.cs-m .cq-track{width:28px;height:5px}\n.cs-m .cq-pct{min-width:0;font-size:11px;font-weight:600;color:var(--tx)}\n.cs-m .v35m-media{flex:0 0 auto;background:var(--sf2);border-bottom:1px solid var(--line2)}\n.cs-m .canvas-wrap{height:var(--media-h,min(34dvh,300px))}\n.cs-m .canvas-stage{inset:10px}\n.cs-m .canvas-wrap.has-seg .canvas-stage{top:48px}\n.cs-m .viewseg{top:9px}\n.cs-m .viewseg button{height:30px}\n.cs-m .canvas-tools{opacity:1}\n.cs-m .canvas-tools .iconbtn{width:38px;height:38px}\n.cs-m .board{--gap:5px;border-radius:9px}\n.cs-m .cell{padding:6px;gap:3px;border-width:1px;border-radius:5px}\n.cs-m .cell-no{width:17px;height:17px;flex-basis:17px;font-size:10px}\n.cs-m .cell-shot{font-size:9.5px}\n.cs-m .cell-beat{font-size:10px;line-height:13px;-webkit-line-clamp:3}\n.cs-m .cell-texts,.cs-m .cell-focus{display:none}\n.cs-m .ghost-note{padding:10px 12px}\n.cs-m .ghost-note b{font-size:13px}\n.cs-m .ghost-note small{display:none}\n.cs-m .loading-card small{display:none}\n.cs-m .v35m-error{margin:0 10px 10px;padding:10px 12px;border:1px solid var(--danger);border-radius:10px;background:var(--sf);color:var(--danger);font-size:12px;line-height:18px}\n.cs-m .v35m-quick{display:flex;align-items:center;gap:6px;padding:7px 10px;overflow-x:auto;scrollbar-width:none;background:var(--sf);border-top:1px solid var(--line2)}\n.cs-m .v35m-quick::-webkit-scrollbar{display:none}\n.cs-m .v35m-chipselect{height:34px;max-width:170px;flex:0 0 auto;padding:0 8px;border:1px solid var(--line);border-radius:8px;background:var(--sf2);color:var(--tx2);font-size:11px;outline:none}\n.cs-m .v35m-chipselect.accent{background:var(--soft);border-color:transparent;color:var(--ac);font-weight:650}\n.cs-m .v35m-meta{font-size:11px;color:var(--tx3);white-space:nowrap}\n.cs-m .v35m-tabs{flex:0 0 48px;display:flex;padding:7px 10px 5px;background:var(--bg);border-bottom:1px solid var(--line2)}\n.cs-m .v35m-seg{width:100%;display:grid;grid-template-columns:repeat(5,1fr);gap:2px;padding:2px;border:1px solid var(--line);border-radius:10px;background:var(--sf2)}\n.cs-m .v35m-seg button{position:relative;height:32px;border:0;border-radius:8px;background:transparent;color:var(--tx3);font-size:11.5px}\n.cs-m .v35m-seg button.active{background:var(--sf3);color:var(--tx);font-weight:650}\n.cs-m .v35m-seg .dot{position:absolute;top:6px;right:6px;width:5px;height:5px}\n.cs-m .v35m-scroll{flex:1;min-height:0;overflow:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;padding:10px;position:relative}\n.cs-m .v35m-scroll>fieldset{display:flex;flex-direction:column;gap:10px}\n.cs-m .blk{display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--sf)}\n.cs-m .lead{padding:0 2px}\n.cs-m .btn{min-height:38px}\n.cs-m .btn.tiny{min-height:32px;height:32px;padding:0 10px;font-size:11.5px}\n.cs-m .locktog{height:32px;padding:0 10px}\n.cs-m .input,.cs-m .select{height:44px;font-size:13px}\n.cs-m .grid3 .select{height:44px;font-size:12px;padding:0 4px 0 8px}\n.cs-m .ta{font-size:13px;line-height:20px}\n.cs-m .ta.mono{font:12px/19px var(--mono)}\n.cs-m .ta.editor{min-height:280px}\n.cs-m .grid2.stack{grid-template-columns:1fr}\n.cs-m .slotline{min-height:42px}\n.cs-m .chip{min-height:40px}\n.cs-m .row2 .btn{height:44px}\n.cs-m .v35m-reason{padding:7px 12px;background:var(--sf);border-top:1px solid var(--line2);font-size:11.5px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.cs-m .v35m-reason.warn{color:var(--warn)}\n.cs-m .v35m-reason.err{color:var(--danger)}\n.cs-m .v35m-reason.accent{color:var(--ac)}\n.cs-m .v35m-action{flex:0 0 auto;display:flex;align-items:center;gap:7px;padding:8px 10px max(10px,env(safe-area-inset-bottom,0px));background:var(--sf);border-top:1px solid var(--line)}\n.cs-m .v35m-action .btn{height:44px;min-width:44px;border-radius:10px}\n.cs-m .v35m-action .btn.primary{flex:1}\n.cs-m .v35m-action .btn.wide{flex:1}\n.cs-m.keyboard-open .v35m-media{display:none}\n\n/* Viewport adaptations and focus/overflow support for the live popup. */\n:host(.v35-dark){--page:#0a0b0f;--cell:#14161b;color-scheme:dark}\n:host(.v35-light){--page:#fff;--cell:#f8f9fb;color-scheme:light}\n.cs .canvas{max-width:100%;max-height:100%}\n.cs .comic-brand-icon{display:block;flex:0 0 18px;width:18px;height:18px;color:var(--tx2)}\n.cs-m .v35m-title{display:flex;align-items:center;gap:5px}\n.cs .board{grid-template-columns:minmax(0,1fr)}\n.cs-pc .film{overflow-x:auto}.cs-pc .pchips{max-width:100%}\n.cs-pc .bottom{height:auto;min-height:52px;flex-basis:auto;flex-wrap:wrap;padding:8px 10px}\n.cs-pc .statusline{flex:1 1 100px;max-width:24%}\n.cs .canvas-error{max-height:35%;overflow:auto;white-space:pre-wrap}\n.cs-m{height:var(--cc-viewport-height,100dvh);inset:var(--cc-viewport-top,0px) 0 auto}\n.cs-m .v35m-error{max-height:100px;overflow:auto;white-space:pre-wrap}\n.cs-m .v35m-top .comic-quota{flex-shrink:0}\n.cs-m .v35m-dirty{max-width:74px;overflow:hidden;text-overflow:ellipsis}\n.cs-m .v35m-reason{max-height:64px;overflow:auto;white-space:normal;flex-shrink:0}\n.cs-m .v35m-action{gap:5px}.cs-m .v35m-action .btn{padding:0 8px;font-size:12px}\n@media(max-width:1200px){.cs-pc .v35-brand small,.cs-pc .cq-label,.cs-pc .cq-anlas{display:none}.cs-pc .studio{grid-template-columns:44px minmax(0,1fr) 360px}.cs-pc .studio.panel{grid-template-columns:44px minmax(0,1fr) 360px;position:relative}.cs-pc .context-panel{position:absolute;left:44px;top:0;bottom:0;width:min(320px,calc(100% - 44px));z-index:8;box-shadow:var(--shadow)}.cs-pc .bottom #cc-defaults{font-size:11px}.cs-pc .film-meta{display:none}}\n@media(max-height:650px){.cs-m .canvas-wrap{--media-h:22dvh}.cs-pc .veil{padding:12px}}\n@media(max-width:360px){.cs-m .cq-track,.cs-m .v35m-dirty{display:none}.cs-m .v35m-top .iconbtn{width:38px;flex-basis:38px}}\n"};
+    return {mobileHtml,canGenerate,textLength,textLimit,sel,css:"/* [공통] */\n.cs{font:13px/20px var(--font);color:var(--tx);-webkit-font-smoothing:antialiased;text-align:left}\n.cs *,.cs *::before,.cs *::after{box-sizing:border-box}\n.cs button,.cs input,.cs select,.cs textarea{font:inherit;color:inherit;margin:0}\n.cs button{cursor:pointer}\n.cs button:disabled{opacity:.45;cursor:default}\n.cs fieldset{border:0;margin:0;padding:0;min-width:0}\n.cs p{margin:0}\n.cs .grow{flex:1}\n.cs :focus-visible{outline:2px solid var(--ac);outline-offset:1px}\n.cs .btn{height:30px;padding:0 10px;border:1px solid var(--line);border-radius:var(--r1);background:var(--sf2);color:var(--tx);display:inline-flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap;font-weight:500}\n.cs .btn:hover:not(:disabled){background:var(--sf3)}\n.cs .btn.ghost{background:transparent;border-color:transparent;color:var(--tx2)}\n.cs .btn.ghost:hover:not(:disabled){background:var(--hover);color:var(--tx)}\n.cs .btn.primary{height:36px;padding:0 16px;background:var(--acs);border-color:transparent;color:#fff;font-weight:600}\n.cs .btn.primary:hover:not(:disabled){background:var(--acs);filter:brightness(1.08)}\n.cs .btn.danger{background:transparent;color:var(--danger);border-color:var(--line)}\n.cs .btn.danger:hover:not(:disabled){background:var(--hover);border-color:var(--danger)}\n.cs .btn.tiny{height:24px;padding:0 8px;font-size:11px}\n.cs .iconbtn{width:30px;height:30px;padding:0;border:1px solid transparent;border-radius:var(--r1);background:transparent;color:var(--tx2);display:grid;place-items:center;font-size:15px;line-height:1}\n.cs .iconbtn:hover:not(:disabled){background:var(--hover);color:var(--tx)}\n.cs .iconbtn.active{background:var(--soft);color:var(--ac)}\n.cs .input,.cs .select,.cs .ta{width:100%;border:1px solid var(--line);border-radius:var(--r2);background:var(--sf2);outline:none;color:var(--tx)}\n.cs .input,.cs .select{height:34px;padding:0 10px}\n.cs .input:focus,.cs .select:focus,.cs .ta:focus{border-color:var(--ac)}\n.cs .input::placeholder,.cs .ta::placeholder{color:var(--tx3)}\n.cs .ta{display:block;padding:8px 10px;line-height:19px;resize:vertical}\n.cs .ta.compact{min-height:64px}\n.cs .ta.line{min-height:48px}\n.cs .ta.default{min-height:104px}\n.cs .ta.mono{font:11.5px/18px var(--mono)}\n.cs .ta.editor{min-height:200px;font:11px/18px var(--mono)}\n.cs .field{display:flex;flex-direction:column;gap:4px;min-width:0}\n.cs .field>label{font-size:12px;line-height:16px;color:var(--tx2);font-weight:600}\n.cs .field>label .opt{font-weight:400;color:var(--tx3);margin-left:4px}\n.cs .help{font-size:11px;line-height:16px;color:var(--tx3)}\n.cs .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}\n.cs .grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}\n.cs .grid3 .select{padding:0 6px 0 8px;font-size:12.5px}\n.cs .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}\n.cs .badge{display:inline-flex;align-items:center;height:20px;padding:0 6px;font-size:10px;font-weight:700;border:1px solid var(--line);border-radius:6px;color:var(--tx3);white-space:nowrap;flex:0 0 auto}\n.cs .badge.accent{background:var(--soft);border-color:transparent;color:var(--ac)}\n.cs .badge.ok{color:var(--ok)}\n.cs .badge.warnb{color:var(--warn);border-color:var(--warn)}\n.cs .blk-title{display:flex;align-items:center;gap:6px;font-size:13px;line-height:20px;font-weight:600}\n.cs .lead{color:var(--tx3);font-size:11.5px;line-height:17px}\n.cs .notebox{padding:9px 11px;border:1px solid var(--line);border-radius:var(--r2);background:var(--sf2);color:var(--tx2);font-size:12px;line-height:18px}\n.cs .notebox.warn{border-color:var(--warn);color:var(--warn);background:transparent}\n.cs .notebox.accent{border-color:transparent;background:var(--soft);color:var(--ac)}\n.cs .linkbtn{border:0;background:none;padding:0;color:inherit;font-weight:700;text-decoration:underline;text-underline-offset:2px}\n\n/* 접기(details) — 삽화 스튜디오 slotline 모양 */\n.cs .fold>summary{list-style:none}\n.cs .fold>summary::-webkit-details-marker{display:none}\n.cs .slotline{min-height:32px;display:flex;align-items:center;gap:6px;padding:0 10px;border:1px solid var(--line);border-radius:var(--r2);background:var(--sf2);font-size:12px;color:var(--tx2);cursor:pointer;user-select:none;min-width:0}\n.cs .slotline b{color:var(--tx);font-weight:600;white-space:nowrap}\n.cs .slotline:hover{background:var(--sf3);color:var(--tx)}\n.cs .slotline.is-static{cursor:default;background:transparent;border-style:dashed;color:var(--tx3)}\n.cs .slotline.is-static:hover{background:transparent;color:var(--tx3)}\n.cs .fold[open]>.slotline{border-radius:var(--r2) var(--r2) 0 0;background:var(--sf3);color:var(--tx)}\n.cs .foldbody{border:1px solid var(--line);border-top:0;border-radius:0 0 var(--r2) var(--r2);padding:12px;display:flex;flex-direction:column;gap:12px}\n.cs .optsum{font-size:11px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}\n.cs .chev{width:7px;height:7px;flex:0 0 7px;margin:0 3px 3px 4px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg);opacity:.7}\n.cs .fold[open]>.slotline .chev{transform:rotate(225deg);margin:3px 3px 0 4px}\n\n/* 캔버스 · 콘티 페이지 */\n.cs .canvas-wrap{position:relative;min-height:0}\n.cs .canvas-stage{position:absolute;inset:14px;container-type:size;display:flex;align-items:center;justify-content:center}\n.cs .canvas-wrap.has-seg .canvas-stage{top:52px}\n.cs .canvas{position:relative;display:flex}\n.cs .result-img{display:block;width:auto;height:auto;max-width:100cqw;max-height:100cqh;border:1px solid var(--line);border-radius:var(--r3);background:#fff}\n.cs .canvas-tools{position:absolute;right:8px;top:8px;display:flex;gap:4px;opacity:.85}\n.cs .canvas:hover .canvas-tools{opacity:1}\n.cs .glass{background:rgba(12,14,20,.62)!important;border:1px solid rgba(255,255,255,.14)!important;color:#e9ebf1!important;backdrop-filter:blur(6px)}\n.cs .viewseg{position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:3;display:flex;gap:2px;padding:2px;border:1px solid var(--line);border-radius:10px;background:var(--sf)}\n.cs .viewseg button{height:28px;min-width:60px;padding:0 12px;border:0;border-radius:8px;background:transparent;color:var(--tx3);font-size:12px}\n.cs .viewseg button.on{background:var(--sf3);color:var(--tx);font-weight:600}\n.cs .board{--gap:8px;width:min(100cqw,calc(100cqh * var(--iw) / var(--ih)));aspect-ratio:var(--iw) / var(--ih);display:grid;gap:var(--gap);padding:var(--gap);background:var(--page);border:1px solid var(--line);border-radius:var(--r3)}\n.cs .board.single{grid-template:minmax(0,1fr) / minmax(0,1fr)}\n.cs .board.vertical2{grid-template-rows:repeat(2,minmax(0,1fr))}\n.cs .board.vertical3{grid-template-rows:repeat(3,minmax(0,1fr))}\n.cs .board.vertical4{grid-template-rows:repeat(4,minmax(0,1fr))}\n.cs .board.grid4{grid-template:repeat(2,minmax(0,1fr)) / repeat(2,minmax(0,1fr))}\n.cs .board.topwide_bottom2{grid-template:minmax(0,1.15fr) minmax(0,1fr) / repeat(2,minmax(0,1fr))}\n.cs .board.topwide_bottom2>.cell:first-child{grid-column:1 / -1}\n.cs .cell{direction:ltr;position:relative;min-width:0;min-height:0;display:flex;flex-direction:column;gap:6px;padding:10px;border:1.5px solid var(--line);border-radius:6px;background:var(--cell);color:var(--tx);text-align:left;overflow:hidden;transition:border-color .15s,box-shadow .15s}\n.cs button.cell:hover{border-color:var(--tx3)}\n.cs .cell.on{border-color:var(--ac);box-shadow:0 0 0 3px var(--soft)}\n.cs .cell-head{display:flex;align-items:center;gap:6px}\n.cs .cell-no{width:20px;height:20px;flex:0 0 20px;border-radius:50%;display:grid;place-items:center;background:var(--soft);color:var(--ac);font-size:11px;font-weight:700}\n.cs .cell.on .cell-no{background:var(--acs);color:#fff}\n.cs .cell-shot{min-width:0;font-size:10.5px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.cs .cell-focus{font-size:11px;line-height:16px;color:var(--tx3);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}\n.cs .cell-lock{margin-left:auto;font-size:11px}\n.cs .cell-beat{font-size:12px;line-height:17px;color:var(--tx2);display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}\n.cs .cell-texts{margin-top:auto;display:flex;flex-wrap:wrap;gap:5px;min-width:0}\n.cs .bub{max-width:100%;padding:3px 9px;font-size:11px;line-height:15px;border:1.5px solid var(--tx2);border-radius:12px;background:var(--sf);color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.cs .bub.thought{border-style:dashed;border-radius:14px}\n.cs .bub.narration{border-radius:3px;border-color:var(--line);background:var(--sf3)}\n.cs .bub.sfx{border:0;background:transparent;padding:0 2px;font-weight:800;font-style:italic;color:var(--ac)}\n.cs .bub-none{font-size:10.5px;color:var(--tx3)}\n.cs .board.ghost .cell{border-style:dashed;background:transparent}\n.cs .board.ghost .cell-no{background:var(--sf3);color:var(--tx3)}\n.cs .ghost-note{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(86%,270px);padding:14px 16px;border:1px solid var(--line);border-radius:var(--r3);background:var(--sf);box-shadow:0 8px 24px rgba(0,0,0,.18);display:flex;flex-direction:column;gap:4px;text-align:center}\n.cs .ghost-note b{font-size:14px;font-weight:600}\n.cs .ghost-note span{font-size:12px;line-height:18px;color:var(--tx2)}\n.cs .ghost-note small{font-size:11px;color:var(--tx3)}\n.cs .loading{position:absolute;inset:0;z-index:5;background:rgba(8,9,13,.62);backdrop-filter:blur(3px);display:grid;place-items:center}\n.cs .loading-card{width:min(320px,82%);padding:18px 20px;text-align:center;background:rgba(15,17,24,.92);border:1px solid rgba(255,255,255,.1);border-radius:var(--r3);color:#e9ebf1;display:flex;flex-direction:column;align-items:center;gap:4px}\n.cs .loading-card small{font-size:11px;color:rgba(233,235,241,.6)}\n.cs .spinner{width:18px;height:18px;margin-bottom:6px;border:2px solid rgba(255,255,255,.2);border-top-color:#fff;border-radius:50%;animation:ccspin .75s linear infinite}\n@keyframes ccspin{to{transform:rotate(360deg)}}\n.cs .canvas-error{position:absolute;left:16px;right:16px;bottom:16px;z-index:6;padding:11px 12px;border:1px solid var(--danger);border-radius:var(--r3);background:var(--sf);color:var(--danger);font-size:12px;line-height:18px}\n\n/* 콘티 탭 */\n.cs .planhead h3{margin:0;font-size:15px;line-height:21px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}\n.cs .ph-row{display:flex;align-items:center;gap:8px}\n.cs .gauge{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--tx3)}\n.cs .gtrack{flex:1;height:5px;border-radius:99px;background:var(--line);overflow:hidden}\n.cs .gtrack i{display:block;height:100%;border-radius:inherit;background:var(--ac)}\n.cs .gauge.near .gtrack i{background:var(--warn)}\n.cs .gauge.over .gtrack i{background:var(--danger)}\n.cs .gauge b{color:var(--tx2);font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}\n.cs .gauge.over b{color:var(--danger)}\n.cs .contlist{margin:0;padding-left:18px;color:var(--tx2);font-size:12px;line-height:19px}\n.cs .steps{margin:0;padding:0;list-style:none;counter-reset:st;display:flex;flex-direction:column;gap:12px}\n.cs .steps li{counter-increment:st;display:grid;grid-template-columns:22px 1fr;column-gap:10px}\n.cs .steps li::before{content:counter(st);grid-row:span 2;width:22px;height:22px;border-radius:50%;display:grid;place-items:center;background:var(--soft);color:var(--ac);font-size:11px;font-weight:700}\n.cs .steps b{font-size:12.5px;font-weight:600}\n.cs .steps span{font-size:11.5px;line-height:17px;color:var(--tx3)}\n.cs .pcard{border:1px solid var(--line);border-radius:var(--r3);background:var(--sf);padding:12px;display:flex;flex-direction:column;gap:9px;scroll-margin-top:12px;transition:border-color .15s,box-shadow .15s}\n.cs .pcard.on{border-color:var(--ac);box-shadow:0 0 0 3px var(--soft)}\n.cs .pcard.locked{background:var(--sf2)}\n.cs .pc-head{display:flex;align-items:center;gap:6px}\n.cs .pno{width:22px;height:22px;flex:0 0 22px;border-radius:50%;display:grid;place-items:center;background:var(--soft);color:var(--ac);font-size:11.5px;font-weight:700}\n.cs .pcard.on .pno{background:var(--acs);color:#fff}\n.cs .locktog{position:relative;height:24px;padding:0 8px;border:1px solid var(--line);border-radius:var(--r1);display:inline-flex;align-items:center;font-size:11px;color:var(--tx2);cursor:pointer;user-select:none;white-space:nowrap}\n.cs .locktog input{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none}\n.cs .locktog:hover{background:var(--hover)}\n.cs .locktog.on{background:var(--soft);border-color:transparent;color:var(--ac);font-weight:600}\n.cs .locktog:has(input:focus-visible){outline:2px solid var(--ac);outline-offset:1px}\n.cs fieldset:disabled .locktog{opacity:.45;cursor:default}\n.cs fieldset:disabled .ta,.cs fieldset:disabled .input,.cs fieldset:disabled .select{opacity:.6}\n.cs .beat{font-size:13px;line-height:19px;font-weight:500;color:var(--tx)}\n.cs .focus{font-size:11.5px;line-height:17px;color:var(--tx3)}\n.cs .tlines{display:flex;flex-direction:column;gap:9px}\n.cs .tline{display:flex;flex-direction:column;gap:4px}\n.cs .tl-head{display:flex;align-items:center;gap:6px;font-size:11.5px}\n.cs .kind{height:18px;padding:0 6px;border-radius:5px;display:inline-flex;align-items:center;font-size:10px;font-weight:700;background:var(--sf3);color:var(--tx2)}\n.cs .kind.speech{background:var(--soft);color:var(--ac)}\n.cs .kind.thought{background:transparent;border:1px dashed var(--tx3)}\n.cs .kind.sfx{color:var(--warn)}\n.cs .who{font-weight:600;color:var(--tx)}\n.cs .src{padding-left:8px;border-left:2px solid var(--line);font-size:11px;line-height:16px;color:var(--tx3)}\n.cs .castblk{padding:10px;border-radius:var(--r2);background:var(--sf2);display:flex;flex-direction:column;gap:10px}\n.cs .pcard.locked .castblk{background:var(--sf3)}\n.cs .cb-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap}\n.cs .cb-head b{font-size:12.5px;font-weight:600}\n.cs .avatar{width:22px;height:22px;flex:0 0 22px;border-radius:50%;display:grid;place-items:center;background:var(--soft);color:var(--ac);font-size:11px;font-weight:700}\n.cs .quote{margin:0;padding:8px 10px;border-left:2px solid var(--ac);border-radius:0 9px 9px 0;background:var(--soft);color:var(--tx);font-size:12px;line-height:18px}\n.cs .empty-mini{display:flex;flex-direction:column;gap:4px;padding:18px 12px;text-align:center;border:1px dashed var(--line);border-radius:var(--r2)}\n.cs .empty-mini b{font-size:12.5px;font-weight:600}\n.cs .empty-mini span{font-size:11.5px;color:var(--tx3)}\n\n/* 생성 탭 칩 (설정창 chips) */\n.cs .chips{display:flex;gap:6px;flex-wrap:wrap}\n.cs .chip{min-height:32px;padding:5px 10px;border:1px solid var(--line);border-radius:var(--r1);background:var(--sf2);color:var(--tx2);font-size:12px;display:inline-flex;align-items:center;gap:6px}\n.cs .chip small{font-size:10.5px;color:var(--tx3)}\n.cs .chip:hover:not(:disabled){background:var(--sf3);color:var(--tx)}\n.cs .chip.on{background:var(--soft);border-color:var(--ac);color:var(--ac);font-weight:600}\n.cs .chip.on small{color:var(--ac)}\n\n/* 할당량 — 안쪽 cq-* 클래스는 cspComicPaintQuota가 찾으므로 이름 유지 */\n.cs .comic-quota{height:30px;display:flex;align-items:center;gap:7px;padding:0 8px;border:1px solid var(--line);border-radius:var(--r1);background:var(--sf2);color:var(--tx3);min-width:0;flex:0 0 auto}\n.cs .comic-quota:hover:not(:disabled){background:var(--sf3);color:var(--tx2)}\n.cs .cq-label,.cs .cq-anlas{font-size:10px;white-space:nowrap}\n.cs .cq-track{width:82px;height:6px;flex:0 0 auto;border-radius:999px;background:var(--line);overflow:hidden}\n.cs .cq-fill{display:block;height:100%;width:0;border-radius:inherit;background:var(--ac);transition:width .22s ease}\n.cs .comic-quota.is-low .cq-fill{background:var(--warn)}\n.cs .comic-quota.is-empty .cq-fill{background:var(--danger)}\n.cs .cq-pct{min-width:32px;text-align:right;font-size:10px;line-height:14px;color:var(--tx2);font-variant-numeric:tabular-nums}\n.cs .comic-quota:disabled{opacity:.7}\n@media (prefers-reduced-motion:reduce){.cs *{transition:none!important}.cs .spinner{animation-duration:2.2s}}\n\n/* [PC 전용] 삽화 스튜디오 틀: 위 바 · 레일 · (도구 패널) · 캔버스 · 인스펙터 · 아래 바 */\n.cs-pc{position:absolute;inset:0}\n.cs-pc .veil{position:absolute;inset:0;display:grid;place-items:center;padding:24px;background:var(--scrim)}\n.cs-pc .v35-app{width:min(100%,1480px);height:min(100%,860px);min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--bg);border:1px solid var(--line);border-radius:var(--r4);box-shadow:var(--shadow)}\n.cs-pc .v35-top{height:46px;flex:0 0 46px;display:flex;align-items:center;gap:6px;padding:0 10px;background:var(--sf);border-bottom:1px solid var(--line)}\n.cs-pc .v35-brand{display:flex;align-items:center;gap:6px;font-size:14px;font-weight:600;white-space:nowrap}\n.cs-pc .v35-brand small{font-size:11px;color:var(--tx3);font-weight:400}\n.cs-pc .topsep{width:1px;height:20px;margin:0 6px;background:var(--line)}\n.cs-pc .select.q{width:auto;height:30px;padding:0 6px 0 9px;font-size:12px}\n.cs-pc .close{font-size:20px}\n.cs-pc .studio{flex:1;min-height:0;display:grid;grid-template-columns:44px minmax(0,1fr) 392px}\n.cs-pc .studio.panel{grid-template-columns:44px 320px minmax(0,1fr) 392px}\n.cs-pc .rail{display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 0;background:var(--sf);border-right:1px solid var(--line)}\n.cs-pc .studio.panel .rail{border-right:0}\n.cs-pc .rail .iconbtn{width:34px;height:34px;font-size:16px}\n.cs-pc .context-panel{min-height:0;overflow:auto;overscroll-behavior:contain;padding:12px;background:var(--sf);border-right:1px solid var(--line);position:relative}\n.cs-pc .context-panel>fieldset{display:flex;flex-direction:column;gap:12px}\n.cs-pc .panel-head{display:flex;align-items:center;gap:6px;margin-bottom:10px}\n.cs-pc .panel-head h3{margin:0;display:flex;align-items:center;gap:6px;font-size:14px;font-weight:600}\n.cs-pc .context-panel .charblk{padding:10px;border-radius:var(--r2);background:var(--sf2);display:flex;flex-direction:column;gap:10px}\n.cs-pc .context-panel .ta.editor{min-height:260px}\n.cs-pc .context-panel .ta.json{min-height:430px}\n.cs-pc .output{min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--sf2)}\n.cs-pc .output .canvas-wrap{flex:1}\n.cs-pc .film{height:52px;flex:0 0 52px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--sf);border-top:1px solid var(--line);min-width:0}\n.cs-pc .film-label{font-size:11px;color:var(--tx3);flex:0 0 auto}\n.cs-pc .pchips{display:flex;gap:6px;flex:0 0 auto}\n.cs-pc .pchip{height:30px;padding:0 10px 0 5px;border:1px solid var(--line);border-radius:var(--r1);background:var(--sf2);color:var(--tx2);display:inline-flex;align-items:center;gap:6px;font-size:12px;white-space:nowrap}\n.cs-pc .pchip b{width:20px;height:20px;border-radius:6px;display:grid;place-items:center;background:var(--sf3);color:var(--tx2);font-size:11px}\n.cs-pc .pchip:hover{color:var(--tx)}\n.cs-pc .pchip.on{background:var(--soft);border-color:var(--ac);color:var(--tx)}\n.cs-pc .pchip.on b{background:var(--acs);color:#fff}\n.cs-pc .pchip .pc-t{font-size:10.5px;color:var(--tx3)}\n.cs-pc .film-meta{min-width:0;font-size:11px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.cs-pc .inspector{min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--sf);border-left:1px solid var(--line)}\n.cs-pc .inspector-tabs{height:40px;flex:0 0 40px;display:flex;padding:0 6px;border-bottom:1px solid var(--line)}\n.cs-pc .tab{height:40px;padding:0 10px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--tx3);display:inline-flex;align-items:center;gap:6px}\n.cs-pc .tab:hover:not(:disabled){color:var(--tx2)}\n.cs-pc .tab.active{border-bottom-color:var(--ac);color:var(--tx);font-weight:600}\n.cs-pc .tab .badge{height:18px}\n.cs-pc .tab .dot,.cs-m .v35m-seg .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ac)}\n.cs-pc .inspector-body{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:12px 14px 18px;position:relative}\n.cs-pc .inspector-body>fieldset{display:flex;flex-direction:column;gap:14px}\n.cs-pc .inspector .blk{display:flex;flex-direction:column;gap:10px;padding-bottom:14px;border-bottom:1px solid var(--line2)}\n.cs-pc .inspector .blk:last-child{border-bottom:0;padding-bottom:0}\n.cs-pc .bottom{height:52px;flex:0 0 52px;display:flex;align-items:center;gap:6px;padding:0 10px;background:var(--sf);border-top:1px solid var(--line)}\n.cs-pc .statusline{display:block;min-width:0;max-width:36%;margin-left:4px;font-size:11.5px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.cs-pc .statusline.warn{color:var(--warn)}\n.cs-pc .statusline.err{color:var(--danger)}\n.cs-pc .statusline.accent{color:var(--ac)}\n.cs-pc .statusline.busy::before{content:\"\";display:inline-block;width:9px;height:9px;margin-right:6px;vertical-align:-1px;border:1.5px solid var(--line);border-top-color:var(--ac);border-radius:50%;animation:ccspin .8s linear infinite}\n\n/* [모바일 전용] V35 모바일 틀: 위 바 · 미디어 · 빠른 칩 · 세그 탭 · 스크롤 카드 · 아래 실행 바 */\n.cs-m{position:absolute;inset:0;display:flex;flex-direction:column;overflow:hidden;background:var(--bg);touch-action:manipulation}\n.cs-m .v35m-top{height:calc(50px + env(safe-area-inset-top,0px));flex:0 0 auto;padding:env(safe-area-inset-top,0px) 6px 0;display:flex;align-items:center;gap:4px;background:var(--sf);border-bottom:1px solid var(--line)}\n.cs-m .v35m-top .iconbtn{width:44px;height:44px;flex:0 0 44px;font-size:17px}\n.cs-m .v35m-titles{min-width:0;display:flex;flex-direction:column;line-height:1.25}\n.cs-m .v35m-title{font-size:14px;font-weight:650;white-space:nowrap}\n.cs-m .v35m-sub{font-size:11px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.cs-m .v35m-dirty{margin-left:4px;font-size:10.5px;font-weight:600;color:var(--ac);white-space:nowrap}\n.cs-m .v35m-dirty.warn{color:var(--warn)}\n.cs-m .comic-quota{height:36px;gap:6px;padding:0 9px;border-radius:9px}\n.cs-m .cq-label,.cs-m .cq-anlas{display:none}\n.cs-m .cq-track{width:28px;height:5px}\n.cs-m .cq-pct{min-width:0;font-size:11px;font-weight:600;color:var(--tx)}\n.cs-m .v35m-media{flex:0 0 auto;background:var(--sf2);border-bottom:1px solid var(--line2)}\n.cs-m .canvas-wrap{height:var(--media-h,min(34dvh,300px))}\n.cs-m .canvas-stage{inset:10px}\n.cs-m .canvas-wrap.has-seg .canvas-stage{top:48px}\n.cs-m .viewseg{top:9px}\n.cs-m .viewseg button{height:30px}\n.cs-m .canvas-tools{opacity:1}\n.cs-m .canvas-tools .iconbtn{width:38px;height:38px}\n.cs-m .board{--gap:5px;border-radius:9px}\n.cs-m .cell{padding:6px;gap:3px;border-width:1px;border-radius:5px}\n.cs-m .cell-no{width:17px;height:17px;flex-basis:17px;font-size:10px}\n.cs-m .cell-shot{font-size:9.5px}\n.cs-m .cell-beat{font-size:10px;line-height:13px;-webkit-line-clamp:3}\n.cs-m .cell-texts,.cs-m .cell-focus{display:none}\n.cs-m .ghost-note{padding:10px 12px}\n.cs-m .ghost-note b{font-size:13px}\n.cs-m .ghost-note small{display:none}\n.cs-m .loading-card small{display:none}\n.cs-m .v35m-error{margin:0 10px 10px;padding:10px 12px;border:1px solid var(--danger);border-radius:10px;background:var(--sf);color:var(--danger);font-size:12px;line-height:18px}\n.cs-m .v35m-quick{display:flex;align-items:center;gap:6px;padding:7px 10px;overflow-x:auto;scrollbar-width:none;background:var(--sf);border-top:1px solid var(--line2)}\n.cs-m .v35m-quick::-webkit-scrollbar{display:none}\n.cs-m .v35m-chipselect{height:34px;max-width:170px;flex:0 0 auto;padding:0 8px;border:1px solid var(--line);border-radius:8px;background:var(--sf2);color:var(--tx2);font-size:11px;outline:none}\n.cs-m .v35m-chipselect.accent{background:var(--soft);border-color:transparent;color:var(--ac);font-weight:650}\n.cs-m .v35m-tabs{flex:0 0 48px;display:flex;padding:7px 10px 5px;background:var(--bg);border-bottom:1px solid var(--line2)}\n.cs-m .v35m-seg{width:100%;display:grid;grid-template-columns:repeat(5,1fr);gap:2px;padding:2px;border:1px solid var(--line);border-radius:10px;background:var(--sf2)}\n.cs-m .v35m-seg button{position:relative;height:32px;border:0;border-radius:8px;background:transparent;color:var(--tx3);font-size:11.5px}\n.cs-m .v35m-seg button.active{background:var(--sf3);color:var(--tx);font-weight:650}\n.cs-m .v35m-seg .dot{position:absolute;top:6px;right:6px;width:5px;height:5px}\n.cs-m .v35m-scroll{flex:1;min-height:0;overflow:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;padding:10px;position:relative}\n.cs-m .v35m-scroll>fieldset{display:flex;flex-direction:column;gap:10px}\n.cs-m .blk{display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--sf)}\n.cs-m .lead{padding:0 2px}\n.cs-m .btn{min-height:38px}\n.cs-m .btn.tiny{min-height:32px;height:32px;padding:0 10px;font-size:11.5px}\n.cs-m .locktog{height:32px;padding:0 10px}\n.cs-m .input,.cs-m .select{height:44px;font-size:13px}\n.cs-m .grid3 .select{height:44px;font-size:12px;padding:0 4px 0 8px}\n.cs-m .ta{font-size:13px;line-height:20px}\n.cs-m .ta.mono{font:12px/19px var(--mono)}\n.cs-m .ta.editor{min-height:280px}\n.cs-m .grid2.stack{grid-template-columns:1fr}\n.cs-m .slotline{min-height:42px}\n.cs-m .chip{min-height:40px}\n.cs-m .row2 .btn{height:44px}\n.cs-m .v35m-reason{padding:7px 12px;background:var(--sf);border-top:1px solid var(--line2);font-size:11.5px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.cs-m .v35m-reason.warn{color:var(--warn)}\n.cs-m .v35m-reason.err{color:var(--danger)}\n.cs-m .v35m-reason.accent{color:var(--ac)}\n.cs-m .v35m-action{flex:0 0 auto;display:flex;align-items:center;gap:7px;padding:8px 10px max(10px,env(safe-area-inset-bottom,0px));background:var(--sf);border-top:1px solid var(--line)}\n.cs-m .v35m-action .btn{height:44px;min-width:44px;border-radius:10px}\n.cs-m .v35m-action .btn.primary{flex:1}\n.cs-m .v35m-action .btn.wide{flex:1}\n.cs-m.keyboard-open .v35m-media{display:none}\n\n/* Viewport adaptations and focus/overflow support for the live popup. */\n:host(.v35-dark){--page:#0a0b0f;--cell:#14161b;color-scheme:dark}\n:host(.v35-light){--page:#fff;--cell:#f8f9fb;color-scheme:light}\n.cs .canvas{max-width:100%;max-height:100%}\n.cs .comic-brand-icon{display:block;flex:0 0 18px;width:18px;height:18px;color:var(--tx2)}\n.cs-m .v35m-title{display:flex;align-items:center;gap:5px}\n.cs .board{grid-template-columns:minmax(0,1fr)}\n.cs-pc .film{overflow-x:auto}.cs-pc .pchips{max-width:100%}\n.cs-pc .bottom{height:auto;min-height:52px;flex-basis:auto;flex-wrap:wrap;padding:8px 10px}\n.cs-pc .statusline{flex:1 1 100px;max-width:24%}\n.cs .canvas-error{max-height:35%;overflow:auto;white-space:pre-wrap}\n.cs-m{height:var(--cc-viewport-height,100dvh);inset:var(--cc-viewport-top,0px) 0 auto}\n.cs-m .v35m-error{max-height:100px;overflow:auto;white-space:pre-wrap}\n.cs-m .v35m-top .comic-quota{flex-shrink:0}\n.cs-m .v35m-dirty{max-width:74px;overflow:hidden;text-overflow:ellipsis}\n.cs-m .v35m-reason{max-height:64px;overflow:auto;white-space:normal;flex-shrink:0}\n.cs-m .v35m-action{gap:5px}.cs-m .v35m-action .btn{padding:0 8px;font-size:12px}\n@media(max-width:1200px){.cs-pc .v35-brand small,.cs-pc .cq-label,.cs-pc .cq-anlas{display:none}.cs-pc .studio{grid-template-columns:44px minmax(0,1fr) 360px}.cs-pc .studio.panel{grid-template-columns:44px minmax(0,1fr) 360px;position:relative}.cs-pc .context-panel{position:absolute;left:44px;top:0;bottom:0;width:min(320px,calc(100% - 44px));z-index:8;box-shadow:var(--shadow)}.cs-pc .bottom #cc-defaults{font-size:11px}.cs-pc .film-meta{display:none}}\n@media(max-height:650px){.cs-m .canvas-wrap{--media-h:22dvh}.cs-pc .veil{padding:12px}}\n@media(max-width:360px){.cs-m .cq-track,.cs-m .v35m-dirty{display:none}.cs-m .v35m-top .iconbtn{width:38px;flex-basis:38px}}\n"};
     })();
     function cspComicInstructionsHtml() {
         const g=getGlobalSettings();
         return `<p class="muted">만화 전용 지침이야. 삽화 지침과 독립적으로 저장되고, 두 지침을 합쳐 분석 API에 한 번 요청해. JSON 출력 계약은 코드가 따로 붙여줘.</p><label>만화 디렉터 지침<textarea id="cc-director" rows="18">${escapeHtml(g.comicDirectorInstruction||CSP_COMIC_DIRECTOR)}</textarea></label><label>NAI V5 만화 작성 지침<textarea id="cc-renderer" rows="14">${escapeHtml(g.comicRendererInstruction||CSP_COMIC_RENDERER)}</textarea></label><div class="row"><button id="cc-save-instructions">지침 저장</button><button id="cc-reset-instructions">만화 기본 지침 복원</button></div>`;
     }
     function cspComicSharedThemeCss() {
+        // v35 스타일시트는 고정 문자열이고 테마 전환은 :host 클래스만 바꾸므로 한 번만 추출한다.
+        if(cspComicThemeCssCache)return cspComicThemeCssCache;
         ensureV35Styles();
         const source=document.getElementById('csp-v35-style')?.textContent||'';
         const base=source.match(/#csp-v35-root\{([^}]+)\}/)?.[1]||'';
@@ -14293,7 +12579,9 @@ ${st.text&&!s.busy?`<div class="v35m-reason ${st.tone}">${esc(st.text)}</div>`:'
             const rule=source.match(new RegExp('#csp-v35-root\\.v35-'+mode+'\\{([^}]+)\\}'))?.[1]||'';
             return `:host(.v35-${mode}){${rule}}`;
         }).join('\n');
-        return `:host{${tokens}}\n${themes}`;
+        const css=`:host{${tokens}}\n${themes}`;
+        if(tokens)cspComicThemeCssCache=css;
+        return css;
     }
     function cspComicStartThemeSync() {
         cspComicThemeCleanup?.();
@@ -14356,15 +12644,23 @@ ${st.text&&!s.busy?`<div class="v35m-reason ${st.tone}">${esc(st.text)}</div>`:'
         const first=!cspComicHost;
         if(first){cspComicHost=document.createElement('div');cspComicHost.id='csp-comic-studio';cspComicHost.style.cssText='position:fixed;inset:0;z-index:2147483646';document.body.appendChild(cspComicHost);cspComicHost.attachShadow({mode:'open'});cspComicStartThemeSync();}
         const root=cspComicHost.shadowRoot;
-        const mobile=CSP_COMIC_MOBILE_UI||window.matchMedia('(max-width:800px)').matches;
         const saved={};root.querySelectorAll('[data-scroll]').forEach(el=>saved[el.dataset.scroll]=el.scrollTop);
         const active=root.activeElement,focusId=active?.id;
         const focusData=active?Array.from(active.attributes).find(a=>a.name.startsWith('data-')):null;
         s.comicSel=Math.max(0,Math.min(s.comicSel||0,(s.plan?.panels.length||1)-1));
         s.comicView=s.comicView||(s.imageSrc?'result':'board');
-        if(!mobile&&['characters','instructions'].includes(s.tab)){s.tool=s.tab;s.tab='story';}
         if(!['story','characters','prompt','generate','instructions'].includes(s.tab))s.tab='story';
-        root.innerHTML='<style>'+cspComicSharedThemeCss()+cspComicUi.css+'</style><div class="cs '+(mobile?'cs-m':'cs-pc')+'"'+(mobile?' role="dialog" aria-modal="true" aria-label="만화 스튜디오"':'')+'>'+ (mobile?cspComicUi.mobileHtml(s):cspComicUi.pcHtml(s))+'</div>';
+        const markup='<div class="cs cs-m" role="dialog" aria-modal="true" aria-label="만화 스튜디오">'+cspComicUi.mobileHtml(s)+'</div>';
+        // 공용 CSS(약 28KB)는 섀도 루트마다 한 번만 넣고, 이후 렌더는 <style> 뒤의 본문만 교체한다.
+        const style=root.firstElementChild?.tagName==='STYLE'?root.firstElementChild:null;
+        if(style){const tpl=document.createElement('template');tpl.innerHTML=markup;while(style.nextSibling)style.nextSibling.remove();root.appendChild(tpl.content);}
+        else root.innerHTML='<style>'+cspComicSharedThemeCss()+cspComicUi.css+'</style>'+markup;
+        // 결과 이미지(수 MB data URL)는 HTML 문자열에 넣지 않는다. 같은 이미지면 이전 <img>를 그대로 옮겨 쓴다.
+        const resultImg=root.querySelector('.result-img');
+        if(resultImg){
+            if(cspComicResultImg?.src===s.imageSrc)resultImg.replaceWith(cspComicResultImg.el);
+            else{resultImg.src=s.imageSrc;cspComicResultImg={src:s.imageSrc,el:resultImg};}
+        }
         cspComicBind(s,root);
         root.querySelectorAll('[data-scroll]').forEach(el=>{if(saved[el.dataset.scroll]!=null)el.scrollTop=saved[el.dataset.scroll];});
         if(first)root.getElementById('cc-close')?.focus({preventScroll:true});
@@ -14390,8 +12686,6 @@ ${st.text&&!s.busy?`<div class="v35m-reason ${st.tone}">${esc(st.text)}</div>`:'
     function cspComicBind(s,root) {
         const on=(id,event,fn)=>{const el=root.getElementById(id);if(el)el.addEventListener(event,fn);};
         const dirty=()=>{s.promptOverride=null;s.notice='콘티 변경됨 · 프롬프트에 반영돼. 구도를 직접 고치면 한국어 요약은 자동 번역되지 않아.';cspComicPaintTextBudget(s,root);};
-        root.querySelectorAll('[data-tool]').forEach(b=>b.onclick=()=>{if(s.busy)return;s.tool=s.tool===b.dataset.tool?'':b.dataset.tool;cspComicRender(s);root.querySelector('.context-panel textarea')?.focus({preventScroll:true});});
-        root.querySelector('[data-close-tool]')?.addEventListener('click',()=>{const tool=s.tool;s.tool='';cspComicRender(s);root.querySelector('[data-tool="'+tool+'"]')?.focus({preventScroll:true});});
         root.querySelectorAll('[data-cc-panel]').forEach(b=>b.onclick=()=>{if(s.busy)return;s.comicSel=Number(b.dataset.ccPanel);s.tab='story';s.comicView='board';cspComicRender(s);root.querySelector('[data-panel-card="'+s.comicSel+'"]')?.scrollIntoView({block:'nearest'});});
         root.querySelectorAll('[data-cc-view]').forEach(b=>b.onclick=()=>{s.comicView=b.dataset.ccView;cspComicRender(s);});
         on('cc-q-size','change',e=>{if(e.target.value==='custom'){s.comicCustomSize=true;s.tab='generate';}else{const [width,height]=e.target.value.split('x').map(Number);Object.assign(s.generation,{width,height});s.comicCustomSize=false;}cspComicRender(s);});
@@ -14451,7 +12745,7 @@ ${st.text&&!s.busy?`<div class="v35m-reason ${st.tone}">${esc(st.text)}</div>`:'
     }
     function cspComicAttachDefaults(h) {
         const o=cspComicDefaults(),section=document.createElement('div');section.className='section';
-        section.innerHTML=`<div class="section-title"><svg class="csp-comic-icon" style="display:inline-block;width:16px;height:16px;flex:0 0 16px;vertical-align:-3px;color:inherit" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="16" rx="1.3"/><path d="M7.5 7.5h5a1.5 1.5 0 0 1 1.5 1.5v2a1.5 1.5 0 0 1-1.5 1.5h-2L8 14v-1.5h-.5A1.5 1.5 0 0 1 6 11V9a1.5 1.5 0 0 1 1.5-1.5Z"/><path d="m15 17 3-3m0 3h1"/></svg> 만화 기본 옵션</div><p class="help">말풍선 버튼에서 새 콘티를 열 때 적용해. 만화 지침은 고급에서 따로 수정할 수 있어.</p><div class="grid2"><div class="field"><label>컷 수</label>${cspComicSelect('ccd-count',o.panelCount,{auto:'자동',1:'1컷',2:'2컷',3:'3컷',4:'4컷'})}</div><div class="field"><label>배치</label>${cspComicSelect('ccd-layout',o.layout,CSP_COMIC_LAYOUT_LABELS)}</div><div class="field"><label for="ccd-language">만화 언어</label>${cspComicSelect('ccd-language',o.dialogueLanguage,CSP_COMIC_LANGUAGES)}</div><div class="field"><label>읽는 방향</label>${cspComicSelect('ccd-dir',o.readingDirection,{ltr:'왼쪽 → 오른쪽',rtl:'오른쪽 → 왼쪽'})}</div></div>`;
+        section.innerHTML=`<div class="section-title"><svg class="csp-comic-icon" style="display:inline-block;width:16px;height:16px;flex:0 0 16px;vertical-align:-3px;color:inherit" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="16" rx="1.3"/><path d="M7.5 7.5h5a1.5 1.5 0 0 1 1.5 1.5v2a1.5 1.5 0 0 1-1.5 1.5h-2L8 14v-1.5h-.5A1.5 1.5 0 0 1 6 11V9a1.5 1.5 0 0 1 1.5-1.5Z"/><path d="m15 17 3-3m0 3h1"/></svg> 만화 기본 옵션</div><p class="help">말풍선 버튼에서 새 콘티를 열 때 적용해. 만화 지침은 고급에서 따로 수정할 수 있어.</p><div class="grid2"><div class="field"><label>컷 수</label>${cspComicUi.sel('ccd-count',o.panelCount,{auto:'자동',1:'1컷',2:'2컷',3:'3컷',4:'4컷'})}</div><div class="field"><label>배치</label>${cspComicUi.sel('ccd-layout',o.layout,CSP_COMIC_LAYOUT_LABELS)}</div><div class="field"><label for="ccd-language">만화 언어</label>${cspComicUi.sel('ccd-language',o.dialogueLanguage,CSP_COMIC_LANGUAGES)}</div><div class="field"><label>읽는 방향</label>${cspComicUi.sel('ccd-dir',o.readingDirection,{ltr:'왼쪽 → 오른쪽',rtl:'오른쪽 → 왼쪽'})}</div></div>`;
         h.appendChild(section);section.querySelectorAll('select').forEach(x=>{x.className='select';x.onchange=()=>{
             let count=section.querySelector('#ccd-count').value,layout=section.querySelector('#ccd-layout').value;
             if(x.id==='ccd-count'){layout='auto';section.querySelector('#ccd-layout').value=layout;}
@@ -14462,10 +12756,19 @@ ${st.text&&!s.busy?`<div class="v35m-reason ${st.tone}">${esc(st.text)}</div>`:'
 
 
     async function start() {
-        cspComicRestoreOriginalInstructions();
-        migrateLocalJsonStorageToCompressed();
-        migrateRemovedVertexProviderSettings();
-        forceFirebaseProviderIfConfigured();
+        // v5.3.0: 설정 보정·마이그레이션 하나가 실패해도(예: 못 읽은 압축 설정의 덮어쓰기 거부) 부팅은 계속한다.
+        [
+            cspComicRestoreOriginalInstructions,
+            migrateLocalJsonStorageToCompressed,
+            migrateRemovedVertexProviderSettings,
+            forceFirebaseProviderIfConfigured
+        ].forEach(step => {
+            try {
+                step();
+            } catch (err) {
+                console.warn(`[Crack Scene Painter] boot step skipped (${step.name}):`, err);
+            }
+        });
         injectStyles();
         installV35Ui();
         applySceneVisibilityState(isEnabled());
@@ -14481,15 +12784,6 @@ ${st.text&&!s.busy?`<div class="v35m-reason ${st.tone}">${esc(st.text)}</div>`:'
         window.addEventListener('storage', e => {
             if (!e.key || e.key === getSceneRecordsKey()) invalidateSceneRecordsCache('');
         });
-
-        window.addEventListener('beforeunload', () => {
-            clearTimeout(menuInjectTimer);
-            clearTimeout(messageInjectTimer);
-            clearTimeout(injectTimer);
-            clearTimeout(galleryRowCountTimer);
-            clearTimeout(cspScrollIdleTimer);
-            clearTimeout(cspRestoreQuietTimer);
-        }, { once: true });
 
         let lastUrl = location.href;
         setInterval(() => {
