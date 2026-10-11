@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         🔁 LogShift (로그 일괄 편집기)
 // @namespace    crack.logshift
-// @version      1.0.3
-// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/LogShift.user.js
-// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/LogShift.user.js
-// @description  크랙 채팅 로그의 문자열 일괄 치환/삭제 + HUD 턴 번호 구간 재번호 도구. 전체 로그 API 조회, 후보 제외, 시작/끝 앵커, 마지막 턴 계산, 백업/되돌리기를 지원합니다.
+// @version      1.1.0
+// @downloadURL  https://raw.githubusercontent.com/OWNER/REPO/main/scripts/LogShift.user.js
+// @updateURL    https://raw.githubusercontent.com/OWNER/REPO/main/scripts/LogShift.user.js
+// @description  크랙 채팅 로그의 문자열 일괄 치환/삭제(여러 쌍 · 조사 자동 맞춤) + HUD 턴 번호 구간 재번호 도구. 전체 로그 API 조회, 메시지별 제외, 시작/끝 앵커, 마지막 턴 계산, 백업/되돌리기 기록을 지원합니다.
 // @match        https://crack.wrtn.ai/*
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -16,7 +16,7 @@
   'use strict';
 
   const APP = Object.freeze({
-    version: '1.0.3',
+    version: '1.1.0',
     apiBase: 'https://crack-api.wrtn.ai/crack-gen/v3',
     pageSize: 300,
     hardLimit: 20000,
@@ -24,7 +24,12 @@
     retryCount: 3,
     retryBaseDelayMs: 700,
     maxReplacePreviewItems: 120,
-    backupKey: 'crack_bulk_editor:last_backup:v2',
+    backupKey: 'crack_bulk_editor:last_backup:v2', // 1.0.x 단일 백업 (처음 한 번 기록으로 옮김)
+    historyKey: 'crack_bulk_editor:history:v1',
+    historyPerChat: 5,
+    historyTotal: 20,
+    recentKey: 'crack_bulk_editor:recent_pairs:v1',
+    recentMax: 8,
   });
 
   const ID = Object.freeze({
@@ -42,6 +47,8 @@
     log: 'cbe-log',
     cancel: 'cbe-cancel',
     undo: 'cbe-undo',
+    undoPop: 'cbe-undo-pop',
+    history: 'cbe-history',
     exportBackup: 'cbe-export-backup',
 
     tabReplace: 'cbe-tab-replace',
@@ -53,10 +60,13 @@
     replacePreview: 'cbe-replace-preview',
     replaceScan: 'cbe-replace-scan',
     replaceApply: 'cbe-replace-apply',
-    find: 'cbe-find',
-    replace: 'cbe-replace',
+    pairs: 'cbe-pairs',
+    pairList: 'cbe-pair-list',
+    addPair: 'cbe-add-pair',
+    recent: 'cbe-recent',
     target: 'cbe-target',
     caseSensitive: 'cbe-case-sensitive',
+    josa: 'cbe-josa',
 
     turnPattern: 'cbe-turn-pattern',
     turnAnalyze: 'cbe-turn-analyze',
@@ -88,6 +98,7 @@
     replace: {
       matches: [],
       lastScanSignature: '',
+      skipped: new Set(),
     },
 
     turn: {
@@ -100,8 +111,64 @@
       expectedEnd: null,
       plan: null,
       analyzed: false,
+      openId: '',
     },
   };
+
+  // ---------------------------------------------------------------------------
+  // 아이콘 / 움직임 도우미
+  // ---------------------------------------------------------------------------
+
+  // 글자 기호 대신 선 그림(SVG)을 써서 폰트가 바뀌어도 모양이 같게 유지
+  const ICON_PATHS = Object.freeze({
+    swap: '<path d="M16 3l4 4-4 4"/><path d="M20 7H4"/><path d="M8 21l-4-4 4-4"/><path d="M4 17h16"/>',
+    undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
+    save: '<path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/>',
+    log: '<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/>',
+    x: '<path d="M6 6l12 12"/><path d="M18 6 6 18"/>',
+    chev: '<path d="m6 9 6 6 6-6"/>',
+    more: '<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>',
+    search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/>',
+    check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+    plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
+  });
+
+  function icon(name, extraClass = '') {
+    return `<svg class="cbe-ic ${extraClass}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${ICON_PATHS[name] || ''}</svg>`;
+  }
+
+  function busyLabel(text) {
+    return `<span class="lbl">${text}</span><span class="spin" aria-hidden="true"></span>${icon('check', 'ok')}`;
+  }
+
+  function motionOk() {
+    try {
+      return !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  function retrigger(el, className) {
+    if (!el) return;
+    el.classList.remove(className);
+    void el.offsetWidth;
+    el.classList.add(className);
+  }
+
+  function flashDone(button) {
+    if (!button) return;
+    button.classList.remove('is-loading');
+    button.classList.add('is-done');
+    setTimeout(() => button.classList.remove('is-done'), 900);
+  }
+
+  function nudgeUndo() {
+    const undo = document.getElementById(ID.undo);
+    if (!undo) return;
+    retrigger(undo, 'nudge');
+    setTimeout(() => undo.classList.remove('nudge'), 1700);
+  }
 
   function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -371,15 +438,19 @@
     return text.length <= max ? text : `${text.slice(0, max)}…`;
   }
 
-  function setStatus(message, type = 'neutral') {
+  function setStatus(message, type = 'neutral', options = {}) {
     const el = document.getElementById(ID.status);
     const text = document.getElementById(ID.statusText);
     if (!el) return;
 
-    const empty = !String(message ?? '').trim();
+    const value = String(message ?? '');
+    const empty = !value.trim();
     el.dataset.type = type;
     el.hidden = empty && !state.loading && !state.patching;
-    if (text) text.textContent = String(message ?? '');
+    if (text) {
+      if (options.html) text.innerHTML = value;
+      else text.textContent = value;
+    }
   }
 
   function appendLog(message) {
@@ -401,12 +472,84 @@
     }
   }
 
+  // 되돌리기 기록: 채팅방마다 최근 몇 개를 쌓아 둠 (맨 앞이 가장 최근)
+  function backupIdentity(backup) {
+    return `${backup?.createdAt || ''}|${backup?.chatId || ''}|${backup?.type || ''}`;
+  }
+
+  function trimHistory(list) {
+    const perChat = new Map();
+    const out = [];
+
+    for (const backup of list) {
+      const used = perChat.get(backup.chatId) || 0;
+      if (used >= APP.historyPerChat) continue;
+      perChat.set(backup.chatId, used + 1);
+      out.push(backup);
+      if (out.length >= APP.historyTotal) break;
+    }
+
+    return out;
+  }
+
+  function readHistory() {
+    let list = GM_getValue(APP.historyKey, null);
+    if (!Array.isArray(list)) list = [];
+
+    const legacy = GM_getValue(APP.backupKey, null);
+    if (legacy?.chatId && Array.isArray(legacy.items) && legacy.items.length) {
+      list = trimHistory([legacy, ...list]);
+      try {
+        GM_setValue(APP.historyKey, list);
+        GM_deleteValue(APP.backupKey);
+      } catch (_) {}
+    }
+
+    return list.filter(item => item?.chatId && Array.isArray(item.items) && item.items.length);
+  }
+
+  function historyForChat(chatId) {
+    return readHistory().filter(item => item.chatId === chatId);
+  }
+
+  // 적용 직전에 부르는 이름은 그대로 두고, 이제는 기록 맨 앞에 쌓음
   function saveBackup(backup) {
-    GM_setValue(APP.backupKey, backup);
+    GM_setValue(APP.historyKey, trimHistory([backup, ...readHistory()]));
   }
 
   function loadBackup() {
-    return GM_getValue(APP.backupKey, null);
+    const chatId = parseChatId();
+    return (chatId ? historyForChat(chatId)[0] : null) || null;
+  }
+
+  function removeHistoryEntries(entries) {
+    const drop = new Set(entries.map(backupIdentity));
+    GM_setValue(APP.historyKey, readHistory().filter(item => !drop.has(backupIdentity(item))));
+  }
+
+  function loadRecentPairs() {
+    const list = GM_getValue(APP.recentKey, []);
+    return Array.isArray(list)
+      ? list.filter(item => item && typeof item.find === 'string' && item.find)
+      : [];
+  }
+
+  function saveRecentPairs(pairs) {
+    const seen = new Set();
+    const list = [...pairs, ...loadRecentPairs()]
+      .map(item => ({ find: String(item.find || ''), replace: String(item.replace || '') }))
+      .filter(item => {
+        if (!item.find) return false;
+        const key = `${item.find}\u0000${item.replace}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, APP.recentMax);
+
+    try {
+      GM_setValue(APP.recentKey, list);
+    } catch (_) {}
   }
 
   function sanitizeFilename(value) {
@@ -452,30 +595,56 @@
   }
 
   function updateBackupButtons() {
-    const backup = loadBackup();
+    const chatId = parseChatId();
+    const list = chatId ? historyForChat(chatId) : [];
     const undo = document.getElementById(ID.undo);
     const exportBtn = document.getElementById(ID.exportBackup);
-
-    const hasBackup = !!(
-      backup?.chatId &&
-      Array.isArray(backup?.items) &&
-      backup.items.length
-    );
+    const busy = state.loading || state.patching;
 
     if (undo) {
-      undo.disabled = state.loading || state.patching || !hasBackup;
-      undo.title = hasBackup
-        ? `직전 백업: ${backup.items.length.toLocaleString()}개`
-        : '저장된 백업 없음';
+      undo.disabled = busy;
+      undo.title = list.length
+        ? `되돌리기 기록 ${list.length.toLocaleString()}개`
+        : '되돌리기 기록 (비어 있음)';
     }
 
     if (exportBtn) {
-      exportBtn.disabled = state.loading || state.patching || !hasBackup;
+      exportBtn.disabled = busy || !list.length;
     }
+
+    const pop = document.getElementById(ID.undoPop);
+    if (pop && !pop.hidden) renderHistoryPop();
+  }
+
+  // 입력창 버튼: 패널을 닫아도 작업 중이면 둘레에 진행 링, 끝나면 점
+  function isPanelOpen() {
+    return document.getElementById(ID.overlay)?.style.display === 'flex';
+  }
+
+  function setLaunchProgress(percent) {
+    const button = document.getElementById(ID.launch);
+    if (!button) return;
+
+    if (percent === null) {
+      button.classList.add('cbe-indet');
+    } else {
+      button.classList.remove('cbe-indet');
+      button.style.setProperty('--cbe-p', String(Math.round(percent)));
+    }
+  }
+
+  function syncLaunchBusy() {
+    const button = document.getElementById(ID.launch);
+    if (!button) return;
+    const busy = state.loading || state.patching;
+    button.classList.toggle('cbe-busy', busy && !isPanelOpen());
   }
 
   function setProgress(current, total) {
     const wrap = document.getElementById(ID.progress);
+    const percent = total ? Math.min(100, (current / total) * 100) : 0;
+    setLaunchProgress(total ? percent : null);
+
     if (!wrap) return;
 
     if (!total) {
@@ -485,15 +654,21 @@
 
     wrap.hidden = false;
     const bar = wrap.querySelector('i');
-    if (bar) bar.style.width = `${Math.min(100, (current / total) * 100)}%`;
+    if (bar) bar.style.width = `${percent}%`;
   }
 
-  function setBusyUi(isBusy) {
-    document.querySelectorAll(`#${ID.panel} input, #${ID.panel} select, #${ID.panel} .cbe-btn, #${ID.panel} .cbe-tab`)
-      .forEach(el => {
-        if (el.id === ID.cancel) return;
-        el.disabled = isBusy;
-      });
+  let busyButton = null;
+
+  function setBusyUi(isBusy, sourceButton = null) {
+    const lockable = [
+      'input', 'select', '.cbe-btn', '.cbe-tab', '.cbe-mini-btn', '.cbe-chip',
+      '.cbe-pair-del', '.cbe-flow-arrow', '.cbe-add-pair', '[data-lock]',
+    ].map(selector => `#${ID.panel} ${selector}`).join(', ');
+
+    document.querySelectorAll(lockable).forEach(el => {
+      if (el.id === ID.cancel) return;
+      el.disabled = isBusy;
+    });
 
     const cancel = document.getElementById(ID.cancel);
     if (cancel) {
@@ -501,22 +676,46 @@
       cancel.style.display = isBusy ? '' : 'none';
     }
 
-    if (!isBusy) {
+    if (isBusy) {
+      busyButton = sourceButton;
+      busyButton?.classList.add('is-loading');
+      setLaunchProgress(null);
+    } else {
+      busyButton?.classList.remove('is-loading');
+      busyButton = null;
       setProgress(0, 0);
       syncApplyButtons();
       updateBackupButtons();
+
+      const launch = document.getElementById(ID.launch);
+      if (launch?.classList.contains('cbe-busy') && !isPanelOpen()) {
+        launch.classList.add('cbe-done');
+      }
     }
+
+    syncLaunchBusy();
+  }
+
+  function setApplyCount(button, count) {
+    const badge = button?.querySelector('.cnt');
+    if (!badge) return;
+
+    const text = count ? count.toLocaleString() : '';
+    if (badge.textContent === text) return;
+
+    badge.textContent = text;
+    badge.classList.remove('pop');
+    if (text) retrigger(badge, 'pop');
   }
 
   function syncApplyButtons() {
     const replaceApply = document.getElementById(ID.replaceApply);
     const turnApply = document.getElementById(ID.turnApply);
+    const included = getIncludedMatches().length;
 
     if (replaceApply) {
-      replaceApply.disabled =
-        state.loading ||
-        state.patching ||
-        !state.replace.matches.length;
+      replaceApply.disabled = state.loading || state.patching || !included;
+      setApplyCount(replaceApply, included);
     }
 
     if (turnApply) {
@@ -526,35 +725,120 @@
         state.patching ||
         !state.turn.analyzed ||
         !patchCount;
+      setApplyCount(turnApply, state.turn.analyzed ? patchCount : 0);
     }
   }
 
   // ---------------------------------------------------------------------------
-  // 문자열 치환/삭제
+  // 문자열 치환/삭제 (여러 쌍 · 조사 자동 맞춤 · 메시지별 제외)
   // ---------------------------------------------------------------------------
 
-  function buildLiteralRegex(findText, caseSensitive) {
-    return new RegExp(escapeRegExp(findText), caseSensitive ? 'g' : 'gi');
+  const HANGUL_FIRST = 0xac00;
+  const HANGUL_LAST = 0xd7a3;
+
+  function isHangulSyllable(ch) {
+    if (!ch) return false;
+    const code = ch.charCodeAt(0);
+    return code >= HANGUL_FIRST && code <= HANGUL_LAST;
   }
 
-  function replaceLiteral(text, findText, replacement, caseSensitive) {
-    const regex = buildLiteralRegex(findText, caseSensitive);
-    let count = 0;
+  // 마지막 글자의 받침: 'none' 없음 / 'rieul' ㄹ받침 / 'other' 그 밖의 받침 / null 한글이 아님
+  function finalKind(text) {
+    const ch = String(text || '').slice(-1);
+    if (!isHangulSyllable(ch)) return null;
+    const jong = (ch.charCodeAt(0) - HANGUL_FIRST) % 28;
+    if (jong === 0) return 'none';
+    if (jong === 8) return 'rieul';
+    return 'other';
+  }
 
-    const after = text.replace(regex, () => {
-      count += 1;
-      return replacement;
+  // [받침 있을 때, 받침 없을 때, 뒤에 한글이 바로 붙으면 안 됨]
+  const JOSA_FAMILIES = [
+    ['이었', '였', false],
+    ['이에요', '예요', true],
+    ['이라고', '라고', true],
+    ['이라서', '라서', true],
+    ['이라도', '라도', true],
+    ['이든지', '든지', true],
+    ['이랑', '랑', true],
+    ['이나', '나', true],
+    ['이며', '며', true],
+    ['이란', '란', true],
+    ['이라', '라', true],
+    ['이든', '든', true],
+    ['이야', '야', true],
+    ['이여', '여', true],
+    ['은', '는', true],
+    ['이', '가', true],
+    ['을', '를', true],
+    ['과', '와', true],
+    ['아', '야', true],
+  ];
+
+  const JOSA_ENTRIES = (() => {
+    const entries = [];
+
+    for (const [batchim, plain, boundary] of JOSA_FAMILIES) {
+      entries.push({ token: batchim, batchim, plain, boundary, ro: false });
+      entries.push({ token: plain, batchim, plain, boundary, ro: false });
+    }
+
+    // (으)로: ㄹ받침이거나 받침이 없으면 '로', 그 밖의 받침이면 '으로'
+    for (const suffix of ['서', '써', '부터', '는', '도', '만', '']) {
+      entries.push({ token: `으로${suffix}`, suffix, boundary: true, ro: true });
+      entries.push({ token: `로${suffix}`, suffix, boundary: true, ro: true });
+    }
+
+    // 같은 글자가 여러 갈래에 걸치면 (예: '야' = 이야/야, 아/야) 자동으로 고치지 않음
+    const families = new Map();
+    for (const entry of entries) {
+      const key = entry.ro ? 'ro' : `${entry.batchim}/${entry.plain}`;
+      if (!families.has(entry.token)) families.set(entry.token, new Set());
+      families.get(entry.token).add(key);
+    }
+    for (const entry of entries) {
+      entry.ambiguous = families.get(entry.token).size > 1;
+    }
+
+    return entries.sort((a, b) => b.token.length - a.token.length);
+  })();
+
+  function matchJosaAt(text, position) {
+    for (const entry of JOSA_ENTRIES) {
+      if (!text.startsWith(entry.token, position)) continue;
+      if (entry.boundary && isHangulSyllable(text[position + entry.token.length])) continue;
+      return entry;
+    }
+    return null;
+  }
+
+  function josaTarget(entry, kind) {
+    if (entry.ro) return `${kind === 'other' ? '으로' : '로'}${entry.suffix}`;
+    return kind === 'none' ? entry.plain : entry.batchim;
+  }
+
+  function sameJosaClass(entry, oldKind, newKind) {
+    if (!oldKind) return false;
+    if (entry.ro) return (oldKind === 'other') === (newKind === 'other');
+    return (oldKind === 'none') === (newKind === 'none');
+  }
+
+  function readPairsFromUi() {
+    return Array.from(document.querySelectorAll(`#${ID.pairs} .cbe-pair:not(.leave)`)).map(row => {
+      const [findInput, replaceInput] = row.querySelectorAll('input');
+      return {
+        find: findInput?.value ?? '',
+        replace: replaceInput?.value ?? '',
+      };
     });
-
-    return { after, count };
   }
 
   function getReplaceUiValues() {
     return {
-      findText: document.getElementById(ID.find)?.value ?? '',
-      replacement: document.getElementById(ID.replace)?.value ?? '',
+      pairs: readPairsFromUi().filter(item => item.find),
       target: document.getElementById(ID.target)?.value ?? 'all',
       caseSensitive: !!document.getElementById(ID.caseSensitive)?.checked,
+      josa: !!document.getElementById(ID.josa)?.checked,
     };
   }
 
@@ -562,7 +846,100 @@
     return JSON.stringify(values);
   }
 
+  // 여러 쌍을 한 번에 찾음 (긴 것 먼저). 한 쌍의 결과를 다른 쌍이 또 바꾸는 일이 없음
+  function compileReplace(values) {
+    const lookup = new Map();
+
+    for (const item of values.pairs) {
+      if (!item.find) continue;
+      const key = values.caseSensitive ? item.find : item.find.toLowerCase();
+      if (!lookup.has(key)) lookup.set(key, item);
+    }
+
+    if (!lookup.size) return null;
+
+    const sources = Array.from(lookup.values())
+      .map(item => item.find)
+      .sort((a, b) => b.length - a.length)
+      .map(escapeRegExp);
+
+    return {
+      regex: new RegExp(sources.join('|'), values.caseSensitive ? 'g' : 'gi'),
+      lookup,
+      caseSensitive: values.caseSensitive,
+      josa: values.josa,
+    };
+  }
+
+  function transformText(text, compiled, withSegments = false) {
+    const regex = new RegExp(compiled.regex.source, compiled.regex.flags);
+    const segments = withSegments ? [] : null;
+    let out = '';
+    let last = 0;
+    let count = 0;
+    let josaCount = 0;
+    let unsure = 0;
+    let match;
+
+    while ((match = regex.exec(text)) !== null) {
+      if (!match[0]) {
+        regex.lastIndex += 1;
+        continue;
+      }
+
+      const key = compiled.caseSensitive ? match[0] : match[0].toLowerCase();
+      const item = compiled.lookup.get(key);
+      if (!item) continue;
+
+      const start = match.index;
+      const end = start + match[0].length;
+      const plain = text.slice(last, start);
+
+      out += plain + item.replace;
+      count += 1;
+      if (segments) {
+        if (plain) segments.push({ t: 'text', text: plain });
+        segments.push({ t: 'hit', from: match[0], to: item.replace });
+      }
+      last = end;
+
+      if (!compiled.josa || !item.replace) continue;
+
+      const newKind = finalKind(item.replace);
+      if (!newKind) continue;
+
+      const entry = matchJosaAt(text, end);
+      if (!entry) continue;
+
+      const oldKind = finalKind(match[0]);
+      const target = josaTarget(entry, newKind);
+      if (sameJosaClass(entry, oldKind, newKind) || target === entry.token) continue;
+
+      if (entry.ambiguous) {
+        unsure += 1;
+        out += entry.token;
+        if (segments) segments.push({ t: 'unsure', text: entry.token });
+      } else {
+        josaCount += 1;
+        out += target;
+        if (segments) segments.push({ t: 'josa', from: entry.token, to: target });
+      }
+
+      last = end + entry.token.length;
+      regex.lastIndex = Math.max(regex.lastIndex, last);
+    }
+
+    const rest = text.slice(last);
+    out += rest;
+    if (segments && rest) segments.push({ t: 'text', text: rest });
+
+    return { after: out, count, josaCount, unsure, segments };
+  }
+
   function scanReplaceMessages(messages, values) {
+    const compiled = compileReplace(values);
+    if (!compiled) return [];
+
     const results = [];
 
     for (let index = 0; index < messages.length; index++) {
@@ -574,22 +951,18 @@
       const before = getMessageContent(raw);
       if (!before) continue;
 
-      const { after, count } = replaceLiteral(
-        before,
-        values.findText,
-        values.replacement,
-        values.caseSensitive
-      );
-
-      if (!count || after === before) continue;
+      const result = transformText(before, compiled);
+      if (!result.count || result.after === before) continue;
 
       results.push({
         index,
         id: getMessageId(raw),
         role,
         before,
-        after,
-        count,
+        after: result.after,
+        count: result.count,
+        josa: result.josaCount,
+        unsure: result.unsure,
         createdAt: getMessageCreatedAt(raw),
       });
     }
@@ -597,19 +970,31 @@
     return results;
   }
 
+  function getIncludedMatches() {
+    return state.replace.matches.filter(item => !state.replace.skipped.has(item.id));
+  }
+
+  function replaceEmptyHtml(title, body) {
+    return `
+      <div class="cbe-empty">
+        <strong>${title}</strong>
+        ${body}
+      </div>`;
+  }
+
   function resetReplaceScan() {
     state.replace.matches = [];
     state.replace.lastScanSignature = '';
+    state.replace.skipped = new Set();
 
     const preview = document.getElementById(ID.replacePreview);
     const summary = document.getElementById(ID.replaceSummary);
 
     if (preview) {
-      preview.innerHTML = `
-        <div class="cbe-empty">
-          <strong>문자열을 한꺼번에 바꿉니다</strong>
-          찾을 내용과 바꿀 내용을 넣고 먼저 변경점을 검사하세요.
-        </div>`;
+      preview.innerHTML = replaceEmptyHtml(
+        '문자열을 한꺼번에 바꿉니다',
+        '찾을 내용과 바꿀 내용을 넣고 먼저 변경점을 검사하세요. 쌍을 여러 개 넣으면 한 번에 바꿔요.'
+      );
     }
     if (summary) summary.innerHTML = '';
     const extra = document.getElementById(ID.statusExtra);
@@ -624,68 +1009,119 @@
     setStatus('치환 조건이 바뀌었습니다. 다시 검사해 주세요.', 'neutral');
   }
 
-  function splitByMatches(text, findText, caseSensitive) {
-    const regex = buildLiteralRegex(findText, caseSensitive);
-    const parts = [];
-    let last = 0;
-    let match;
-
-    while ((match = regex.exec(text)) !== null) {
-      if (match.index > last) parts.push({ hit: false, text: text.slice(last, match.index) });
-      parts.push({ hit: true, text: match[0] });
-      last = match.index + match[0].length;
-      if (match[0] === '') regex.lastIndex += 1;
-    }
-
-    if (last < text.length) parts.push({ hit: false, text: text.slice(last) });
-    return parts;
-  }
-
-  function buildDiffHtml(beforeText, findText, replacement, caseSensitive) {
+  function buildDiffHtml(beforeText, compiled) {
     const source = truncateText(beforeText, 900);
-    const parts = splitByMatches(source, findText, caseSensitive);
-    const rep = escapeHtml(replacement);
+    const { segments } = transformText(source, compiled, true);
+    const unsureMark = text =>
+      `<mark class="q" title="조사가 맞는지 확인해 주세요 (자동으로 고치지 않음)">${text}</mark>`;
 
     let before = '';
     let after = '';
     let inline = '';
 
-    for (const part of parts) {
-      const esc = escapeHtml(part.text);
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
 
-      if (!part.hit) {
-        before += esc;
-        after += esc;
-        inline += esc;
+      if (seg.t === 'text') {
+        const text = escapeHtml(seg.text);
+        before += text;
+        after += text;
+        inline += text;
         continue;
       }
 
-      before += `<mark>${esc}</mark>`;
-      after += replacement ? `<mark class="g">${rep}</mark>` : '';
-      inline += `<del>${esc}</del>` + (replacement ? `<ins>${rep}</ins>` : '');
+      if (seg.t === 'unsure') {
+        const text = escapeHtml(seg.text);
+        before += text;
+        after += unsureMark(text);
+        inline += unsureMark(text);
+        continue;
+      }
+
+      if (seg.t === 'josa') {
+        // 앞의 hit 와 붙어서 처리되지 않은 경우만 여기로 옴
+        const from = escapeHtml(seg.from);
+        const to = escapeHtml(seg.to);
+        before += `<mark class="jo">${from}</mark>`;
+        after += `<mark class="j" title="조사 자동 맞춤: ${from} → ${to}">${to}</mark>`;
+        inline += `<del>${from}</del><ins><u>${to}</u></ins>`;
+        continue;
+      }
+
+      const from = escapeHtml(seg.from);
+      const to = escapeHtml(seg.to);
+      const next = segments[i + 1];
+
+      if (next?.t === 'josa') {
+        const jFrom = escapeHtml(next.from);
+        const jTo = escapeHtml(next.to);
+        before += `<mark>${from}</mark><mark class="jo">${jFrom}</mark>`;
+        after += `${to ? `<mark class="g">${to}</mark>` : ''}<mark class="j" title="조사 자동 맞춤: ${jFrom} → ${jTo}">${jTo}</mark>`;
+        inline += `<del>${from}${jFrom}</del><ins>${to}<u>${jTo}</u></ins>`;
+        i += 1;
+        continue;
+      }
+
+      before += `<mark>${from}</mark>`;
+      after += to ? `<mark class="g">${to}</mark>` : '';
+      inline += `<del>${from}</del>` + (to ? `<ins>${to}</ins>` : '');
     }
 
     return { before, after, inline };
   }
 
-  function renderReplaceSummary(matches, loadedCount, truncated) {
+  function renderReplaceSummary() {
     const extra = document.getElementById(ID.statusExtra);
     const summary = document.getElementById(ID.replaceSummary);
     if (summary) summary.innerHTML = '';
     if (!extra) return;
 
-    if (!matches.length) {
+    if (!state.replace.matches.length) {
       extra.innerHTML = '';
       return;
     }
 
-    const aiCount = matches.filter(item => item.role === 'assistant').length;
-    const userCount = matches.filter(item => item.role === 'user').length;
+    const included = getIncludedMatches();
+    const aiCount = included.filter(item => item.role === 'assistant').length;
+    const userCount = included.filter(item => item.role === 'user').length;
+    const josaCount = included.reduce((sum, item) => sum + (item.josa || 0), 0);
+    const unsureCount = included.reduce((sum, item) => sum + (item.unsure || 0), 0);
 
     extra.innerHTML =
       (aiCount ? `<span class="cbe-pill ai">AI ${aiCount.toLocaleString()}</span>` : '') +
       (userCount ? `<span class="cbe-pill user">USER ${userCount.toLocaleString()}</span>` : '') +
-      (truncated ? `<span class="cbe-pill warn" title="로그가 20,000개를 넘어 조회를 멈췄습니다">일부만 조회됨</span>` : '');
+      (josaCount ? `<span class="cbe-pill josa" title="받침에 맞춰 조사를 바꾼 곳">조사 ${josaCount.toLocaleString()}</span>` : '') +
+      (unsureCount ? `<span class="cbe-pill warn" title="조사가 애매해서 그대로 둔 곳 · 미리보기에 물결 밑줄로 표시">조사 확인 ${unsureCount.toLocaleString()}</span>` : '') +
+      (state.truncated ? `<span class="cbe-pill warn" title="로그가 20,000개를 넘어 조회를 멈췄습니다">일부만 조회됨</span>` : '');
+  }
+
+  function refreshReplaceStatus() {
+    const total = state.replace.matches.length;
+
+    if (!total) {
+      setStatus('변경할 메시지가 없습니다.', 'neutral');
+      renderReplaceSummary();
+      syncApplyButtons();
+      return;
+    }
+
+    const included = getIncludedMatches();
+    const spots = included.reduce((sum, item) => sum + item.count, 0);
+    const skipped = total - included.length;
+
+    if (!included.length) {
+      setStatus('바꿀 메시지를 하나 이상 골라 주세요.', 'neutral');
+    } else {
+      setStatus(
+        `메시지 <b>${included.length.toLocaleString()}개</b>에서 <b>${spots.toLocaleString()}곳</b>을 바꿉니다.` +
+        (skipped ? ` <span class="cbe-dim">${skipped.toLocaleString()}개는 그대로 둬요.</span>` : ''),
+        'ok',
+        { html: true }
+      );
+    }
+
+    renderReplaceSummary();
+    syncApplyButtons();
   }
 
   function renderReplacePreview(matches) {
@@ -693,33 +1129,37 @@
     if (!preview) return;
 
     if (!matches.length) {
-      preview.innerHTML = `
-        <div class="cbe-empty">
-          <strong>바꿀 내용이 없습니다</strong>
-          찾을 내용이나 대상을 바꿔서 다시 검사해 보세요.
-        </div>`;
+      preview.innerHTML = replaceEmptyHtml(
+        '바꿀 내용이 없습니다',
+        '찾을 내용이나 대상을 바꿔서 다시 검사해 보세요.'
+      );
       return;
     }
 
-    const values = getReplaceUiValues();
+    const compiled = compileReplace(getReplaceUiValues());
+    if (!compiled) return;
+
     const visible = matches.slice(0, APP.maxReplacePreviewItems);
 
     const html = visible.map((item, order) => {
-      const diff = buildDiffHtml(
-        item.before,
-        values.findText,
-        values.replacement,
-        values.caseSensitive
-      );
+      const diff = buildDiffHtml(item.before, compiled);
+      const skipped = state.replace.skipped.has(item.id);
+      const number = (item.index + 1).toLocaleString();
+      const extraInfo = item.josa ? ` · 조사 ${item.josa.toLocaleString()}` : '';
 
       return `
-        <article class="cbe-preview-item ${order === 0 ? '' : 'collapsed'}">
+        <article class="cbe-preview-item ${order === 0 ? '' : 'collapsed'} ${skipped ? 'skip' : ''}" data-id="${escapeHtml(item.id)}">
           <header>
+            <label class="cbe-pick" title="이 메시지 바꾸기">
+              <input type="checkbox" ${skipped ? '' : 'checked'} aria-label="#${number} 바꾸기">
+              <span class="box">${icon('check')}</span>
+            </label>
             <span class="cbe-role ${item.role === 'assistant' ? 'ai' : 'user'}">${escapeHtml(roleLabel(item.role))}</span>
-            <b>#${(item.index + 1).toLocaleString()}</b>
-            <span class="cbe-num">${item.count.toLocaleString()}회</span>
+            <b>#${number}</b>
+            <span class="cbe-num">${item.count.toLocaleString()}회${extraInfo}</span>
+            <span class="cbe-skip-tag">그대로 둠</span>
             <time>${escapeHtml(formatDate(item.createdAt))}</time>
-            <span class="cbe-caret">⌄</span>
+            <span class="cbe-caret">${icon('chev')}</span>
           </header>
           <div class="cbe-diff">
             <section class="d-before"><div class="cbe-k">변경 전</div><pre>${diff.before}</pre></section>
@@ -737,9 +1177,211 @@
     preview.innerHTML = html + more;
   }
 
+  function togglePreviewItem(item) {
+    const diff = item?.querySelector('.cbe-diff');
+    if (!diff || diff.classList.contains('anim')) return;
+
+    if (!motionOk() || typeof diff.animate !== 'function') {
+      item.classList.toggle('collapsed');
+      return;
+    }
+
+    if (item.classList.contains('collapsed')) {
+      item.classList.remove('collapsed');
+      const height = diff.offsetHeight;
+      diff.classList.add('anim');
+      diff.animate(
+        [{ height: '0px', opacity: 0 }, { height: `${height}px`, opacity: 1 }],
+        { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' }
+      ).onfinish = () => diff.classList.remove('anim');
+    } else {
+      const height = diff.offsetHeight;
+      diff.classList.add('anim');
+      item.classList.add('closing');
+      diff.animate(
+        [{ height: `${height}px`, opacity: 1 }, { height: '0px', opacity: 0 }],
+        { duration: 170, easing: 'ease-in' }
+      ).onfinish = () => {
+        item.classList.add('collapsed');
+        item.classList.remove('closing');
+        diff.classList.remove('anim');
+      };
+    }
+  }
+
+  function handlePreviewPick(event) {
+    const box = event.target.closest('.cbe-pick input');
+    if (!box) return;
+
+    const item = box.closest('.cbe-preview-item');
+    const id = item?.dataset.id;
+    if (!id) return;
+
+    if (box.checked) state.replace.skipped.delete(id);
+    else state.replace.skipped.add(id);
+
+    item.classList.toggle('skip', !box.checked);
+    if (!state.loading && !state.patching) refreshReplaceStatus();
+  }
+
+  // ---- 여러 쌍 입력 ----
+
+  function pairRowHtml(find = '', replace = '') {
+    return `
+      <div class="cbe-pair">
+        <div class="cbe-replace-flow">
+          <label class="cbe-control-field">
+            <span class="cbe-control-label">찾을 내용</span>
+            <input type="text" autocomplete="off" spellcheck="false" placeholder="찾을 글자" value="${escapeHtml(find)}">
+          </label>
+          <button type="button" class="cbe-flow-arrow" title="두 칸 맞바꾸기" aria-label="찾을 내용과 바꿀 내용 맞바꾸기">${icon('swap')}</button>
+          <label class="cbe-control-field">
+            <span class="cbe-control-label">바꿀 내용</span>
+            <input type="text" autocomplete="off" spellcheck="false" placeholder="비우면 삭제" value="${escapeHtml(replace)}">
+          </label>
+        </div>
+        <button type="button" class="cbe-pair-del" title="이 쌍 지우기" aria-label="이 쌍 지우기">${icon('x')}</button>
+      </div>`;
+  }
+
+  function livePairRows() {
+    return Array.from(document.querySelectorAll(`#${ID.pairs} .cbe-pair:not(.leave)`));
+  }
+
+  function syncPairRows() {
+    document.getElementById(ID.pairs)?.classList.toggle('single', livePairRows().length <= 1);
+  }
+
+  function addPairRow(find = '', replace = '') {
+    const list = document.getElementById(ID.pairList);
+    if (!list) return null;
+
+    const template = document.createElement('template');
+    template.innerHTML = pairRowHtml(find, replace).trim();
+    const row = template.content.firstElementChild;
+    list.appendChild(row);
+
+    if (motionOk()) retrigger(row, 'enter');
+    syncPairRows();
+    return row;
+  }
+
+  function removePairRow(row) {
+    if (!row) return;
+
+    if (livePairRows().length <= 1) {
+      row.querySelectorAll('input').forEach(input => { input.value = ''; });
+      return;
+    }
+
+    row.classList.add('leave');
+    syncPairRows();
+    if (motionOk()) row.addEventListener('animationend', () => row.remove(), { once: true });
+    else row.remove();
+  }
+
+  function renderRecentChips() {
+    const box = document.getElementById(ID.recent);
+    if (!box) return;
+
+    const list = loadRecentPairs();
+    box.hidden = !list.length;
+    box.innerHTML = list.length
+      ? `<span class="cbe-recent-k">최근</span>` + list.map((item, index) => `
+          <button type="button" class="cbe-chip" data-recent="${index}"
+                  title="${escapeHtml(item.find)} → ${escapeHtml(item.replace || '(삭제)')}">${escapeHtml(compactText(item.find, 14))} → ${escapeHtml(compactText(item.replace || '삭제', 14))}</button>`).join('')
+      : '';
+  }
+
+  function handlePairsClick(event) {
+    if (state.loading || state.patching) return;
+
+    const knob = event.target.closest('.cbe-flow-arrow');
+    if (knob) {
+      const rotation = (Number(knob.dataset.rot) || 0) + 180;
+      knob.dataset.rot = String(rotation);
+      knob.style.setProperty('--rot', `${rotation}deg`);
+
+      const [findInput, replaceInput] = knob.parentElement.querySelectorAll('input');
+      if (findInput && replaceInput) {
+        [findInput.value, replaceInput.value] = [replaceInput.value, findInput.value];
+      }
+      retrigger(knob.parentElement, 'swapped');
+      invalidateReplaceScan();
+      return;
+    }
+
+    const del = event.target.closest('.cbe-pair-del');
+    if (del) {
+      removePairRow(del.closest('.cbe-pair'));
+      invalidateReplaceScan();
+      return;
+    }
+
+    if (event.target.closest(`#${ID.addPair}`)) {
+      addPairRow()?.querySelector('input')?.focus({ preventScroll: true });
+      return;
+    }
+
+    const chip = event.target.closest('.cbe-chip');
+    if (chip) {
+      const item = loadRecentPairs()[Number(chip.dataset.recent)];
+      if (!item) return;
+
+      const empty = livePairRows().find(row => !row.querySelector('input')?.value.trim());
+      if (empty) {
+        const [findInput, replaceInput] = empty.querySelectorAll('input');
+        findInput.value = item.find;
+        replaceInput.value = item.replace;
+        retrigger(empty.querySelector('.cbe-replace-flow'), 'swapped');
+      } else {
+        addPairRow(item.find, item.replace);
+      }
+
+      retrigger(chip, 'tap');
+      invalidateReplaceScan();
+    }
+  }
+
+  function handlePairsKeydown(event) {
+    if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229) return;
+    if (!event.target.closest('.cbe-pair input')) return;
+    event.preventDefault();
+    handleReplaceScan();
+  }
+
+  function handleOptionToggle(event) {
+    const input = event.target;
+    input.closest('.cbe-opt')?.classList.toggle('on', input.checked);
+
+    // 조사 맞춤은 이미 불러온 로그로 바로 다시 계산 (다시 검사 안 눌러도 됨)
+    if (input.id === ID.josa && rescanReplaceFromCache()) return;
+    invalidateReplaceScan();
+  }
+
+  function rescanReplaceFromCache() {
+    if (state.loading || state.patching || !state.replace.lastScanSignature) return false;
+
+    const chatId = parseChatId();
+    if (!chatId || state.loadedChatId !== chatId || !state.messages.length) return false;
+
+    const values = getReplaceUiValues();
+    const matches = scanReplaceMessages(state.messages, values);
+    const ids = new Set(matches.map(item => item.id));
+
+    state.replace.matches = matches;
+    state.replace.lastScanSignature = makeReplaceSignature(values);
+    state.replace.skipped = new Set([...state.replace.skipped].filter(id => ids.has(id)));
+
+    renderReplacePreview(matches);
+    refreshReplaceStatus();
+    return true;
+  }
+
   async function handleReplaceScan() {
     if (state.loading || state.patching) return;
 
+    const button = document.getElementById(ID.replaceScan);
     const chatId = parseChatId();
     if (!chatId) {
       setStatus('크랙 채팅방 안에서 실행해 주세요.', 'error');
@@ -747,9 +1389,9 @@
     }
 
     const values = getReplaceUiValues();
-    if (!values.findText) {
+    if (!values.pairs.length) {
       setStatus('찾을 내용을 입력해 주세요.', 'error');
-      document.getElementById(ID.find)?.focus();
+      document.querySelector(`#${ID.pairs} .cbe-pair input`)?.focus();
       return;
     }
 
@@ -757,8 +1399,10 @@
     state.cancelling = false;
     state.logLines = [];
     resetReplaceScan();
-    setBusyUi(true);
-    appendLog(`치환 검사 시작 · chatId=${chatId}`);
+    setBusyUi(true, button);
+    appendLog(`치환 검사 시작 · ${values.pairs.length}쌍 · 조사 맞춤 ${values.josa ? '켬' : '끔'}`);
+
+    let succeeded = false;
 
     try {
       const loaded = await ensureMessagesLoaded(chatId);
@@ -767,21 +1411,16 @@
       state.replace.matches = matches;
       state.replace.lastScanSignature = makeReplaceSignature(values);
 
-      renderReplaceSummary(matches, loaded.messages.length, loaded.truncated);
       renderReplacePreview(matches);
+      refreshReplaceStatus();
 
       const occurrences = matches.reduce((sum, item) => sum + item.count, 0);
-
-      if (matches.length) {
-        setStatus(
-          `${matches.length.toLocaleString()}개 메시지에서 ${occurrences.toLocaleString()}회 변경됩니다.`,
-          'ok'
-        );
-      } else {
-        setStatus('변경할 메시지가 없습니다.', 'neutral');
-      }
-
-      appendLog(`치환 검사 완료 · ${matches.length.toLocaleString()}개 메시지 · ${occurrences.toLocaleString()}회`);
+      const josaCount = matches.reduce((sum, item) => sum + (item.josa || 0), 0);
+      appendLog(
+        `치환 검사 완료 · ${matches.length.toLocaleString()}개 메시지 · ${occurrences.toLocaleString()}회` +
+        (josaCount ? ` · 조사 ${josaCount.toLocaleString()}곳` : '')
+      );
+      succeeded = true;
     } catch (error) {
       const cancelled = state.cancelling || /취소/.test(String(error?.message || ''));
       setStatus(
@@ -793,11 +1432,16 @@
       state.loading = false;
       state.cancelling = false;
       setBusyUi(false);
+      if (succeeded) {
+        flashDone(button);
+        retrigger(document.getElementById(ID.replacePreview), 'fresh');
+      }
     }
   }
 
   async function handleReplaceApply() {
-    if (state.loading || state.patching || !state.replace.matches.length) return;
+    const included = getIncludedMatches();
+    if (state.loading || state.patching || !included.length) return;
 
     const chatId = parseChatId();
     if (!chatId || chatId !== state.loadedChatId) {
@@ -813,17 +1457,22 @@
       return;
     }
 
-    const totalOccurrences = state.replace.matches.reduce((sum, item) => sum + item.count, 0);
+    const totalOccurrences = included.reduce((sum, item) => sum + item.count, 0);
+    const josaCount = included.reduce((sum, item) => sum + (item.josa || 0), 0);
+    const skipped = state.replace.matches.length - included.length;
+
     const ok = confirm(
       `정말 수정할까요?\n\n` +
-      `메시지 ${state.replace.matches.length.toLocaleString()}개\n` +
-      `총 치환 ${totalOccurrences.toLocaleString()}회\n\n` +
-      `적용 직전에 원문 백업을 저장합니다.`
+      `메시지 ${included.length.toLocaleString()}개\n` +
+      `총 치환 ${totalOccurrences.toLocaleString()}회\n` +
+      (josaCount ? `조사 자동 맞춤 ${josaCount.toLocaleString()}곳\n` : '') +
+      (skipped ? `그대로 둘 메시지 ${skipped.toLocaleString()}개\n` : '') +
+      `\n적용 직전에 원문 백업을 저장합니다.`
     );
 
     if (!ok) return;
 
-    const backup = makeBackup('replace', chatId, values, state.replace.matches);
+    const backup = makeBackup('replace', chatId, values, included);
 
     try {
       saveBackup(backup);
@@ -833,9 +1482,12 @@
       return;
     }
 
+    saveRecentPairs(values.pairs);
+    renderRecentChips();
+
     await runPatchItems({
       chatId,
-      items: state.replace.matches,
+      items: included,
       label: '치환',
       onFinish: () => {
         resetReplaceScan();
@@ -1152,7 +1804,7 @@
       return;
     }
 
-    const plan = state.turn.plan;
+    const plan = computeTurnPlan();
     const countLabel = plan
       ? `턴 ${plan.counted.length.toLocaleString()}개 · 제외 ${plan.excluded.length.toLocaleString()}`
       : '구간';
@@ -1161,13 +1813,13 @@
     el.innerHTML = `
       <div class="cbe-end">
         <div class="k">시작</div>
-        <div class="v">#${(start.messageIndex + 1).toLocaleString()} · ${escapeHtml(candidateDisplayNumber(start))}</div>
+        <div class="v"><span class="idx">#${(start.messageIndex + 1).toLocaleString()}</span><span class="n">${escapeHtml(candidateDisplayNumber(start))}</span></div>
         <span class="s">${escapeHtml(compactText(start.content, 90))}</span>
       </div>
       <div class="cbe-line"><span>${escapeHtml(countLabel)}</span></div>
       <div class="cbe-end right">
         <div class="k">끝</div>
-        <div class="v">#${(end.messageIndex + 1).toLocaleString()} · ${escapeHtml(candidateDisplayNumber(end))}</div>
+        <div class="v"><span class="idx">#${(end.messageIndex + 1).toLocaleString()}</span><span class="n">${escapeHtml(candidateDisplayNumber(end))}</span></div>
         <span class="s">${escapeHtml(compactText(end.content, 90))}</span>
       </div>
     `;
@@ -1183,7 +1835,10 @@
 
     if (!plan) {
       el.textContent = '시작점 · 끝점 · 시작 번호를 확인해 주세요.';
-      if (verify) verify.textContent = '';
+      if (verify) {
+        verify.className = 'cbe-verify';
+        verify.textContent = '';
+      }
       if (line) {
         line.hidden = !state.turn.analyzed;
         line.className = 'cbe-check off';
@@ -1197,7 +1852,7 @@
       : '';
 
     el.innerHTML =
-      `${plan.startNumber.toLocaleString()} → ${plan.lastTurn === null ? '-' : plan.lastTurn.toLocaleString()} 로 다시 매김 · ` +
+      `<span class="cbe-num">${plan.startNumber.toLocaleString()} → ${plan.lastTurn === null ? '-' : plan.lastTurn.toLocaleString()}</span>로 다시 매김 · ` +
       `<b>${plan.patches.length.toLocaleString()}개</b> 수정${escapeHtml(reviewNote)}`;
 
     if (line) {
@@ -1206,12 +1861,14 @@
     }
 
     if (verify) {
+      verify.className = 'cbe-verify';
       if (plan.expectedEnd === null) {
         verify.textContent = '';
       } else if (plan.endDelta === 0) {
-        verify.textContent = '일치 ✓';
+        verify.innerHTML = `${icon('check')}일치`;
       } else {
         const sign = plan.endDelta > 0 ? '+' : '';
+        verify.classList.add('diff');
         verify.textContent = `차이 ${sign}${plan.endDelta}`;
       }
     }
@@ -1297,47 +1954,59 @@
       return;
     }
 
-    const visible = filtered;
     const planRows = new Map((state.turn.plan?.rows || []).map(row => [row.id, row]));
 
-    const html = visible.map(candidate => {
+    el.innerHTML = filtered.map(candidate => {
       const isStart = candidate.id === state.turn.startCandidateId;
       const isEnd = candidate.id === state.turn.endCandidateId;
       const row = planRows.get(candidate.id);
       const excluded = candidate.mode === 'exclude';
+      const id = escapeHtml(candidate.id);
 
       let move = '';
       if (excluded) {
-        move = '<span class="cbe-move same">제외됨</span>';
+        move = '<span class="cbe-move excl">제외됨</span>';
       } else if (candidate.mode === 'review') {
-        move = '<span class="cbe-move changed">검토 필요</span>';
+        move = '<span class="cbe-move rev">검토 필요</span>';
       } else if (row) {
-        move = `<span class="cbe-move ${row.changed ? 'changed' : 'same'}">${row.currentNumber} → ${row.expectedNumber}</span>`;
+        move =
+          `<span class="cbe-move ${row.changed ? 'changed' : 'same'}">` +
+          `<span class="from">${row.currentNumber}</span><span class="arr">→</span><span class="to">${row.expectedNumber}</span>` +
+          `</span>`;
       }
 
-      const statusClass = excluded ? 'excluded' : (candidate.mode === 'review' ? 'review' : '');
+      const anchors =
+        (isStart ? '<span class="cbe-anchor">시작</span>' : '') +
+        (isEnd ? '<span class="cbe-anchor">끝</span>' : '');
+
+      const classes = [
+        'cbe-turn-item',
+        excluded ? 'excluded' : '',
+        candidate.mode === 'review' ? 'review' : '',
+        isStart ? 'is-start' : '',
+        isEnd ? 'is-end' : '',
+        state.turn.openId === candidate.id ? 'open' : '',
+      ].filter(Boolean).join(' ');
 
       return `
-        <article class="cbe-turn-item ${statusClass} ${isStart ? 'is-start' : ''} ${isEnd ? 'is-end' : ''}">
+        <article class="${classes}" data-id="${id}">
           <span class="cbe-idx">#${(candidate.messageIndex + 1).toLocaleString()}</span>
           <span class="cbe-text">${escapeHtml(compactText(candidate.content, 160))}</span>
+          ${anchors}
           ${move}
           <span class="cbe-item-actions">
-            <button type="button" class="cbe-mini-btn" data-turn-start="${escapeHtml(candidate.id)}" title="여기를 시작점으로">시작</button>
-            <button type="button" class="cbe-mini-btn" data-turn-end="${escapeHtml(candidate.id)}" title="여기를 끝점으로">끝</button>
+            <button type="button" class="cbe-mini-btn" data-turn-start="${id}" title="여기를 시작점으로">시작</button>
+            <button type="button" class="cbe-mini-btn" data-turn-end="${id}" title="여기를 끝점으로">끝</button>
             ${
               excluded
-                ? `<button type="button" class="cbe-mini-btn" data-turn-include="${escapeHtml(candidate.id)}" title="다시 포함">＋</button>`
-                : `<button type="button" class="cbe-mini-btn danger-lite" data-turn-exclude="${escapeHtml(candidate.id)}" title="턴에서 제외">✕</button>`
+                ? `<button type="button" class="cbe-mini-btn" data-turn-include="${id}" title="다시 포함">＋</button>`
+                : `<button type="button" class="cbe-mini-btn danger-lite" data-turn-exclude="${id}" title="턴에서 제외">✕</button>`
             }
           </span>
           ${renderOccurrenceChooser(candidate)}
         </article>
       `;
     }).join('');
-
-    const more = '';
-    el.innerHTML = html + more;
   }
 
   function recomputeAndRenderTurn() {
@@ -1481,7 +2150,7 @@
     state.loading = true;
     state.cancelling = false;
     state.logLines = [];
-    setBusyUi(true);
+    setBusyUi(true, document.getElementById(ID.turnAnalyze));
     appendLog(`턴 번호 분석 시작 · 패턴=${patternText}`);
 
     try {
@@ -1532,6 +2201,10 @@
       state.loading = false;
       state.cancelling = false;
       setBusyUi(false);
+      if (state.turn.analyzed) {
+        flashDone(document.getElementById(ID.turnAnalyze));
+        retrigger(document.getElementById(ID.turnCandidateList), 'fresh');
+      }
     }
   }
 
@@ -1555,7 +2228,20 @@
 
   function handleTurnCandidateListClick(event) {
     const target = event.target.closest('button');
-    if (!target) return;
+
+    // 모바일: 행을 톡 누르면 시작/끝/제외 버튼이 나옴
+    if (!target) {
+      const row = event.target.closest('.cbe-turn-item');
+      const id = row?.dataset.id;
+      if (!id) return;
+
+      state.turn.openId = state.turn.openId === id ? '' : id;
+      document
+        .querySelectorAll(`#${ID.turnCandidateList} .cbe-turn-item.open`)
+        .forEach(el => { if (el !== row) el.classList.remove('open'); });
+      row.classList.toggle('open', state.turn.openId === id);
+      return;
+    }
 
     const startId = target.dataset.turnStart;
     const endId = target.dataset.turnEnd;
@@ -1735,12 +2421,12 @@
     updateBackupButtons();
 
     if (failed) {
-      console.warn(`[Crack Bulk Editor] ${label} failures:`, failures);
+      console.warn(`[LogShift] ${label} failures:`, failures);
     }
 
     if (wasCancelled) {
       setStatus(
-        `${label} 중단 · 성공 ${success.toLocaleString()} · 실패 ${failed.toLocaleString()} · 직전 백업으로 되돌릴 수 있습니다.`,
+        `${label} 중단 · 성공 ${success.toLocaleString()} · 실패 ${failed.toLocaleString()} · 되돌리기 기록에서 되돌릴 수 있습니다.`,
         'neutral'
       );
     } else if (failed) {
@@ -1750,10 +2436,13 @@
       );
     } else {
       setStatus(
-        `${label} 완료 · ${success.toLocaleString()}개 메시지를 수정했습니다. 새로고침하면 화면에도 반영됩니다.`,
-        'ok'
+        `${label} 완료 · <b>${success.toLocaleString()}개</b> 메시지를 고쳤어요. 새로고침하면 화면에도 반영돼요.`,
+        'ok',
+        { html: true }
       );
     }
+
+    if (success) nudgeUndo();
 
     appendLog(`${label} 종료 · 성공 ${success.toLocaleString()} · 실패 ${failed.toLocaleString()}`);
 
@@ -1761,66 +2450,150 @@
     syncApplyButtons();
   }
 
-  async function handleUndo() {
-    if (state.loading || state.patching) return;
+  function historyTypeLabel(type) {
+    if (type === 'replace') return '문자열 치환';
+    if (type === 'turn-renumber') return '턴 재번호';
+    return type || '작업';
+  }
 
-    const backup = loadBackup();
+  function historySummary(backup) {
+    const count = `${backup.items.length.toLocaleString()}개`;
 
-    if (!backup?.chatId || !Array.isArray(backup.items) || !backup.items.length) {
-      setStatus('되돌릴 백업이 없습니다.', 'error');
-      return;
+    if (backup.type === 'replace') {
+      const meta = backup.meta || {};
+      const pairs = Array.isArray(meta.pairs)
+        ? meta.pairs
+        : (meta.findText ? [{ find: meta.findText, replace: meta.replacement }] : []);
+      const first = pairs[0];
+      const label = first
+        ? `${compactText(first.find, 16)} → ${compactText(first.replace || '(삭제)', 16)}` +
+          (pairs.length > 1 ? ` 외 ${pairs.length - 1}쌍` : '')
+        : '치환';
+      return `${label} · ${count}`;
     }
 
-    const currentChatId = parseChatId();
+    if (backup.type === 'turn-renumber') {
+      return `${backup.meta?.startNumber ?? '?'} → ${backup.meta?.lastTurn ?? '?'} · ${count}`;
+    }
 
-    if (!currentChatId) {
+    return count;
+  }
+
+  function historyTime(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+
+    const hm = date.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const day = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+    const diff = Math.round((today - day) / 86400000);
+
+    if (diff === 0) return `오늘 ${hm}`;
+    if (diff === 1) return `어제 ${hm}`;
+    return `${date.getMonth() + 1}.${date.getDate()} ${hm}`;
+  }
+
+  function renderHistoryPop() {
+    const listEl = document.getElementById(ID.history);
+    if (!listEl) return;
+
+    const chatId = parseChatId();
+    const list = chatId ? historyForChat(chatId) : [];
+    const busy = state.loading || state.patching;
+
+    listEl.innerHTML = list.map((backup, index) => `
+      <li>
+        <div>
+          <b>${escapeHtml(historyTypeLabel(backup.type))}</b>
+          <span>${escapeHtml(historySummary(backup))}</span>
+          <time>${escapeHtml(historyTime(backup.createdAt))}</time>
+        </div>
+        <button type="button" class="cbe-mini-btn" data-undo-to="${index}" ${busy ? 'disabled' : ''}>${index === 0 ? '되돌리기' : '여기까지'}</button>
+      </li>`).join('');
+
+    const empty = document.getElementById('cbe-history-empty');
+    const note = document.getElementById('cbe-history-note');
+    if (empty) empty.hidden = list.length > 0;
+    if (note) note.hidden = list.length < 2;
+  }
+
+  function toggleHistoryPop(force) {
+    const pop = document.getElementById(ID.undoPop);
+    const undo = document.getElementById(ID.undo);
+    if (!pop) return;
+
+    const open = typeof force === 'boolean' ? force : pop.hidden;
+    if (open) renderHistoryPop();
+    pop.hidden = !open;
+    undo?.classList.toggle('on', open);
+    undo?.setAttribute('aria-expanded', String(open));
+  }
+
+  function handleHistoryClick(event) {
+    const button = event.target.closest('[data-undo-to]');
+    if (!button) return;
+    handleUndoTo(Number(button.dataset.undoTo));
+  }
+
+  // index 0 = 가장 최근 작업. index 가 크면 그보다 나중 작업까지 한꺼번에 되돌림
+  async function handleUndoTo(index = 0) {
+    if (state.loading || state.patching) return;
+
+    const chatId = parseChatId();
+    if (!chatId) {
       setStatus('크랙 채팅방 안에서 실행해 주세요.', 'error');
       return;
     }
 
-    if (currentChatId !== backup.chatId) {
-      setStatus('현재 채팅방과 직전 백업의 채팅방이 다릅니다.', 'error');
-      alert(
-        `이 백업은 다른 채팅방의 것입니다.\n\n` +
-        `백업 chatId: ${backup.chatId}\n` +
-        `현재 chatId: ${currentChatId}`
-      );
+    const entries = historyForChat(chatId).slice(0, index + 1);
+    if (!entries.length) {
+      setStatus('되돌릴 기록이 없습니다.', 'error');
       return;
     }
 
+    // 같은 메시지를 여러 번 고쳤으면 가장 오래된 기록의 원문으로 돌아감
+    const restore = new Map();
+    for (const backup of entries) {
+      for (const item of backup.items) restore.set(item.id, item);
+    }
+    const items = Array.from(restore.values());
+
     const ok = confirm(
-      `직전 작업을 되돌릴까요?\n\n` +
-      `종류: ${backup.type || 'unknown'}\n` +
-      `${backup.items.length.toLocaleString()}개 메시지를 백업된 원문으로 복원합니다.`
+      `작업 ${entries.length.toLocaleString()}개를 되돌릴까요?\n\n` +
+      entries.map(backup => `· ${historyTypeLabel(backup.type)} (${historySummary(backup)})`).join('\n') +
+      `\n\n메시지 ${items.length.toLocaleString()}개를 그 전 원문으로 복원합니다.`
     );
 
     if (!ok) return;
+
+    toggleHistoryPop(false);
 
     state.patching = true;
     state.cancelling = false;
     state.logLines = [];
     setBusyUi(true);
-    appendLog(`되돌리기 시작 · ${backup.items.length.toLocaleString()}개`);
+    appendLog(`되돌리기 시작 · 작업 ${entries.length}개 · 메시지 ${items.length.toLocaleString()}개`);
 
     let success = 0;
     let failed = 0;
     const failures = [];
 
-    for (let i = 0; i < backup.items.length; i++) {
+    for (let i = 0; i < items.length; i++) {
       if (state.cancelling) break;
 
-      const item = backup.items[i];
+      const item = items[i];
 
       setStatus(
-        `되돌리는 중 ${i + 1} / ${backup.items.length} · 성공 ${success} · 실패 ${failed}`,
+        `되돌리는 중 ${i + 1} / ${items.length} · 성공 ${success} · 실패 ${failed}`,
         'busy'
       );
-      setProgress(i + 1, backup.items.length);
+      setProgress(i + 1, items.length);
 
       try {
-        await patchMessage(currentChatId, item.id, item.before);
+        await patchMessage(chatId, item.id, item.before);
         success += 1;
-        appendLog(`복원 성공 ${i + 1}/${backup.items.length} · ${roleLabel(item.role)} · ${item.id}`);
+        appendLog(`복원 성공 ${i + 1}/${items.length} · ${roleLabel(item.role)} · ${item.id}`);
       } catch (error) {
         failed += 1;
         failures.push({
@@ -1831,11 +2604,11 @@
         });
 
         appendLog(
-          `복원 실패 ${i + 1}/${backup.items.length} · ${roleLabel(item.role)} · ${item.id} · ${error.message || error}`
+          `복원 실패 ${i + 1}/${items.length} · ${roleLabel(item.role)} · ${item.id} · ${error.message || error}`
         );
       }
 
-      if (i < backup.items.length - 1) {
+      if (i < items.length - 1) {
         await sleep(APP.patchDelayMs);
       }
     }
@@ -1844,25 +2617,31 @@
 
     state.patching = false;
     state.cancelling = false;
-    setBusyUi(false);
 
     if (!wasCancelled && failed === 0) {
-      GM_deleteValue(APP.backupKey);
-      setStatus(`되돌리기 완료 · ${success.toLocaleString()}개 복원했습니다.`, 'ok');
+      try {
+        removeHistoryEntries(entries);
+      } catch (_) {}
+      setStatus(
+        `되돌리기 완료 · 작업 ${entries.length.toLocaleString()}개, 메시지 <b>${success.toLocaleString()}개</b>를 원래대로 돌렸어요.`,
+        'ok',
+        { html: true }
+      );
       appendLog(`되돌리기 완료 · ${success.toLocaleString()}개`);
     } else if (wasCancelled) {
       setStatus(
-        `되돌리기 중단 · 성공 ${success.toLocaleString()} · 실패 ${failed.toLocaleString()}`,
+        `되돌리기 중단 · 성공 ${success.toLocaleString()} · 실패 ${failed.toLocaleString()} · 기록은 남겨 뒀어요.`,
         'neutral'
       );
     } else {
       setStatus(
-        `되돌리기 일부 실패 · 성공 ${success.toLocaleString()} · 실패 ${failed.toLocaleString()}`,
+        `되돌리기 일부 실패 · 성공 ${success.toLocaleString()} · 실패 ${failed.toLocaleString()} · 기록은 남겨 뒀어요.`,
         'warn'
       );
-      console.warn('[Crack Bulk Editor] UNDO failures:', failures);
+      console.warn('[LogShift] UNDO failures:', failures);
     }
 
+    setBusyUi(false);
     state.loadedChatId = '';
     state.messages = [];
     resetReplaceScan();
@@ -1883,7 +2662,7 @@
       `crack-log-backup_${sanitizeFilename(backup.pageTitle)}_${sanitizeFilename(backup.type)}_${stamp}.json`;
 
     downloadJson(backup, filename);
-    setStatus('직전 백업 JSON을 저장했습니다.', 'ok');
+    setStatus('가장 최근 백업 JSON을 저장했습니다.', 'ok');
   }
 
   function handleCancel() {
@@ -1897,12 +2676,30 @@
   // 탭 / 패널
   // ---------------------------------------------------------------------------
 
+  function moveTabInk(instant = false) {
+    const ink = document.querySelector(`#${ID.panel} .cbe-tab-ink`);
+    const active = document.querySelector(`#${ID.panel} .cbe-tab.active`);
+    if (!ink || !active) return;
+
+    if (instant || !motionOk()) ink.style.transition = 'none';
+    ink.style.left = `${active.offsetLeft}px`;
+    ink.style.width = `${active.offsetWidth}px`;
+    if (instant || !motionOk()) {
+      void ink.offsetWidth;
+      ink.style.transition = '';
+    }
+  }
+
   function switchTab(tab) {
     state.activeTab = tab === 'turn' ? 'turn' : 'replace';
     const isReplace = state.activeTab === 'replace';
 
-    document.getElementById(ID.tabReplace)?.classList.toggle('active', isReplace);
-    document.getElementById(ID.tabTurn)?.classList.toggle('active', !isReplace);
+    const replaceTab = document.getElementById(ID.tabReplace);
+    const turnTab = document.getElementById(ID.tabTurn);
+    replaceTab?.classList.toggle('active', isReplace);
+    turnTab?.classList.toggle('active', !isReplace);
+    replaceTab?.setAttribute('aria-selected', String(isReplace));
+    turnTab?.setAttribute('aria-selected', String(!isReplace));
 
     const replacePane = document.getElementById(ID.paneReplace);
     const turnPane = document.getElementById(ID.paneTurn);
@@ -1920,14 +2717,12 @@
     const foot = document.getElementById('cbe-foot-left');
     if (foot) {
       foot.textContent = isReplace
-        ? '적용 전 원문 자동 백업'
+        ? '적용 전 원문 자동 백업 · 되돌리기 기록 보관'
         : 'AI 메시지만 셉니다 · 적용 전 원문 자동 백업';
     }
 
     if (isReplace && state.replace.matches.length) {
-      const occurrences = state.replace.matches.reduce((sum, item) => sum + item.count, 0);
-      setStatus(`${state.replace.matches.length.toLocaleString()}개 메시지에서 ${occurrences.toLocaleString()}회 변경됩니다.`, 'ok');
-      renderReplaceSummary(state.replace.matches, state.messages.length, state.truncated);
+      refreshReplaceStatus();
     } else if (!isReplace && state.turn.analyzed) {
       const ambiguousCount = state.turn.candidates.filter(item => item.ambiguous).length;
       setStatus(
@@ -1939,6 +2734,8 @@
     } else {
       setStatus('');
     }
+
+    moveTabInk();
   }
 
   let cbeThemeObserver = null;
@@ -2050,14 +2847,32 @@
     }
   }
 
+  let closeTimer = 0;
+
   function closePanel() {
     if (state.loading || state.patching) {
-      const ok = confirm('작업 중입니다. 패널만 닫아도 작업은 계속됩니다. 닫을까요?');
+      const ok = confirm('작업 중입니다. 패널만 닫아도 작업은 계속되고, 입력창 버튼에 진행 상황이 보여요. 닫을까요?');
       if (!ok) return;
     }
 
+    toggleHistoryPop(false);
+
     const overlay = document.getElementById(ID.overlay);
-    if (overlay) overlay.style.display = 'none';
+    if (!overlay || overlay.style.display !== 'flex') return;
+
+    const finish = () => {
+      overlay.classList.remove('cbe-closing');
+      overlay.style.display = 'none';
+      syncLaunchBusy();
+    };
+
+    clearTimeout(closeTimer);
+    if (motionOk()) {
+      overlay.classList.add('cbe-closing');
+      closeTimer = window.setTimeout(finish, 160);
+    } else {
+      finish();
+    }
   }
 
   function openPanel() {
@@ -2071,8 +2886,16 @@
     ensureUi();
     syncCbeTheme();
 
+    clearTimeout(closeTimer);
     const overlay = document.getElementById(ID.overlay);
-    if (overlay) overlay.style.display = 'flex';
+    if (overlay) {
+      overlay.classList.remove('cbe-closing');
+      overlay.style.display = 'flex';
+    }
+
+    const launch = document.getElementById(ID.launch);
+    launch?.classList.remove('cbe-done');
+    syncLaunchBusy();
 
     if (state.loadedChatId && state.loadedChatId !== chatId && !state.patching && !state.loading) {
       state.loadedChatId = '';
@@ -2086,6 +2909,8 @@
 
     switchTab(state.activeTab);
     updateBackupButtons();
+    renderRecentChips();
+    requestAnimationFrame(() => moveTabInk(true));
   }
 
   // ---------------------------------------------------------------------------
@@ -2098,545 +2923,718 @@
     const style = document.createElement('style');
     style.id = 'cbe-style';
     style.textContent = `
-      #${ID.launch}.cbe-native-toolbar-btn {
-        pointer-events: auto !important; touch-action: manipulation !important;
-        -webkit-tap-highlight-color: transparent;
+      /* ---------- 입력창 버튼 ---------- */
+      #cbe-launch.cbe-native-toolbar-btn {
+        position: relative; pointer-events: auto !important; touch-action: manipulation !important;
+        -webkit-tap-highlight-color: transparent; color: #ff4432 !important;
       }
-      #${ID.launch}.cbe-native-toolbar-btn .cbe-launch-icon {
+      #cbe-launch.cbe-native-toolbar-btn .cbe-launch-icon {
         display: inline-flex !important; align-items: center !important; justify-content: center !important;
-        width: 16px !important; height: 16px !important; line-height: 1 !important;
-        font-size: 16px !important; font-weight: 700 !important;
-        color: hsl(var(--line-gray-2, 0 0% 62%)) !important;
-        pointer-events: none !important; transform: translateY(-.25px);
+        width: 15px !important; height: 15px !important; pointer-events: none !important;
       }
+      #cbe-launch.cbe-native-toolbar-btn svg {
+        width: 15px !important; height: 15px !important;
+        fill: none !important; stroke: currentColor !important; stroke-width: 2.1 !important;
+      }
+      #cbe-launch::before {
+        content: ""; position: absolute; inset: -2px; border-radius: 999px; pointer-events: none;
+        background: conic-gradient(#ff4432 calc(var(--cbe-p, 0) * 1%), rgba(255,68,50,.18) 0);
+        -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+        mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+        opacity: 0; transition: opacity .2s;
+      }
+      #cbe-launch.cbe-busy::before { opacity: 1; }
+      #cbe-launch.cbe-busy.cbe-indet::before {
+        background: conic-gradient(#ff4432 0 28%, rgba(255,68,50,.18) 0);
+        animation: cbe-spin .9s linear infinite;
+      }
+      #cbe-launch::after {
+        content: ""; position: absolute; top: -1px; right: -1px; width: 7px; height: 7px;
+        border-radius: 50%; background: #ff4432; pointer-events: none;
+        transform: scale(0); transition: transform .3s cubic-bezier(.34,1.56,.64,1);
+      }
+      #cbe-launch.cbe-done::after { transform: scale(1); }
 
-      #${ID.overlay} {
+      /* ---------- 바탕 ---------- */
+      #cbe-overlay {
         position: fixed; inset: 0; z-index: 2147483600;
         display: none; align-items: center; justify-content: center;
-        padding: 16px; background: rgba(0,0,0,.48); box-sizing: border-box;
+        padding: 16px; background: rgba(0,0,0,.5); box-sizing: border-box;
+        animation: cbe-fade .18s ease;
       }
+      #cbe-overlay[data-cbe-theme="light"] { background: rgba(24,24,27,.32); }
+      #cbe-overlay.cbe-closing { animation: cbe-fade-out .16s ease forwards; }
+      #cbe-overlay.cbe-closing #cbe-panel { animation: cbe-panel-out .16s ease forwards; }
 
-      #${ID.panel} {
-        --bg:#17171a; --bg2:#202024; --bg3:#26262b;
-        --line:rgba(255,255,255,.09); --line2:rgba(255,255,255,.14);
-        --fg:#f3f3f5; --dim:rgba(255,255,255,.52); --dim2:rgba(255,255,255,.34);
-        --pri:#f4f4f5; --pri-fg:#18181b;
-        --ai:#7fb3ff; --ai-bg:rgba(96,165,250,.16);
-        --user:#f79cc9; --user-bg:rgba(244,114,182,.16);
-        --ok:#5fd6a4; --ok-bg:rgba(52,211,153,.14);
+      /* ---------- 패널: 흑백 + 크랙 로고 빨강 하나 ---------- */
+      #cbe-panel {
+        --bg:#161618; --bg2:#1f1f22; --bg3:#29292d;
+        --line:rgba(255,255,255,.07); --line2:rgba(255,255,255,.13);
+        --fg:#f2f2f4; --dim:rgba(242,242,244,.56); --dim2:rgba(242,242,244,.34);
+        --acc:#ff4432; --acc-ink:#ff7a6b; --acc-fg:#ffffff; --acc-bg:rgba(255,68,50,.15);
         --warn:#f2c14e; --warn-bg:rgba(251,191,36,.14);
-        --del:#ff8b8b; --del-bg:rgba(248,113,113,.16); --ins-bg:rgba(52,211,153,.18);
-        --busy:#8ab6ff; --busy-bg:rgba(96,165,250,.13);
+        --err:#ff8b8b; --err-bg:rgba(248,113,113,.14);
+        --font-ui:"Pretendard","Pretendard Variable",system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR",sans-serif;
+        --font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+        --r-panel:18px; --r-box:14px; --r-ctl:10px; --r-chip:6px;
 
+        position: relative;
         width: min(1080px,100%); max-height: calc(100vh - 32px);
         display: flex; flex-direction: column; overflow: hidden;
-        border-radius: 16px; background: var(--bg); color: var(--fg);
+        border-radius: var(--r-panel); background: var(--bg); color: var(--fg);
         border: 1px solid var(--line);
         box-shadow: 0 24px 90px rgba(0,0,0,.5);
-        font-family: system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Pretendard",sans-serif;
-        font-size: 13px;
+        font-family: var(--font-ui); font-size: 13px; line-height: 1.45;
+        text-align: left; letter-spacing: normal;
+        animation: cbe-panel-in .24s cubic-bezier(.2,.8,.2,1);
+        color-scheme: dark;
       }
-
-      #${ID.overlay}[data-cbe-theme="light"] {
-        background: rgba(24,24,27,.32);
-      }
-
-      #${ID.panel}[data-cbe-theme="light"] {
-        --bg:#ffffff; --bg2:#f4f4f6; --bg3:#ebebee;
-        --line:rgba(0,0,0,.09); --line2:rgba(0,0,0,.14);
-        --fg:#18181b; --dim:rgba(0,0,0,.55); --dim2:rgba(0,0,0,.36);
-        --pri:#18181b; --pri-fg:#ffffff;
-        --ai:#2563eb; --ai-bg:rgba(37,99,235,.11);
-        --user:#c2185b; --user-bg:rgba(219,39,119,.11);
-        --ok:#0f8a5f; --ok-bg:rgba(16,185,129,.12);
+      #cbe-panel[data-cbe-theme="light"] {
+        --bg:#ffffff; --bg2:#f5f5f6; --bg3:#ebebed;
+        --line:rgba(20,20,24,.08); --line2:rgba(20,20,24,.15);
+        --fg:#1a1a1d; --dim:rgba(26,26,29,.58); --dim2:rgba(26,26,29,.38);
+        --acc:#ff4432; --acc-ink:#d42d1d; --acc-fg:#ffffff; --acc-bg:rgba(255,68,50,.1);
         --warn:#a16207; --warn-bg:rgba(234,179,8,.16);
-        --del:#c2313b; --del-bg:rgba(239,68,68,.13); --ins-bg:rgba(16,185,129,.18);
-        --busy:#1d4ed8; --busy-bg:rgba(37,99,235,.1);
+        --err:#c2313b; --err-bg:rgba(239,68,68,.1);
         box-shadow: 0 24px 70px rgba(0,0,0,.18);
         color-scheme: light;
       }
 
-      #${ID.panel}[data-cbe-theme="dark"] {
-        color-scheme: dark;
-      }
+      #cbe-panel *, #cbe-panel *::before, #cbe-panel *::after { box-sizing: border-box; }
+      #cbe-panel button { font-family: inherit; color: inherit; cursor: pointer; margin: 0; }
+      #cbe-panel button:disabled { cursor: not-allowed; }
+      #cbe-panel input, #cbe-panel select { font-family: inherit; font-size: 13px; color: var(--fg); margin: 0; }
+      #cbe-panel input::placeholder { color: var(--dim2); opacity: 1; }
+      #cbe-panel .cbe-ic { display: block; width: 16px; height: 16px; flex: none; }
+      #cbe-panel :focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
+      #cbe-panel .cbe-num { font-variant-numeric: tabular-nums; }
+      #cbe-panel .cbe-dim { color: var(--dim); }
 
-      #${ID.panel} * { box-sizing: border-box; }
-      #${ID.panel} button { font-family: inherit; cursor: pointer; }
-      #${ID.panel} input, #${ID.panel} select { font-family: inherit; font-size: 13px; }
-      #${ID.panel} pre {
-        margin: 0;
-        font: 12px/1.65 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      #cbe-panel pre {
+        margin: 0; font: 12.5px/1.75 var(--font-ui); color: var(--fg);
         white-space: pre-wrap; overflow-wrap: anywhere;
       }
-      #${ID.panel} mark {
-        background: var(--del-bg); color: var(--del);
-        padding: 0 2px; border-radius: 3px;
+      /* 지워질 글자: 흐린 글자 + 빨간 취소선 / 새 글자: 빨간 글자 */
+      #cbe-panel mark {
+        background: var(--bg3); color: var(--dim); padding: 0 2px; border-radius: 3px;
+        text-decoration: line-through; text-decoration-color: var(--acc); text-decoration-thickness: 2px;
       }
-      #${ID.panel} mark.g {
-        background: var(--ins-bg); color: var(--ok); font-weight: 700;
+      #cbe-panel mark.g {
+        background: var(--acc-bg); color: var(--acc-ink); font-weight: 700; text-decoration: none;
       }
-      #${ID.panel} del {
-        background: var(--del-bg); color: var(--del);
-        text-decoration: line-through; text-decoration-thickness: 1px;
-        padding: 0 2px; border-radius: 3px;
+      #cbe-panel mark.jo { padding: 0 2px 0 0; margin-left: -2px; }
+      #cbe-panel mark.j {
+        background: transparent; color: var(--acc-ink); font-weight: 700;
+        padding: 0 2px 0 0; margin-left: -2px;
+        text-decoration: underline dotted; text-decoration-color: var(--acc);
+        text-decoration-thickness: 1.5px; text-underline-offset: 3px;
       }
-      #${ID.panel} ins {
-        background: var(--ins-bg); color: var(--ok); text-decoration: none;
-        padding: 0 2px; border-radius: 3px; font-weight: 700;
+      #cbe-panel mark.q {
+        background: transparent; color: var(--fg); padding: 0;
+        text-decoration: underline wavy; text-decoration-color: var(--warn);
+        text-decoration-thickness: 1.5px; text-underline-offset: 3px;
       }
-      .cbe-num { font-variant-numeric: tabular-nums; }
+      #cbe-panel del {
+        background: transparent; color: var(--dim); padding: 0 2px; border-radius: 3px;
+        text-decoration: line-through; text-decoration-color: var(--acc); text-decoration-thickness: 2px;
+      }
+      #cbe-panel ins {
+        background: var(--acc-bg); color: var(--acc-ink); padding: 0 2px; border-radius: 3px;
+        font-weight: 700; text-decoration: none;
+      }
+      #cbe-panel ins u { text-decoration: underline dotted; text-underline-offset: 3px; }
 
       /* ---------- 헤더 ---------- */
-      .cbe-head {
-        display: flex; align-items: center; gap: 6px;
-        padding: 12px 12px 12px 16px;
-        border-bottom: 1px solid var(--line); flex: 0 0 auto;
+      #cbe-panel .cbe-head {
+        display: flex; align-items: center; gap: 2px;
+        padding: 12px 12px 4px 16px; flex: 0 0 auto;
       }
-      .cbe-head strong {
-        flex: 1; font-size: 13.5px; font-weight: 700; letter-spacing: -.01em;
+      #cbe-panel .cbe-mark {
+        display: inline-grid; place-items: center; flex: none;
+        width: 28px; height: 28px; margin-right: 9px; border-radius: 9px;
+        background: var(--acc-bg); color: var(--acc-ink);
       }
-      .cbe-icon {
-        width: 30px; height: 30px; border-radius: 8px;
-        border: 1px solid transparent; background: transparent;
-        color: var(--dim); font-size: 14px; line-height: 1;
-        display: inline-flex; align-items: center; justify-content: center;
+      #cbe-panel .cbe-mark .cbe-ic { width: 15px; height: 15px; stroke-width: 2.2; }
+      #cbe-panel .cbe-title {
+        flex: 1; min-width: 0; font-size: 14.5px; font-weight: 800; letter-spacing: -.01em;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
       }
-      .cbe-icon:hover { background: var(--bg2); color: var(--fg); }
-      .cbe-icon:disabled { opacity: .3; cursor: not-allowed; }
+      #cbe-panel .cbe-title-ko { margin-left: 7px; font-size: 12px; font-weight: 500; letter-spacing: 0; color: var(--dim); }
+      #cbe-panel .cbe-icon {
+        display: inline-grid; place-items: center; flex: none;
+        width: 32px; height: 32px; padding: 0; border: 0; border-radius: var(--r-ctl);
+        background: transparent; color: var(--dim);
+        transition: background .15s, color .15s;
+      }
+      #cbe-panel .cbe-icon .cbe-ic { width: 17px; height: 17px; transition: transform .28s cubic-bezier(.34,1.56,.64,1); }
+      #cbe-panel .cbe-icon:hover:not(:disabled), #cbe-panel .cbe-icon.on { background: var(--bg2); color: var(--fg); }
+      #cbe-panel .cbe-icon:active:not(:disabled) .cbe-ic { transform: scale(.82); }
+      #cbe-panel .cbe-icon:disabled { opacity: .35; }
+      @media (hover: hover) {
+        #cbe-panel .cbe-icon[data-ic="undo"]:hover:not(:disabled) .cbe-ic { transform: rotate(-40deg); }
+        #cbe-panel .cbe-icon[data-ic="save"]:hover:not(:disabled) .cbe-ic { transform: translateY(2px); }
+        #cbe-panel .cbe-icon[data-ic="close"]:hover .cbe-ic { transform: rotate(90deg); }
+      }
+      #cbe-panel .cbe-icon.nudge { color: var(--acc-ink); background: var(--acc-bg); }
+      #cbe-panel .cbe-icon.nudge .cbe-ic { animation: cbe-nudge .75s ease 2; }
+
+      /* ---------- 되돌리기 기록 ---------- */
+      #cbe-undo-pop {
+        position: absolute; top: 50px; right: 12px; z-index: 20;
+        width: 320px; max-width: calc(100% - 16px); padding: 6px;
+        border: 1px solid var(--line2); border-radius: var(--r-box);
+        background: var(--bg); box-shadow: 0 18px 44px rgba(0,0,0,.45);
+        transform-origin: top right; animation: cbe-pop-in .18s cubic-bezier(.2,.8,.2,1);
+      }
+      #cbe-panel[data-cbe-theme="light"] #cbe-undo-pop { box-shadow: 0 18px 44px rgba(0,0,0,.14); }
+      #cbe-undo-pop[hidden] { display: none; }
+      #cbe-panel .cbe-pop-head {
+        display: flex; align-items: baseline; gap: 8px;
+        padding: 8px 8px 6px; font-size: 12.5px; font-weight: 800;
+      }
+      #cbe-panel .cbe-pop-head small { color: var(--dim2); font-size: 11px; font-weight: 600; }
+      #cbe-panel .cbe-hist { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+      #cbe-panel .cbe-hist li { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: calc(var(--r-ctl) - 1px); }
+      #cbe-panel .cbe-hist li:hover { background: var(--bg2); }
+      #cbe-panel .cbe-hist li > div { flex: 1; min-width: 0; display: grid; gap: 1px; }
+      #cbe-panel .cbe-hist b { font-size: 12.5px; }
+      #cbe-panel .cbe-hist span { font-size: 11.5px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      #cbe-panel .cbe-hist time { font-size: 11px; color: var(--dim2); }
+      #cbe-panel .cbe-hist li:first-child .cbe-mini-btn { background: var(--fg); color: var(--bg); border-color: transparent; }
+      #cbe-panel .cbe-hist-empty { margin: 0; padding: 14px 8px; color: var(--dim); font-size: 12px; text-align: center; }
+      #cbe-panel .cbe-hist-empty[hidden], #cbe-panel .cbe-pop-note[hidden] { display: none; }
+      #cbe-panel .cbe-pop-note { margin: 4px 8px 6px; color: var(--dim2); font-size: 11px; line-height: 1.5; }
 
       /* ---------- 탭 ---------- */
-      .cbe-tabs {
-        display: inline-flex; background: var(--bg2);
-        border-radius: 9px; padding: 3px; margin: 12px 16px 0; flex: 0 0 auto;
+      #cbe-panel .cbe-tabs {
+        position: relative; display: flex; gap: 20px; flex: 0 0 auto;
+        margin: 0 16px; border-bottom: 1px solid var(--line);
       }
-      .cbe-tab {
-        height: 28px; padding: 0 14px; border: 0; border-radius: 7px;
-        background: transparent; color: var(--dim);
-        font-weight: 700; font-size: 12px;
+      #cbe-panel .cbe-tab {
+        position: relative; height: 38px; padding: 0 1px; border: 0; background: transparent;
+        color: var(--dim); font-size: 13px; font-weight: 700; white-space: nowrap;
+        transition: color .15s, transform .2s cubic-bezier(.34,1.56,.64,1);
       }
-      .cbe-tab.active {
-        background: var(--bg); color: var(--fg);
-        box-shadow: 0 1px 3px rgba(0,0,0,.2);
-      }
-      .cbe-tab:disabled { opacity: .4; cursor: not-allowed; }
-
-      /* ---------- 탭별 입력 영역 ---------- */
-      .cbe-setup {
-        border: 1px solid var(--line);
-        border-radius: 12px;
-        background: var(--bg2);
-        padding: 12px;
+      #cbe-panel .cbe-tab:hover:not(:disabled), #cbe-panel .cbe-tab.active { color: var(--fg); }
+      #cbe-panel .cbe-tab:active:not(:disabled) { transform: scale(.95); }
+      #cbe-panel .cbe-tab-ink {
+        position: absolute; left: 0; bottom: -1px; width: 0; height: 2px;
+        border-radius: 2px 2px 0 0; background: var(--acc); pointer-events: none;
+        transition: left .26s cubic-bezier(.3,.8,.3,1), width .26s cubic-bezier(.3,.8,.3,1);
       }
 
-      .cbe-control-label {
-        display: block;
-        margin-bottom: 6px;
-        color: var(--dim);
-        font-size: 10.5px;
-        font-weight: 800;
-        letter-spacing: .04em;
+      /* ---------- 상태 줄 ---------- */
+      #cbe-status {
+        display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; flex: 0 0 auto;
+        margin: 12px 16px 0; padding: 7px 7px 7px 12px; min-height: 46px;
+        border-radius: var(--r-box); background: var(--bg2); color: var(--fg);
+        font-size: 12.5px; line-height: 1.45;
+        transition: background-color .25s, color .25s;
       }
+      #cbe-status[hidden] { display: none; }
+      #cbe-status::before {
+        content: ""; display: block; flex: none; width: 8px; height: 8px; margin-right: -1px;
+        border-radius: 50%; background: var(--dim2);
+      }
+      #cbe-status[data-type="ok"]::before { background: var(--acc); box-shadow: 0 0 0 3px var(--acc-bg); }
+      #cbe-status[data-type="busy"]::before {
+        background: var(--acc); box-shadow: 0 0 0 3px var(--acc-bg);
+        animation: cbe-pulse 1s ease-in-out infinite;
+      }
+      #cbe-status[data-type="warn"]::before { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-bg); }
+      #cbe-status[data-type="error"] { background: var(--err-bg); color: var(--err); }
+      #cbe-status[data-type="error"]::before { background: var(--err); }
+      #cbe-status-text { flex: 1; min-width: 150px; }
+      #cbe-status-text b { font-weight: 800; }
+      #cbe-status-extra { display: inline-flex; gap: 5px; flex-wrap: wrap; }
+      #cbe-status-extra:empty { display: none; }
+      #cbe-status-actions { display: inline-flex; gap: 6px; flex: none; }
 
-      .cbe-control-field { min-width: 0; }
-      .cbe-control-field.grow { flex: 1; }
+      #cbe-panel .cbe-pill {
+        padding: 3px 8px; border-radius: 999px; white-space: nowrap;
+        font-size: 10.5px; font-weight: 800; font-variant-numeric: tabular-nums;
+        background: var(--bg3); color: var(--fg);
+      }
+      #cbe-panel .cbe-pill.ai { background: var(--fg); color: var(--bg); }
+      #cbe-panel .cbe-pill.user { background: transparent; color: var(--fg); box-shadow: inset 0 0 0 1px var(--line2); }
+      #cbe-panel .cbe-pill.josa { background: var(--acc-bg); color: var(--acc-ink); }
+      #cbe-panel .cbe-pill.warn { background: var(--warn-bg); color: var(--warn); }
 
-      .cbe-control-field input,
-      .cbe-control-field select,
-      .cbe-inline-select select {
-        width: 100%;
-        height: 36px;
-        border: 1px solid var(--line2);
-        border-radius: 9px;
-        background: var(--bg);
-        color: var(--fg);
-        padding: 0 10px;
-        outline: none;
+      #cbe-progress {
+        flex: 0 0 auto; height: 3px; margin: 8px 16px 0;
+        border-radius: 99px; background: var(--bg3); overflow: hidden;
       }
-
-      .cbe-control-field input:focus,
-      .cbe-control-field select:focus,
-      .cbe-inline-select select:focus,
-      .cbe-search:focus {
-        border-color: color-mix(in srgb, var(--ai) 55%, var(--line2));
-        box-shadow: 0 0 0 2px color-mix(in srgb, var(--ai-bg) 70%, transparent);
+      #cbe-progress[hidden] { display: none; }
+      #cbe-progress i {
+        position: relative; display: block; height: 100%; width: 0; overflow: hidden;
+        background: var(--acc); transition: width .12s linear;
       }
-
-      .cbe-control-field input::placeholder { color: var(--dim2); }
-
-      /* 문자열 치환: 찾기 → 바꾸기 흐름 */
-      .cbe-replace-setup { display: grid; gap: 10px; }
-      .cbe-replace-flow {
-        display: grid;
-        grid-template-columns: minmax(0,1fr) auto minmax(0,1fr);
-        gap: 10px;
-        align-items: end;
-      }
-      .cbe-flow-arrow {
-        height: 36px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        color: var(--dim2);
-        font-size: 16px;
-        padding-bottom: 1px;
-      }
-      .cbe-replace-meta {
-        display: flex;
-        align-items: end;
-        gap: 10px;
-      }
-      .cbe-inline-select { width: 118px; }
-      .cbe-inline-select .cbe-control-label { margin-bottom: 6px; }
-      .cbe-inline-option {
-        display: inline-flex;
-        align-items: center;
-        gap: 7px;
-        height: 36px;
-        color: var(--dim);
-        font-size: 11.5px;
-        cursor: pointer;
-        white-space: nowrap;
-      }
-      .cbe-inline-option input {
-        accent-color: var(--ai);
-        width: 13px;
-        height: 13px;
-      }
-      .cbe-setup-spacer { flex: 1; }
-
-      /* 연속 번호: 패턴 + 시작 번호를 하나의 설정 묶음으로 */
-      .cbe-turn-setup { display: grid; gap: 8px; }
-      .cbe-turn-primary {
-        display: flex;
-        align-items: end;
-        gap: 10px;
-      }
-      .cbe-turn-pattern input {
-        font: 12.5px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-      }
-      .cbe-turn-start { width: 112px; flex: 0 0 112px; }
-      .cbe-turn-hint {
-        display: flex;
-        align-items: center;
-        gap: 7px;
-        color: var(--dim);
-        font-size: 11px;
-        line-height: 1.45;
-      }
-      .cbe-turn-hint code {
-        padding: 1px 5px;
-        border-radius: 5px;
-        background: var(--bg3);
-        color: var(--fg);
-        font: 10.5px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      #cbe-progress i::after {
+        content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,.45), transparent);
+        animation: cbe-sheen 1.1s linear infinite;
       }
 
       /* ---------- 버튼 ---------- */
-      .cbe-btn {
-        height: 34px; padding: 0 16px; border-radius: 9px;
-        border: 1px solid var(--line2); background: transparent;
-        color: var(--fg); font-weight: 600; font-size: 12.5px;
+      #cbe-panel .cbe-btn {
+        position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+        height: 36px; padding: 0 16px; border: 1px solid var(--line2); border-radius: var(--r-ctl);
+        background: transparent; color: var(--fg);
+        font-size: 12.5px; font-weight: 700; white-space: nowrap;
+        transition: transform .24s cubic-bezier(.34,1.56,.64,1), filter .15s, background .15s, opacity .15s;
       }
-      .cbe-btn.primary { border: 0; background: var(--pri); color: var(--pri-fg); font-weight: 700; }
-      .cbe-btn.danger {
-        height: 30px; padding: 0 13px; border-radius: 8px;
-        border: 1px solid var(--del-bg); background: var(--del-bg);
-        color: var(--del); font-weight: 800; font-size: 12px;
+      #cbe-panel .cbe-btn:hover:not(:disabled) { filter: brightness(1.08); }
+      #cbe-panel .cbe-btn:active:not(:disabled) { transform: scale(.95); transition-duration: .06s; }
+      @media (hover: hover) {
+        #cbe-panel .cbe-btn.primary:hover:not(:disabled),
+        #cbe-panel .cbe-btn.danger:hover:not(:disabled) { transform: translateY(-1px); }
       }
-      .cbe-btn.small { height: 30px; padding: 0 12px; border-radius: 8px; font-size: 12px; }
-      .cbe-btn:disabled { opacity: .38; cursor: not-allowed; }
-
-      /* ---------- 상태 바 ---------- */
-      #${ID.status} {
-        display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
-        margin: 11px 16px 0; padding: 9px 12px;
-        border-radius: 10px; font-size: 12.5px; line-height: 1.45;
-        background: rgba(127,127,127,.12); flex: 0 0 auto;
+      #cbe-panel .cbe-btn:disabled { opacity: .38; }
+      #cbe-panel .cbe-btn[hidden] { display: none; }
+      #cbe-panel .cbe-btn.primary { border-color: transparent; background: var(--fg); color: var(--bg); }
+      #cbe-panel .cbe-btn.danger {
+        height: 34px; padding: 0 6px 0 14px; border-color: transparent;
+        background: var(--acc); color: var(--acc-fg); font-size: 12.5px; font-weight: 800;
       }
-      #${ID.status}[hidden] { display: none; }
-      #${ID.status}[data-type="ok"] { background: var(--ok-bg); }
-      #${ID.status}[data-type="error"] { background: var(--del-bg); color: var(--del); }
-      #${ID.status}[data-type="warn"] { background: var(--warn-bg); color: var(--warn); }
-      #${ID.status}[data-type="busy"] { background: var(--busy-bg); color: var(--busy); }
-      #${ID.statusText} { flex: 1; min-width: 120px; }
-      #${ID.statusText} b { font-weight: 800; }
-      #${ID.statusExtra} { display: inline-flex; gap: 6px; flex-wrap: wrap; }
-      #${ID.statusActions} { display: inline-flex; gap: 6px; }
-
-      .cbe-pill {
-        font-size: 10.5px; font-weight: 800; padding: 2px 7px;
-        border-radius: 999px; white-space: nowrap;
+      #cbe-panel .cbe-btn.danger .cnt {
+        display: inline-grid; place-items: center; min-width: 24px; height: 22px; padding: 0 6px;
+        border-radius: 7px; background: rgba(0,0,0,.16);
+        font-size: 11.5px; font-variant-numeric: tabular-nums;
       }
-      .cbe-pill.ai { background: var(--ai-bg); color: var(--ai); }
-      .cbe-pill.user { background: var(--user-bg); color: var(--user); }
-      .cbe-pill.warn { background: var(--warn-bg); color: var(--warn); }
-
-      #${ID.progress} {
-        height: 3px; border-radius: 99px; background: var(--bg3);
-        margin: 9px 16px 0; overflow: hidden; flex: 0 0 auto;
+      #cbe-panel[data-cbe-theme="light"] .cbe-btn.danger .cnt { background: rgba(255,255,255,.24); }
+      #cbe-panel .cbe-btn.danger .cnt:empty { display: none; }
+      #cbe-panel .cbe-btn .cnt.pop { animation: cbe-pop .4s cubic-bezier(.34,1.56,.64,1); }
+      #cbe-panel .cbe-btn.small { height: 32px; padding: 0 12px; font-size: 12px; }
+      /* 검사 버튼: 누르면 동그라미가 돌다가 체크로 */
+      #cbe-panel .cbe-btn .lbl { transition: opacity .15s; }
+      #cbe-panel .cbe-btn .spin, #cbe-panel .cbe-btn .ok {
+        position: absolute; left: 50%; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px;
+        opacity: 0; pointer-events: none;
       }
-      #${ID.progress}[hidden] { display: none; }
-      #${ID.progress} i {
-        display: block; height: 100%; width: 0%;
-        background: var(--busy); transition: width .2s ease;
+      #cbe-panel .cbe-btn .spin {
+        border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent;
+        transform: scale(.6); transition: opacity .15s, transform .2s;
       }
+      #cbe-panel .cbe-btn .ok { stroke-width: 2.8; transform: scale(.4); transition: opacity .15s, transform .3s cubic-bezier(.34,1.56,.64,1); }
+      #cbe-panel .cbe-btn.is-loading, #cbe-panel .cbe-btn.is-done { opacity: 1; }
+      #cbe-panel .cbe-btn.is-loading .lbl, #cbe-panel .cbe-btn.is-done .lbl { opacity: 0; }
+      #cbe-panel .cbe-btn.is-loading .spin { opacity: 1; transform: none; animation: cbe-spin .7s linear infinite; }
+      #cbe-panel .cbe-btn.is-done .ok { opacity: 1; transform: none; }
 
       /* ---------- 본문 ---------- */
-      .cbe-body {
-        overflow-y: auto; overflow-x: hidden;
-        padding: 12px 16px 16px;
-        min-width: 0;
+      #cbe-panel .cbe-body {
+        flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
+        padding: 12px 16px 16px; overscroll-behavior: contain;
       }
-      .cbe-pane[hidden] { display: none !important; }
-      .cbe-pane { min-width: 0; }
-      .cbe-setup + .cbe-preview-list,
-      .cbe-setup + .cbe-range,
-      .cbe-check + .cbe-tools { margin-top: 10px; }
-      [data-cbe-turn-tools][hidden] { display: none !important; }
+      #cbe-panel .cbe-pane[hidden] { display: none; }
+      #cbe-panel .cbe-setup { border: 1px solid var(--line); border-radius: var(--r-box); background: var(--bg2); padding: 12px; }
+      #cbe-panel .cbe-replace-setup { display: grid; gap: 10px; }
+      #cbe-panel .cbe-control-field { display: block; min-width: 0; }
+      #cbe-panel .cbe-control-label { display: block; margin-bottom: 6px; color: var(--dim); font-size: 11px; font-weight: 700; }
+      #cbe-panel .cbe-control-field input,
+      #cbe-panel .cbe-inline-select select {
+        width: 100%; height: 36px; padding: 0 11px; outline: none;
+        border: 1px solid var(--line2); border-radius: var(--r-ctl); background: var(--bg); color: var(--fg);
+        transition: border-color .15s, box-shadow .15s;
+      }
+      #cbe-panel .cbe-control-field input:focus,
+      #cbe-panel .cbe-inline-select select:focus,
+      #cbe-panel .cbe-search:focus { border-color: var(--acc); box-shadow: 0 0 0 3px var(--acc-bg); }
 
-      .cbe-empty {
-        padding: 32px 18px; border: 1px dashed var(--line2); border-radius: 12px;
-        text-align: center; color: var(--dim); font-size: 12.5px; line-height: 1.7;
+      /* 여러 쌍: 찾을 내용 | 맞바꾸기 | 바꿀 내용 을 한 줄로 */
+      #cbe-pairs { display: grid; gap: 6px; }
+      #cbe-panel .cbe-pairs-head {
+        display: grid; grid-template-columns: 1fr 1fr; margin-right: 38px;
+        color: var(--dim); font-size: 11px; font-weight: 700;
       }
-      .cbe-empty strong {
-        display: block; color: var(--fg); font-size: 13px;
-        font-weight: 700; margin-bottom: 5px;
+      #cbe-panel .cbe-pairs-head span:first-child { padding-left: 14px; }
+      #cbe-panel .cbe-pairs-head span:last-child { padding-left: 26px; }
+      #cbe-pair-list { display: grid; gap: 6px; }
+      #cbe-panel .cbe-pair { display: grid; grid-template-columns: minmax(0,1fr) 32px; gap: 6px; align-items: center; }
+      #cbe-panel .cbe-replace-flow {
+        display: grid; grid-template-columns: minmax(0,1fr) 1px minmax(0,1fr); align-items: stretch;
+        border: 1px solid var(--line2); border-radius: var(--r-box); background: var(--bg2);
+        overflow: hidden; transition: border-color .15s;
       }
-      .cbe-more {
-        margin-top: 7px; padding: 14px; border-radius: 10px;
-        background: var(--bg2); color: var(--dim);
-        text-align: center; font-size: 12px;
+      #cbe-panel .cbe-replace-flow:focus-within { border-color: color-mix(in srgb, var(--acc) 60%, var(--line2)); }
+      #cbe-panel .cbe-replace-flow .cbe-control-field { padding: 7px 24px 7px 14px; transition: background .15s; }
+      #cbe-panel .cbe-replace-flow .cbe-control-field:last-child { padding: 7px 14px 7px 26px; }
+      #cbe-panel .cbe-replace-flow .cbe-control-field:focus-within { background: var(--bg3); }
+      #cbe-panel .cbe-replace-flow .cbe-control-label {
+        position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
       }
+      #cbe-panel .cbe-replace-flow input {
+        height: 28px; padding: 0; border: 0; border-radius: 0; background: transparent;
+        font-size: 15px; font-weight: 600; box-shadow: none !important;
+      }
+      #cbe-panel .cbe-flow-arrow {
+        position: relative; z-index: 1; width: 1px; padding: 0; border: 0; overflow: visible;
+        background: var(--line2); color: var(--acc-fg);
+      }
+      #cbe-panel .cbe-flow-arrow::before {
+        content: ""; position: absolute; left: 50%; top: 50%;
+        width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%;
+        background: var(--acc); box-shadow: 0 0 0 4px var(--bg2); transition: transform .2s;
+      }
+      #cbe-panel .cbe-flow-arrow:hover:not(:disabled)::before { transform: scale(1.08); }
+      #cbe-panel .cbe-flow-arrow:active:not(:disabled)::before { transform: scale(.92); }
+      #cbe-panel .cbe-flow-arrow:disabled { opacity: .5; }
+      #cbe-panel .cbe-flow-arrow .cbe-ic {
+        position: absolute; left: 50%; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px;
+        stroke-width: 2.3; transform: rotate(var(--rot, 0deg));
+        transition: transform .38s cubic-bezier(.3,.9,.3,1.2);
+      }
+      #cbe-panel .cbe-replace-flow.swapped .cbe-control-field:first-child input { animation: cbe-in-l .3s cubic-bezier(.2,.8,.2,1); }
+      #cbe-panel .cbe-replace-flow.swapped .cbe-control-field:last-child input { animation: cbe-in-r .3s cubic-bezier(.2,.8,.2,1); }
+      #cbe-panel .cbe-pair-del {
+        display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0;
+        border-radius: var(--r-ctl); background: transparent; color: var(--dim2);
+        transition: background .15s, color .15s, opacity .15s;
+      }
+      #cbe-panel .cbe-pair-del:hover:not(:disabled) { background: var(--bg3); color: var(--fg); }
+      #cbe-panel .cbe-pair-del .cbe-ic { width: 15px; height: 15px; }
+      #cbe-pairs.single .cbe-pair-del { opacity: 0; pointer-events: none; }
+      #cbe-panel .enter { animation: cbe-row-in .24s cubic-bezier(.2,.8,.2,1); }
+      #cbe-panel .leave { animation: cbe-row-out .18s ease-in forwards; pointer-events: none; }
+      #cbe-panel .cbe-pair-tools { display: flex; align-items: center; gap: 8px; min-width: 0; margin-top: 2px; }
+      #cbe-panel .cbe-add-pair {
+        flex: none; display: inline-flex; align-items: center; gap: 5px;
+        height: 30px; padding: 0 11px 0 8px; border: 1px dashed var(--line2); border-radius: 999px;
+        background: transparent; color: var(--dim); font-size: 12px; font-weight: 700;
+        transition: color .15s, border-color .15s, transform .2s cubic-bezier(.34,1.56,.64,1);
+      }
+      #cbe-panel .cbe-add-pair:hover:not(:disabled) { color: var(--fg); border-color: var(--dim2); }
+      #cbe-panel .cbe-add-pair:active:not(:disabled) { transform: scale(.94); }
+      #cbe-panel .cbe-add-pair .cbe-ic { width: 14px; height: 14px; stroke-width: 2.2; }
+      #cbe-panel .cbe-recent { display: flex; align-items: center; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+      #cbe-panel .cbe-recent::-webkit-scrollbar { display: none; }
+      #cbe-panel .cbe-recent[hidden] { display: none; }
+      #cbe-panel .cbe-recent-k { flex: none; color: var(--dim2); font-size: 11px; font-weight: 700; }
+      #cbe-panel .cbe-chip {
+        flex: none; height: 28px; padding: 0 10px; border: 0; border-radius: 999px;
+        background: var(--bg2); color: var(--dim); font-size: 12px; font-weight: 600; white-space: nowrap;
+        transition: background .15s, color .15s;
+      }
+      #cbe-panel .cbe-chip:hover:not(:disabled) { background: var(--bg3); color: var(--fg); }
+      #cbe-panel .cbe-chip.tap { animation: cbe-tap .25s ease; }
 
-      .cbe-preview-list {
-        display: grid; gap: 7px;
-        width: 100%; max-width: 100%; min-width: 0;
-        overflow-x: hidden;
+      #cbe-panel .cbe-replace-meta { display: flex; align-items: flex-end; gap: 10px 12px; flex-wrap: wrap; }
+      #cbe-panel .cbe-inline-select { position: relative; display: block; width: 120px; }
+      #cbe-panel .cbe-inline-select select { appearance: none; -webkit-appearance: none; padding-right: 30px; cursor: pointer; }
+      #cbe-panel .cbe-inline-select::after {
+        content: ""; position: absolute; right: 13px; bottom: 15px; width: 6px; height: 6px;
+        border-right: 1.6px solid var(--dim); border-bottom: 1.6px solid var(--dim);
+        transform: rotate(45deg); pointer-events: none;
       }
+      #cbe-panel .cbe-setup-spacer { flex: 1; }
+      /* 옵션 칩 (대소문자 / 조사) */
+      #cbe-panel .cbe-opt {
+        position: relative; display: inline-flex; align-items: center; gap: 6px;
+        height: 34px; padding: 0 12px 0 9px; border: 1px solid var(--line2); border-radius: 999px;
+        color: var(--dim); font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; user-select: none;
+        transition: background .15s, color .15s, border-color .15s, transform .2s cubic-bezier(.34,1.56,.64,1);
+      }
+      #cbe-panel .cbe-opt input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+      #cbe-panel .cbe-opt .tick {
+        display: grid; place-items: center; width: 15px; height: 15px; border-radius: 50%;
+        border: 1.5px solid var(--dim2); transition: background .15s, border-color .15s;
+      }
+      #cbe-panel .cbe-opt .tick .cbe-ic { width: 9px; height: 9px; stroke-width: 3.4; opacity: 0; transform: scale(.4); transition: opacity .15s, transform .22s cubic-bezier(.34,1.56,.64,1); }
+      #cbe-panel .cbe-opt.on { background: var(--bg3); border-color: transparent; color: var(--fg); }
+      #cbe-panel .cbe-opt.on .tick { background: var(--fg); border-color: var(--fg); color: var(--bg); }
+      #cbe-panel .cbe-opt.on .tick .cbe-ic { opacity: 1; transform: none; }
+      #cbe-panel .cbe-opt:focus-within { outline: 2px solid var(--acc); outline-offset: 2px; }
+      #cbe-panel .cbe-opt:active { transform: scale(.94); }
+      #cbe-panel .cbe-opt .s { display: none; }
 
-      .cbe-preview-item {
-        border: 1px solid var(--line); border-radius: 11px;
-        background: var(--bg2); overflow: hidden;
+      /* ---------- 미리보기 ---------- */
+      #cbe-panel .cbe-preview-list { display: grid; gap: 7px; margin-top: 12px; min-width: 0; }
+      #cbe-panel .cbe-preview-list.fresh { animation: cbe-list-in .28s ease-out; }
+      #cbe-panel .cbe-empty {
+        padding: 28px 16px; border: 1px dashed var(--line2); border-radius: var(--r-box);
+        color: var(--dim); text-align: center; font-size: 12.5px; line-height: 1.6;
       }
-      .cbe-preview-item > header {
-        display: flex; align-items: center; gap: 8px;
-        padding: 8px 11px; font-size: 11px; color: var(--dim); cursor: pointer;
+      #cbe-panel .cbe-empty strong { display: block; margin-bottom: 4px; color: var(--fg); font-size: 13.5px; }
+      #cbe-panel .cbe-more { padding: 12px; border-radius: var(--r-box); background: var(--bg2); color: var(--dim); text-align: center; font-size: 12px; }
+      #cbe-panel .cbe-preview-item { border: 1px solid var(--line); border-radius: var(--r-box); background: var(--bg2); overflow: hidden; }
+      #cbe-panel .cbe-preview-item > header {
+        display: flex; align-items: center; gap: 8px; padding: 9px 12px;
+        font-size: 11.5px; color: var(--dim); cursor: pointer; user-select: none;
       }
-      .cbe-preview-item > header b { color: var(--fg); font-size: 11.5px; }
-      .cbe-preview-item > header time { margin-left: auto; }
-      .cbe-preview-item > header .cbe-caret { opacity: .5; }
-      .cbe-preview-item.collapsed .cbe-diff { display: none; }
-      .cbe-preview-item.fail { border-color: var(--del-bg); }
-      .cbe-preview-item .cbe-fail-msg { color: var(--del); font-weight: 700; }
+      #cbe-panel .cbe-preview-item > header b { color: var(--fg); font-size: 12px; font-variant-numeric: tabular-nums; }
+      #cbe-panel .cbe-preview-item > header time { margin-left: auto; font-variant-numeric: tabular-nums; }
+      #cbe-panel .cbe-caret { display: inline-grid; opacity: .6; transition: transform .2s ease; }
+      #cbe-panel .cbe-caret .cbe-ic { width: 14px; height: 14px; }
+      #cbe-panel .cbe-preview-item.collapsed .cbe-caret,
+      #cbe-panel .cbe-preview-item.closing .cbe-caret { transform: rotate(-90deg); }
+      #cbe-panel .cbe-preview-item.collapsed .cbe-diff { display: none; }
+      #cbe-panel .cbe-role {
+        display: inline-flex; align-items: center; height: 20px; padding: 0 7px;
+        border-radius: var(--r-chip); font-size: 10px; font-weight: 800; letter-spacing: .03em;
+      }
+      #cbe-panel .cbe-role.ai { background: var(--fg); color: var(--bg); }
+      #cbe-panel .cbe-role.user { background: transparent; color: var(--fg); box-shadow: inset 0 0 0 1px var(--line2); }
+      #cbe-panel .cbe-pick { position: relative; display: grid; place-items: center; flex: none; width: 24px; height: 24px; margin: -3px -2px -3px -5px; cursor: pointer; }
+      #cbe-panel .cbe-pick input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+      #cbe-panel .cbe-pick .box {
+        display: grid; place-items: center; width: 17px; height: 17px; border-radius: 5px;
+        border: 1.5px solid var(--line2); color: var(--acc-fg);
+        transition: background .15s, border-color .15s, transform .22s cubic-bezier(.34,1.56,.64,1);
+      }
+      #cbe-panel .cbe-pick .box .cbe-ic { width: 11px; height: 11px; stroke-width: 3.2; opacity: 0; transform: scale(.4); transition: opacity .15s, transform .22s cubic-bezier(.34,1.56,.64,1); }
+      #cbe-panel .cbe-pick input:checked + .box { background: var(--acc); border-color: var(--acc); }
+      #cbe-panel .cbe-pick input:checked + .box .cbe-ic { opacity: 1; transform: none; }
+      #cbe-panel .cbe-pick:active .box { transform: scale(.82); }
+      #cbe-panel .cbe-pick input:focus-visible + .box { outline: 2px solid var(--acc); outline-offset: 2px; }
+      #cbe-panel .cbe-skip-tag { display: none; padding: 1px 7px; border-radius: 999px; background: var(--bg3); color: var(--dim); font-size: 10.5px; font-weight: 700; }
+      #cbe-panel .cbe-preview-item .cbe-diff { transition: opacity .2s; }
+      #cbe-panel .cbe-preview-item.skip .cbe-skip-tag { display: inline; }
+      #cbe-panel .cbe-preview-item.skip .cbe-num { display: none; }
+      #cbe-panel .cbe-preview-item.skip > header > :not(.cbe-pick):not(.cbe-skip-tag) { opacity: .45; }
+      #cbe-panel .cbe-preview-item.skip .cbe-diff { opacity: .4; }
+      #cbe-panel .cbe-diff { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); border-top: 1px solid var(--line); }
+      #cbe-panel .cbe-diff.anim { overflow: hidden; }
+      #cbe-panel .cbe-diff > section { min-width: 0; padding: 11px 12px; background: var(--bg); }
+      #cbe-panel .cbe-k { margin-bottom: 6px; color: var(--dim2); font-size: 10.5px; font-weight: 800; }
+      #cbe-panel .cbe-diff pre { max-height: 160px; overflow: auto; }
+      #cbe-panel .cbe-diff .d-inline { display: none; }
 
-      .cbe-role {
-        display: inline-flex; align-items: center; justify-content: center;
-        height: 19px; padding: 0 7px; border-radius: 5px;
-        font-size: 10px; font-weight: 800; letter-spacing: .04em;
+      /* ---------- 연속 번호 ---------- */
+      #cbe-panel .cbe-turn-setup { display: grid; gap: 9px; }
+      #cbe-panel .cbe-turn-primary { display: flex; align-items: flex-end; gap: 10px; }
+      #cbe-panel .cbe-control-field.grow { flex: 1; }
+      #cbe-panel .cbe-turn-pattern input { font-family: var(--font-mono); font-size: 12.5px; }
+      #cbe-panel .cbe-turn-start { width: 110px; flex: 0 0 110px; }
+      #cbe-panel .cbe-turn-hint { display: flex; flex-wrap: wrap; gap: 4px 8px; color: var(--dim); font-size: 11.5px; }
+      #cbe-panel .cbe-turn-hint code { padding: 1px 5px; border-radius: 5px; background: var(--bg3); color: var(--fg); font: 11px var(--font-mono); }
+      #cbe-panel .cbe-range {
+        display: flex; align-items: center; margin-top: 12px; padding: 12px 14px;
+        border: 1px solid var(--line); border-radius: var(--r-box); background: var(--bg2);
       }
-      .cbe-role.ai { background: var(--ai-bg); color: var(--ai); }
-      .cbe-role.user { background: var(--user-bg); color: var(--user); }
+      #cbe-panel .cbe-range[hidden] { display: none; }
+      #cbe-panel .cbe-end { min-width: 0; }
+      #cbe-panel .cbe-end .k { color: var(--dim2); font-size: 10.5px; font-weight: 800; }
+      #cbe-panel .cbe-end .v { display: flex; align-items: baseline; gap: 7px; margin-top: 2px; font-size: 14px; font-weight: 800; font-variant-numeric: tabular-nums; }
+      #cbe-panel .cbe-end .v .idx { color: var(--dim); font-size: 12px; font-weight: 700; }
+      #cbe-panel .cbe-end .s { display: block; max-width: 260px; margin-top: 3px; color: var(--dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      #cbe-panel .cbe-end.right { text-align: right; }
+      #cbe-panel .cbe-end.right .v { justify-content: flex-end; }
+      #cbe-panel .cbe-end.right .s { margin-left: auto; }
+      #cbe-panel .cbe-line { position: relative; flex: 1; height: 0; margin: 0 16px; border-top: 1px dashed color-mix(in srgb, var(--acc) 55%, transparent); }
+      #cbe-panel .cbe-line span {
+        position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+        padding: 0 9px; background: var(--bg2); color: var(--acc-ink); font-size: 11px; font-weight: 700; white-space: nowrap;
+      }
+      #cbe-panel .cbe-check {
+        display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 9px;
+        padding: 7px 8px 7px 13px; border-radius: var(--r-box); background: var(--bg2);
+        color: var(--dim); font-size: 12px; font-weight: 600;
+      }
+      #cbe-panel .cbe-check[hidden] { display: none; }
+      #cbe-panel .cbe-check b { color: var(--fg); }
+      #cbe-panel .cbe-check .cbe-spacer { flex: 1; }
+      #cbe-panel .cbe-check label { display: inline-flex; align-items: center; gap: 6px; }
+      #cbe-panel .cbe-check input {
+        width: 62px; height: 28px; border: 1px solid var(--line2); border-radius: var(--r-ctl);
+        background: var(--bg); color: var(--fg); text-align: center; outline: none;
+        font-size: 12px; font-variant-numeric: tabular-nums;
+      }
+      #cbe-panel .cbe-verify {
+        display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 9px 0 7px;
+        border-radius: 999px; background: var(--acc-bg); color: var(--acc-ink); font-size: 11.5px; font-weight: 800;
+      }
+      #cbe-panel .cbe-verify:empty { display: none; }
+      #cbe-panel .cbe-verify.diff { padding: 0 9px; background: var(--warn-bg); color: var(--warn); }
+      #cbe-panel .cbe-verify .cbe-ic { width: 13px; height: 13px; stroke-width: 2.6; }
+      #cbe-panel .cbe-tools { display: flex; align-items: center; gap: 7px; margin-top: 12px; }
+      #cbe-panel .cbe-tools[hidden] { display: none; }
+      #cbe-panel .cbe-search-wrap { position: relative; display: block; flex: 1; min-width: 0; }
+      #cbe-panel .cbe-search-wrap .cbe-ic { position: absolute; left: 11px; top: 50%; width: 15px; height: 15px; margin-top: -7.5px; color: var(--dim2); pointer-events: none; }
+      #cbe-panel .cbe-search {
+        width: 100%; height: 34px; padding: 0 11px 0 33px; outline: none;
+        border: 1px solid var(--line2); border-radius: var(--r-ctl); background: var(--bg2); color: var(--fg);
+      }
+      #cbe-panel .cbe-toggle {
+        display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 11px;
+        border: 1px solid var(--line2); border-radius: var(--r-ctl);
+        color: var(--dim); font-size: 12px; font-weight: 700; white-space: nowrap; cursor: pointer;
+      }
+      #cbe-panel .cbe-toggle input { accent-color: var(--acc); margin: 0; }
+      #cbe-panel .cbe-menu { position: relative; }
+      #cbe-panel .cbe-menu > summary {
+        display: grid; place-items: center; width: 34px; height: 34px; list-style: none; cursor: pointer;
+        border: 1px solid var(--line2); border-radius: var(--r-ctl); color: var(--dim);
+      }
+      #cbe-panel .cbe-menu > summary::-webkit-details-marker { display: none; }
+      #cbe-panel .cbe-menu[open] > summary { background: var(--bg2); color: var(--fg); }
+      #cbe-panel .cbe-menu > div {
+        position: absolute; right: 0; top: 40px; z-index: 5; display: grid; gap: 2px;
+        min-width: 184px; padding: 5px; border: 1px solid var(--line2); border-radius: var(--r-box);
+        background: var(--bg); box-shadow: 0 14px 34px rgba(0,0,0,.3);
+        animation: cbe-pop-in .16s cubic-bezier(.2,.8,.2,1);
+      }
+      #cbe-panel .cbe-menu > div button {
+        height: 32px; padding: 0 10px; border: 0; border-radius: calc(var(--r-ctl) - 2px);
+        background: transparent; color: var(--fg); font-size: 12.5px; font-weight: 600; text-align: left;
+      }
+      #cbe-panel .cbe-menu > div button:hover { background: var(--bg2); }
+      #cbe-panel .cbe-turn-list { gap: 6px; }
+      #cbe-panel .cbe-turn-item {
+        display: flex; align-items: center; gap: 9px; min-width: 0; padding: 8px 10px; overflow: hidden;
+        border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg2);
+        transition: opacity .2s, border-color .2s;
+      }
+      #cbe-panel .cbe-turn-item.excluded { opacity: .45; }
+      #cbe-panel .cbe-turn-item.review { flex-wrap: wrap; border-style: dashed; border-color: var(--line2); }
+      #cbe-panel .cbe-turn-item.is-start, #cbe-panel .cbe-turn-item.is-end { border-color: color-mix(in srgb, var(--acc) 45%, transparent); }
+      #cbe-panel .cbe-idx { flex: none; min-width: 40px; color: var(--dim2); font-size: 11px; font-variant-numeric: tabular-nums; }
+      #cbe-panel .cbe-text { flex: 1; min-width: 0; color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      #cbe-panel .cbe-anchor {
+        flex: none; display: inline-flex; align-items: center; height: 19px; padding: 0 6px;
+        border-radius: var(--r-chip); background: var(--acc-bg); color: var(--acc-ink); font-size: 10.5px; font-weight: 800;
+      }
+      #cbe-panel .cbe-move { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      #cbe-panel .cbe-move .arr { opacity: .55; font-weight: 500; }
+      #cbe-panel .cbe-move.changed { color: var(--acc-ink); }
+      #cbe-panel .cbe-move.same, #cbe-panel .cbe-move.excl { color: var(--dim2); }
+      #cbe-panel .cbe-move.rev { color: var(--fg); }
+      #cbe-panel .cbe-item-actions { display: none; flex: none; gap: 4px; }
+      #cbe-panel .cbe-turn-item:hover .cbe-item-actions,
+      #cbe-panel .cbe-turn-item:focus-within .cbe-item-actions { display: flex; }
+      #cbe-panel .cbe-mini-btn {
+        height: 26px; padding: 0 9px; border: 1px solid var(--line2); border-radius: calc(var(--r-ctl) - 2px);
+        background: transparent; color: var(--dim); font-size: 11px; font-weight: 700;
+        transition: transform .2s cubic-bezier(.34,1.56,.64,1), background .15s, color .15s;
+      }
+      #cbe-panel .cbe-mini-btn:hover:not(:disabled) { background: var(--bg3); color: var(--fg); }
+      #cbe-panel .cbe-mini-btn:active:not(:disabled) { transform: scale(.9); }
+      #cbe-panel .cbe-mini-btn:disabled { opacity: .4; }
+      #cbe-panel .cbe-mini-btn.selected { background: var(--acc-bg); color: var(--acc-ink); border-color: transparent; }
+      #cbe-panel .cbe-occurrences { flex: 1 0 100%; margin-top: 6px; padding: 8px 9px; border-radius: calc(var(--r-ctl) - 2px); background: var(--bg3); }
+      #cbe-panel .cbe-occurrences strong { display: block; margin-bottom: 6px; color: var(--fg); font-size: 11px; }
+      #cbe-panel .cbe-occurrences > div { display: flex; flex-wrap: wrap; gap: 5px; }
+      #cbe-panel .cbe-occurrences .cbe-mini-btn { font-family: var(--font-mono); font-weight: 500; }
 
-      .cbe-diff {
-        display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
-        background: var(--line); border-top: 1px solid var(--line);
+      /* ---------- 로그 / 푸터 ---------- */
+      #cbe-panel .cbe-log-wrap { display: none; flex: 0 0 auto; margin: 0 16px 12px; }
+      #cbe-panel.show-log .cbe-log-wrap { display: block; }
+      #cbe-log {
+        margin: 0; padding: 10px 12px; max-height: 140px; overflow: auto;
+        border: 1px solid var(--line); border-radius: var(--r-box); background: var(--bg2);
+        color: var(--dim); font: 11px/1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere;
       }
-      .cbe-diff > section { background: var(--bg); padding: 10px 11px; min-width: 0; }
-      .cbe-diff .cbe-k {
-        font-size: 10px; font-weight: 800; letter-spacing: .06em;
-        color: var(--dim2); margin-bottom: 6px;
+      #cbe-panel .cbe-foot {
+        display: flex; align-items: center; gap: 8px; flex: 0 0 auto; padding: 10px 16px;
+        border-top: 1px solid var(--line); color: var(--dim2); font-size: 11.5px;
       }
-      .cbe-diff pre { max-height: 150px; overflow: auto; }
-      .cbe-diff .d-inline { display: none; }
+      #cbe-panel .cbe-foot .cbe-spacer { flex: 1; }
 
-      /* ---------- 턴 탭 ---------- */
-      .cbe-range {
-        display: flex; align-items: center;
-        margin-bottom: 9px; padding: 11px 14px; border-radius: 11px;
-        background: var(--bg2); border: 1px solid var(--line);
-      }
-      .cbe-range .cbe-end { min-width: 0; }
-      .cbe-range .cbe-end .k {
-        font-size: 10px; font-weight: 800; letter-spacing: .08em; color: var(--dim2);
-      }
-      .cbe-range .cbe-end .v {
-        font-size: 14px; font-weight: 800; letter-spacing: -.02em; margin-top: 2px;
-      }
-      .cbe-range .cbe-end .s {
-        display: block; font-size: 10.5px; color: var(--dim); margin-top: 2px;
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 260px;
-      }
-      .cbe-range .cbe-line {
-        flex: 1; height: 1px; background: var(--line2); margin: 0 14px; position: relative;
-      }
-      .cbe-range .cbe-line span {
-        position: absolute; top: -9px; left: 50%; transform: translateX(-50%);
-        background: var(--bg2); padding: 0 8px;
-        font-size: 10.5px; color: var(--dim); white-space: nowrap;
-      }
-      .cbe-range .cbe-end.right { text-align: right; }
-      .cbe-range .cbe-end.right .s { margin-left: auto; }
+      /* ---------- 움직임 ---------- */
+      @keyframes cbe-spin { to { transform: rotate(360deg); } }
+      @keyframes cbe-pulse { 50% { opacity: .35; } }
+      @keyframes cbe-sheen { to { transform: translateX(100%); } }
+      @keyframes cbe-pop { 0% { transform: scale(.5); } 60% { transform: scale(1.18); } 100% { transform: scale(1); } }
+      @keyframes cbe-nudge { 20% { transform: rotate(-38deg); } 50% { transform: rotate(12deg); } 75% { transform: rotate(-5deg); } }
+      @keyframes cbe-row-in { from { opacity: 0; transform: translateY(-6px); } }
+      @keyframes cbe-row-out { to { opacity: 0; transform: translateX(12px); } }
+      @keyframes cbe-list-in { from { opacity: 0; transform: translateY(4px); } }
+      @keyframes cbe-pop-in { from { opacity: 0; transform: translateY(-4px) scale(.97); } }
+      @keyframes cbe-tap { 40% { transform: scale(.9); } }
+      @keyframes cbe-fade { from { opacity: 0; } }
+      @keyframes cbe-fade-out { to { opacity: 0; } }
+      @keyframes cbe-panel-in { from { opacity: 0; transform: translateY(10px) scale(.98); } }
+      @keyframes cbe-panel-out { to { opacity: 0; transform: translateY(8px) scale(.98); } }
+      @keyframes cbe-in-l { from { opacity: 0; transform: translateX(14px); } }
+      @keyframes cbe-in-r { from { opacity: 0; transform: translateX(-14px); } }
 
-      .cbe-check {
-        display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-        margin-bottom: 12px; padding: 8px 13px; border-radius: 10px;
-        background: var(--ok-bg); font-size: 12px; color: var(--ok); font-weight: 700;
-      }
-      .cbe-check.off { background: var(--bg2); color: var(--dim); }
-      .cbe-check .cbe-spacer { flex: 1; }
-      .cbe-check label {
-        display: inline-flex; align-items: center; gap: 6px;
-        font-weight: 600; opacity: .85;
-      }
-      .cbe-check input[type="number"] {
-        width: 58px; height: 26px; border: 1px solid var(--line2); border-radius: 7px;
-        background: var(--bg); color: var(--fg);
-        text-align: center; outline: none; font-size: 12px;
-      }
-
-      .cbe-tools { display: flex; align-items: center; gap: 7px; margin-bottom: 10px; }
-      .cbe-tools .cbe-search {
-        flex: 1; height: 32px; border: 1px solid var(--line2); border-radius: 9px;
-        background: var(--bg2); color: var(--fg); padding: 0 11px; outline: none;
-      }
-      .cbe-tools .cbe-search::placeholder { color: var(--dim2); }
-      .cbe-tools .cbe-toggle {
-        display: inline-flex; align-items: center; gap: 6px;
-        height: 32px; padding: 0 11px; border-radius: 9px;
-        border: 1px solid var(--line2); background: transparent;
-        color: var(--dim); font-size: 11.5px; font-weight: 700; cursor: pointer;
-      }
-      .cbe-tools .cbe-toggle input { accent-color: var(--ai); }
-
-      .cbe-menu { position: relative; }
-      .cbe-menu > summary {
-        list-style: none; width: 32px; height: 32px; border-radius: 9px;
-        border: 1px solid var(--line2); color: var(--dim);
-        display: flex; align-items: center; justify-content: center; cursor: pointer;
-      }
-      .cbe-menu > summary::-webkit-details-marker { display: none; }
-      .cbe-menu[open] > summary { background: var(--bg2); color: var(--fg); }
-      .cbe-menu > div {
-        position: absolute; right: 0; top: 38px; z-index: 5;
-        display: grid; gap: 4px; padding: 6px; min-width: 168px;
-        border: 1px solid var(--line2); border-radius: 10px;
-        background: var(--bg); box-shadow: 0 12px 32px rgba(0,0,0,.35);
-      }
-      .cbe-menu > div button {
-        height: 30px; padding: 0 10px; border: 0; border-radius: 7px;
-        background: transparent; color: var(--fg);
-        font-size: 12px; font-weight: 600; text-align: left;
-      }
-      .cbe-menu > div button:hover { background: var(--bg2); }
-
-      .cbe-turn-item {
-        display: flex; align-items: center; gap: 9px;
-        width: 100%; max-width: 100%; min-width: 0;
-        padding: 8px 10px; border: 1px solid var(--line);
-        border-radius: 10px; background: var(--bg2);
-        overflow: hidden;
-      }
-      .cbe-turn-item.is-start { box-shadow: inset 2px 0 0 var(--ai); }
-      .cbe-turn-item.is-end { box-shadow: inset -2px 0 0 var(--user); }
-      .cbe-turn-item.is-start.is-end { box-shadow: inset 2px 0 0 var(--ai), inset -2px 0 0 var(--user); }
-      .cbe-turn-item.excluded { opacity: .45; }
-      .cbe-turn-item.review { border-color: var(--warn-bg); flex-wrap: wrap; }
-      .cbe-turn-item .cbe-idx {
-        flex: 0 0 auto;
-        font-size: 11px; color: var(--dim2); min-width: 42px;
-      }
-      .cbe-turn-item .cbe-text {
-        flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        font: 11.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color: var(--dim);
-      }
-      .cbe-turn-item .cbe-move {
-        flex: 0 0 auto;
-        font-size: 11.5px; font-weight: 800; font-variant-numeric: tabular-nums;
-        white-space: nowrap;
-      }
-      .cbe-turn-item .cbe-move.changed { color: var(--warn); }
-      .cbe-turn-item .cbe-move.same { color: var(--dim2); }
-      .cbe-turn-item .cbe-item-actions {
-        display: none;
-        flex: 0 0 auto;
-        gap: 4px;
-      }
-      .cbe-turn-item:hover .cbe-item-actions,
-      .cbe-turn-item:focus-within .cbe-item-actions {
-        display: flex;
-      }
-      .cbe-mini-btn {
-        height: 26px; padding: 0 8px; border-radius: 7px;
-        border: 1px solid var(--line2); background: transparent; color: var(--dim);
-        font-size: 11px; font-weight: 700;
-      }
-      .cbe-mini-btn:hover { background: var(--bg3); color: var(--fg); }
-      .cbe-mini-btn.selected { background: var(--ai-bg); color: var(--ai); border-color: transparent; }
-      .cbe-mini-btn.danger-lite:hover { background: var(--del-bg); color: var(--del); }
-      .cbe-occurrences {
-        flex: 1 0 100%; margin-top: 7px; padding: 8px;
-        border-radius: 8px; background: var(--warn-bg);
-      }
-      .cbe-occurrences strong {
-        display: block; font-size: 11px; margin-bottom: 6px; color: var(--warn);
-      }
-      .cbe-occurrences > div { display: flex; flex-wrap: wrap; gap: 5px; }
-
-      /* ---------- 푸터 / 로그 ---------- */
-      .cbe-foot {
-        display: flex; align-items: center; gap: 8px;
-        padding: 10px 16px; border-top: 1px solid var(--line);
-        color: var(--dim); font-size: 11.5px; flex: 0 0 auto;
-      }
-      .cbe-foot .cbe-spacer { flex: 1; }
-
-      .cbe-log-wrap { display: none; margin: 0 16px 14px; flex: 0 0 auto; }
-      #${ID.panel}.show-log .cbe-log-wrap { display: block; }
-      #${ID.log} {
-        margin: 0; padding: 10px 11px; max-height: 150px; overflow: auto;
-        border: 1px solid var(--line); border-radius: 10px;
-        background: var(--bg2);
-        font: 11px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-        white-space: pre-wrap; overflow-wrap: anywhere;
-      }
-
-      /* ---------- 좁은 화면 ---------- */
+      /* ---------- 모바일: 화면을 꽉 채우고 촘촘하게 ---------- */
       @media (max-width: 820px) {
-        #${ID.overlay} { padding: 8px; align-items: stretch; }
-        #${ID.panel} { max-height: calc(100vh - 16px); border-radius: 14px; }
-        .cbe-body { padding: 10px 12px 14px; }
-        .cbe-tabs, #${ID.status}, #${ID.progress} { margin-left: 12px; margin-right: 12px; }
-        .cbe-setup { padding: 10px; }
-        .cbe-replace-flow { grid-template-columns: 1fr; gap: 8px; }
-        .cbe-flow-arrow {
-          height: 14px;
-          justify-content: flex-start;
-          padding-left: 10px;
-          transform: rotate(90deg);
-          transform-origin: 18px 7px;
+        #cbe-overlay { padding: 0; align-items: stretch; }
+        #cbe-panel {
+          width: 100%; height: 100%; max-height: none; border: 0; border-radius: 0;
+          padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px);
         }
-        .cbe-replace-meta { flex-wrap: wrap; align-items: center; }
-        .cbe-inline-select { width: 112px; }
-        .cbe-turn-primary { display: grid; grid-template-columns: 1fr 96px; }
-        .cbe-turn-primary .cbe-btn { grid-column: 1 / -1; }
-        .cbe-turn-start { width: auto; min-width: 0; }
+        #cbe-panel .cbe-head { padding: 8px 6px 0 12px; }
+        #cbe-panel .cbe-mark { width: 26px; height: 26px; margin-right: 8px; }
+        #cbe-panel .cbe-title { font-size: 14px; }
+        #cbe-panel .cbe-title-ko { margin-left: 6px; font-size: 11.5px; }
+        #cbe-panel .cbe-icon { width: 34px; height: 34px; }
+        #cbe-panel .cbe-tabs { margin: 0 12px; gap: 16px; }
+        #cbe-panel .cbe-tab { height: 36px; }
+        #cbe-undo-pop { top: calc(env(safe-area-inset-top, 0px) + 44px); left: 8px; right: 8px; width: auto; max-width: none; }
 
-        .cbe-diff { grid-template-columns: 1fr; }
-        .cbe-diff .d-before, .cbe-diff .d-after { display: none; }
-        .cbe-diff .d-inline { display: block; }
+        /* 상태와 적용 버튼은 엄지가 닿는 맨 아래로 */
+        #cbe-panel .cbe-body { order: 4; padding: 8px 10px 12px; }
+        #cbe-panel .cbe-log-wrap { order: 5; margin: 0 10px 8px; }
+        #cbe-progress { order: 6; margin: 0; height: 2px; border-radius: 0; }
+        #cbe-status {
+          order: 7; flex-wrap: nowrap; margin: 0; padding: 8px 8px 8px 12px; min-height: 56px;
+          border-radius: 0; border-top: 1px solid var(--line); font-size: 12px;
+        }
+        #cbe-status-extra { display: none; }
+        #cbe-status-text { min-width: 0; }
+        #cbe-panel .cbe-btn.danger, #cbe-panel .cbe-btn.small { height: 40px; border-radius: 12px; }
+        #cbe-panel .cbe-foot { display: none; }
 
-        .cbe-range { flex-direction: column; align-items: stretch; gap: 8px; }
-        .cbe-range .cbe-line { display: none; }
-        .cbe-range .cbe-end.right { text-align: left; }
-        .cbe-range .cbe-end .s { max-width: 100%; }
+        /* 입력칸 글자 16px: 아이폰이 칸을 누를 때 화면을 확대하지 않게 */
+        #cbe-panel .cbe-replace-flow input,
+        #cbe-panel .cbe-control-field input,
+        #cbe-panel .cbe-inline-select select,
+        #cbe-panel .cbe-search,
+        #cbe-panel .cbe-check input { font-size: 16px; }
+        #cbe-panel .cbe-replace-setup { gap: 8px; }
+        #cbe-panel .cbe-replace-flow .cbe-control-field { padding: 6px 20px 6px 12px; }
+        #cbe-panel .cbe-replace-flow .cbe-control-field:last-child { padding: 6px 12px 6px 22px; }
+        #cbe-panel .cbe-pairs-head span:first-child { padding-left: 12px; }
+        #cbe-panel .cbe-pairs-head span:last-child { padding-left: 22px; }
+        #cbe-panel .cbe-replace-meta { flex-wrap: nowrap; align-items: center; gap: 6px; }
+        #cbe-panel .cbe-inline-select { width: auto; flex: 0 0 88px; }
+        #cbe-panel .cbe-inline-select .cbe-control-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+        #cbe-panel .cbe-opt { padding: 0 10px 0 8px; }
+        #cbe-panel .cbe-opt .f { display: none; }
+        #cbe-panel .cbe-opt .s { display: inline; }
+        #cbe-panel .cbe-replace-meta .cbe-setup-spacer { display: none; }
+        #cbe-panel .cbe-replace-meta .cbe-btn { flex: 1 1 auto; padding: 0 10px; }
+        #cbe-panel .cbe-preview-list { margin-top: 8px; gap: 6px; }
+        #cbe-panel .cbe-preview-item > header { padding: 7px 10px; }
+        #cbe-panel .cbe-preview-item > header time { display: none; }
+        #cbe-panel .cbe-preview-item > header .cbe-caret { margin-left: auto; }
+        #cbe-panel .cbe-diff { grid-template-columns: 1fr; }
+        #cbe-panel .cbe-diff .d-before, #cbe-panel .cbe-diff .d-after { display: none; }
+        #cbe-panel .cbe-diff .d-inline { display: block; }
+        #cbe-panel .cbe-diff > section { padding: 9px 10px; }
+        #cbe-panel pre { font-size: 13px; line-height: 1.65; }
 
-        .cbe-turn-item { flex-wrap: wrap; }
-        .cbe-turn-item .cbe-text { flex-basis: 0; }
-        .cbe-turn-item .cbe-item-actions {
-          display: flex;
-          flex: 1 0 100%;
-          justify-content: flex-end;
-          padding-top: 2px;
+        #cbe-panel .cbe-setup { padding: 8px; }
+        #cbe-panel .cbe-turn-setup { gap: 6px; }
+        #cbe-panel .cbe-turn-primary { display: grid; grid-template-columns: minmax(0,1fr) 64px auto; gap: 6px; }
+        #cbe-panel .cbe-turn-start { width: auto; min-width: 0; flex: none; }
+        #cbe-panel .cbe-turn-primary .cbe-btn { padding: 0 10px; }
+        #cbe-panel .cbe-turn-hint { font-size: 11px; }
+        #cbe-panel .cbe-range { margin-top: 8px; padding: 8px 10px; }
+        #cbe-panel .cbe-line { margin: 0 10px; }
+        #cbe-panel .cbe-end .s { display: none; }
+        #cbe-panel .cbe-check { margin-top: 6px; padding: 5px 6px 5px 10px; font-size: 11.5px; }
+        #cbe-panel .cbe-check input { width: 54px; }
+        #cbe-panel .cbe-tools { margin-top: 8px; gap: 6px; }
+        #cbe-panel .cbe-toggle { padding: 0 8px; font-size: 11.5px; }
+        #cbe-panel .cbe-turn-list { gap: 5px; }
+        #cbe-panel .cbe-turn-item { flex-wrap: wrap; gap: 7px; padding: 7px 9px; cursor: pointer; }
+        #cbe-panel .cbe-idx { min-width: 34px; }
+        #cbe-panel .cbe-text { flex-basis: 0; }
+        /* 행을 톡 누르면 시작/끝/제외 버튼이 나옴 */
+        #cbe-panel .cbe-item-actions,
+        #cbe-panel .cbe-turn-item:hover .cbe-item-actions,
+        #cbe-panel .cbe-turn-item:focus-within .cbe-item-actions { display: none; }
+        #cbe-panel .cbe-turn-item.open .cbe-item-actions {
+          display: flex; flex: 1 0 100%; justify-content: flex-end; animation: cbe-list-in .18s ease-out;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        #cbe-overlay, #cbe-overlay *, #cbe-overlay *::before, #cbe-overlay *::after,
+        #cbe-launch, #cbe-launch::before, #cbe-launch::after {
+          animation: none !important; transition: none !important;
         }
       }
     `;
@@ -2655,24 +3653,37 @@
     overlay.innerHTML = `
       <div id="${ID.panel}" role="dialog" aria-modal="true" aria-label="LogShift 로그 일괄 편집기">
         <div class="cbe-head">
-          <strong>🔁 LogShift <span class="cbe-title-ko">(로그 일괄 편집기)</span></strong>
-          <button type="button" class="cbe-icon cbe-btn" id="${ID.undo}" title="직전 작업 되돌리기">↺</button>
-          <button type="button" class="cbe-icon cbe-btn" id="${ID.exportBackup}" title="백업 JSON 저장">⤓</button>
-          <button type="button" class="cbe-icon" id="${ID.logToggle}" title="작업 로그">☰</button>
-          <button type="button" class="cbe-icon" data-cbe-close aria-label="닫기">✕</button>
+          <span class="cbe-mark" aria-hidden="true">${icon('swap')}</span>
+          <strong class="cbe-title">LogShift<span class="cbe-title-ko">로그 일괄 편집기</span></strong>
+          <button type="button" class="cbe-icon" id="${ID.undo}" data-ic="undo" data-lock
+                  title="되돌리기 기록" aria-label="되돌리기 기록" aria-expanded="false">${icon('undo')}</button>
+          <button type="button" class="cbe-icon" id="${ID.exportBackup}" data-ic="save" data-lock
+                  title="가장 최근 백업 JSON 저장" aria-label="가장 최근 백업 JSON 저장">${icon('save')}</button>
+          <button type="button" class="cbe-icon" id="${ID.logToggle}" data-ic="log"
+                  title="작업 로그" aria-label="작업 로그">${icon('log')}</button>
+          <button type="button" class="cbe-icon" data-cbe-close data-ic="close"
+                  title="닫기" aria-label="닫기">${icon('x')}</button>
         </div>
 
-        <div class="cbe-tabs">
-          <button id="${ID.tabReplace}" type="button" class="cbe-tab active">문자열 치환</button>
-          <button id="${ID.tabTurn}" type="button" class="cbe-tab">연속 번호</button>
+        <div class="cbe-pop" id="${ID.undoPop}" role="dialog" aria-label="되돌리기 기록" hidden>
+          <div class="cbe-pop-head">되돌리기 기록<small>채팅방마다 최근 ${APP.historyPerChat}개까지 보관</small></div>
+          <ol class="cbe-hist" id="${ID.history}"></ol>
+          <p class="cbe-hist-empty" id="cbe-history-empty">되돌릴 작업이 없어요.</p>
+          <p class="cbe-pop-note" id="cbe-history-note" hidden>아래 줄을 누르면 그보다 나중 작업까지 한꺼번에 되돌려요.</p>
+        </div>
+
+        <div class="cbe-tabs" role="tablist">
+          <button id="${ID.tabReplace}" type="button" class="cbe-tab active" role="tab" aria-selected="true">문자열 치환</button>
+          <button id="${ID.tabTurn}" type="button" class="cbe-tab" role="tab" aria-selected="false">연속 번호</button>
+          <span class="cbe-tab-ink" aria-hidden="true"></span>
         </div>
 
         <div id="${ID.status}" data-type="neutral" hidden>
           <span id="${ID.statusText}"></span>
           <span id="${ID.statusExtra}"></span>
           <span id="${ID.statusActions}">
-            <button id="${ID.replaceApply}" type="button" class="cbe-btn danger" disabled>일괄 수정</button>
-            <button id="${ID.turnApply}" type="button" class="cbe-btn danger" disabled hidden>재번호 적용</button>
+            <button id="${ID.replaceApply}" type="button" class="cbe-btn danger" disabled><span class="lbl">일괄 수정</span><span class="cnt"></span></button>
+            <button id="${ID.turnApply}" type="button" class="cbe-btn danger" disabled hidden><span class="lbl">재번호 적용</span><span class="cnt"></span></button>
             <button id="${ID.cancel}" type="button" class="cbe-btn small" disabled style="display:none">중단</button>
           </span>
         </div>
@@ -2681,47 +3692,49 @@
 
         <div class="cbe-body">
           <section id="${ID.paneReplace}" class="cbe-pane">
-            <div class="cbe-setup cbe-replace-setup">
-              <div class="cbe-replace-flow">
-                <label class="cbe-control-field">
-                  <span class="cbe-control-label">찾을 내용</span>
-                  <input id="${ID.find}" type="text" autocomplete="off" placeholder="로그에서 찾을 문자열">
-                </label>
-
-                <span class="cbe-flow-arrow" aria-hidden="true">→</span>
-
-                <label class="cbe-control-field">
-                  <span class="cbe-control-label">바꿀 내용</span>
-                  <input id="${ID.replace}" type="text" autocomplete="off" placeholder="비워두면 삭제">
-                </label>
+            <div class="cbe-replace-setup">
+              <div id="${ID.pairs}" class="single">
+                <div class="cbe-pairs-head" aria-hidden="true"><span>찾을 내용</span><span>바꿀 내용</span></div>
+                <div id="${ID.pairList}">${pairRowHtml()}</div>
+                <div class="cbe-pair-tools">
+                  <button type="button" class="cbe-add-pair" id="${ID.addPair}">${icon('plus')}한 쌍 더</button>
+                  <div class="cbe-recent" id="${ID.recent}" hidden></div>
+                </div>
               </div>
 
               <div class="cbe-replace-meta">
                 <label class="cbe-inline-select">
                   <span class="cbe-control-label">대상</span>
-                  <select id="${ID.target}">
+                  <select id="${ID.target}" aria-label="대상">
                     <option value="all">전체</option>
                     <option value="assistant">AI만</option>
                     <option value="user">USER만</option>
                   </select>
                 </label>
 
-                <label class="cbe-inline-option">
+                <label class="cbe-opt" title="대소문자 구분">
                   <input id="${ID.caseSensitive}" type="checkbox">
-                  대소문자 구분
+                  <span class="tick">${icon('check')}</span>
+                  <span class="f">대소문자 구분</span><span class="s">Aa</span>
+                </label>
+
+                <label class="cbe-opt on" title="받침이 달라지면 은/는, 이/가, 을/를, 과/와, (으)로 등을 알아서 맞춰요. 애매한 곳은 그대로 두고 물결 밑줄로 알려줘요.">
+                  <input id="${ID.josa}" type="checkbox" checked>
+                  <span class="tick">${icon('check')}</span>
+                  <span class="f">조사 자동 맞춤</span><span class="s">은/는</span>
                 </label>
 
                 <span class="cbe-setup-spacer"></span>
-                <button id="${ID.replaceScan}" type="button" class="cbe-btn primary">변경점 검사</button>
+                <button id="${ID.replaceScan}" type="button" class="cbe-btn primary">${busyLabel('변경점 검사')}</button>
               </div>
             </div>
 
             <div id="${ID.replaceSummary}"></div>
-            <div id="${ID.replacePreview}" class="cbe-preview-list" style="margin-top:10px">
-              <div class="cbe-empty">
-                <strong>문자열을 한꺼번에 바꿉니다</strong>
-                찾을 내용과 바꿀 내용을 넣고 먼저 변경점을 검사하세요.
-              </div>
+            <div id="${ID.replacePreview}" class="cbe-preview-list">
+              ${replaceEmptyHtml(
+                '문자열을 한꺼번에 바꿉니다',
+                '찾을 내용과 바꿀 내용을 넣고 먼저 변경점을 검사하세요. 쌍을 여러 개 넣으면 한 번에 바꿔요.'
+              )}
             </div>
           </section>
 
@@ -2730,7 +3743,7 @@
               <div class="cbe-turn-primary">
                 <label class="cbe-control-field grow cbe-turn-pattern">
                   <span class="cbe-control-label">턴 번호 형식</span>
-                  <input id="${ID.turnPattern}" type="text" autocomplete="off"
+                  <input id="${ID.turnPattern}" type="text" autocomplete="off" spellcheck="false"
                          placeholder="예: **[{N}]**"
                          title="실제 숫자가 들어가는 자리를 {N}으로 적습니다">
                 </label>
@@ -2740,7 +3753,7 @@
                   <input id="${ID.turnStartNumber}" type="number" step="1" placeholder="자동">
                 </label>
 
-                <button id="${ID.turnAnalyze}" type="button" class="cbe-btn primary">턴 로그 분석</button>
+                <button id="${ID.turnAnalyze}" type="button" class="cbe-btn primary">${busyLabel('턴 로그 분석')}</button>
               </div>
 
               <div class="cbe-turn-hint">
@@ -2758,18 +3771,21 @@
                 예상 끝
                 <input id="${ID.turnExpectedEnd}" type="number" step="1" placeholder="-">
               </label>
-              <span id="${ID.turnVerify}"></span>
+              <span id="${ID.turnVerify}" class="cbe-verify"></span>
             </div>
 
             <div class="cbe-tools" data-cbe-turn-tools hidden>
-              <input id="${ID.turnFilter}" type="text" autocomplete="off"
-                     class="cbe-search" placeholder="후보 안에서 번호 · 본문 검색">
+              <label class="cbe-search-wrap">
+                ${icon('search')}
+                <input id="${ID.turnFilter}" type="text" autocomplete="off"
+                       class="cbe-search" placeholder="번호나 본문으로 찾기" aria-label="후보 검색">
+              </label>
               <label class="cbe-toggle">
                 <input id="${ID.turnOnlyReview}" type="checkbox">
                 검토 필요만
               </label>
               <details class="cbe-menu" id="${ID.turnMenu}">
-                <summary title="더보기">⋯</summary>
+                <summary title="더보기" aria-label="더보기">${icon('more')}</summary>
                 <div>
                   <button id="${ID.turnFirstAnchor}" type="button">첫 후보를 시작점으로</button>
                   <button id="${ID.turnLatestAnchor}" type="button">마지막 후보를 끝점으로</button>
@@ -2779,7 +3795,7 @@
               </details>
             </div>
 
-            <div id="${ID.turnCandidateList}" class="cbe-preview-list" style="margin-top:10px">
+            <div id="${ID.turnCandidateList}" class="cbe-preview-list cbe-turn-list">
               <div class="cbe-empty">
                 <strong>턴 번호 구간을 다시 매깁니다</strong>
                 위에서 턴 번호 형식과 시작 턴을 정한 뒤 분석하세요.
@@ -2791,7 +3807,7 @@
         <div class="cbe-log-wrap"><pre id="${ID.log}"></pre></div>
 
         <div class="cbe-foot">
-          <span id="cbe-foot-left">적용 전 원문 자동 백업</span>
+          <span id="cbe-foot-left">적용 전 원문 자동 백업 · 되돌리기 기록 보관</span>
           <span class="cbe-spacer"></span>
           <span>v${APP.version}</span>
         </div>
@@ -2807,54 +3823,80 @@
     syncCbeTheme();
     ensureCbeThemeObserver();
 
-    document.getElementById(ID.tabReplace)?.addEventListener('click', () => switchTab('replace'));
-    document.getElementById(ID.tabTurn)?.addEventListener('click', () => switchTab('turn'));
+    const byId = id => document.getElementById(id);
 
-    document.getElementById(ID.logToggle)?.addEventListener('click', () => {
-      document.getElementById(ID.panel)?.classList.toggle('show-log');
+    byId(ID.tabReplace)?.addEventListener('click', () => switchTab('replace'));
+    byId(ID.tabTurn)?.addEventListener('click', () => switchTab('turn'));
+
+    byId(ID.logToggle)?.addEventListener('click', () => {
+      const on = byId(ID.panel)?.classList.toggle('show-log');
+      byId(ID.logToggle)?.classList.toggle('on', !!on);
     });
 
-    document.getElementById(ID.replaceScan)?.addEventListener('click', handleReplaceScan);
-    document.getElementById(ID.replaceApply)?.addEventListener('click', handleReplaceApply);
-    document.getElementById(ID.find)?.addEventListener('input', invalidateReplaceScan);
-    document.getElementById(ID.replace)?.addEventListener('input', invalidateReplaceScan);
-    document.getElementById(ID.target)?.addEventListener('change', invalidateReplaceScan);
-    document.getElementById(ID.caseSensitive)?.addEventListener('change', invalidateReplaceScan);
-    document.getElementById(ID.replacePreview)?.addEventListener('click', event => {
+    // 문자열 치환
+    byId(ID.replaceScan)?.addEventListener('click', () => handleReplaceScan());
+    byId(ID.replaceApply)?.addEventListener('click', handleReplaceApply);
+    byId(ID.pairs)?.addEventListener('click', handlePairsClick);
+    byId(ID.pairs)?.addEventListener('input', invalidateReplaceScan);
+    byId(ID.pairs)?.addEventListener('keydown', handlePairsKeydown);
+    byId(ID.target)?.addEventListener('change', invalidateReplaceScan);
+    byId(ID.caseSensitive)?.addEventListener('change', handleOptionToggle);
+    byId(ID.josa)?.addEventListener('change', handleOptionToggle);
+
+    const preview = byId(ID.replacePreview);
+    preview?.addEventListener('click', event => {
+      if (event.target.closest('.cbe-pick')) return;
       const header = event.target.closest('.cbe-preview-item > header');
-      if (header) header.parentElement.classList.toggle('collapsed');
+      if (header) togglePreviewItem(header.parentElement);
     });
+    preview?.addEventListener('change', handlePreviewPick);
 
-    document.getElementById(ID.turnAnalyze)?.addEventListener('click', handleTurnAnalyze);
-    document.getElementById(ID.turnApply)?.addEventListener('click', handleTurnApply);
-    document.getElementById(ID.turnPattern)?.addEventListener('input', invalidateTurnAnalysis);
-    document.getElementById(ID.turnStartNumber)?.addEventListener('input', handleTurnStartNumberInput);
-    document.getElementById(ID.turnExpectedEnd)?.addEventListener('input', handleTurnExpectedEndInput);
-    document.getElementById(ID.turnFilter)?.addEventListener('input', renderTurnCandidates);
-    document.getElementById(ID.turnOnlyReview)?.addEventListener('change', renderTurnCandidates);
-    document.getElementById(ID.turnCandidateList)?.addEventListener('click', handleTurnCandidateListClick);
-    document.getElementById(ID.turnFirstAnchor)?.addEventListener('click', handleTurnFirstAnchor);
-    document.getElementById(ID.turnLatestAnchor)?.addEventListener('click', handleTurnLatestAnchor);
-    document.getElementById(ID.turnExcludeFiltered)?.addEventListener(
-      'click', () => handleBulkTurnCandidateMode('exclude')
-    );
-    document.getElementById(ID.turnIncludeFiltered)?.addEventListener(
-      'click', () => handleBulkTurnCandidateMode('include')
-    );
+    // 연속 번호
+    byId(ID.turnAnalyze)?.addEventListener('click', handleTurnAnalyze);
+    byId(ID.turnApply)?.addEventListener('click', handleTurnApply);
+    byId(ID.turnPattern)?.addEventListener('input', invalidateTurnAnalysis);
+    byId(ID.turnStartNumber)?.addEventListener('input', handleTurnStartNumberInput);
+    byId(ID.turnExpectedEnd)?.addEventListener('input', handleTurnExpectedEndInput);
+    byId(ID.turnFilter)?.addEventListener('input', renderTurnCandidates);
+    byId(ID.turnOnlyReview)?.addEventListener('change', renderTurnCandidates);
+    byId(ID.turnCandidateList)?.addEventListener('click', handleTurnCandidateListClick);
+    byId(ID.turnFirstAnchor)?.addEventListener('click', handleTurnFirstAnchor);
+    byId(ID.turnLatestAnchor)?.addEventListener('click', handleTurnLatestAnchor);
+    byId(ID.turnExcludeFiltered)?.addEventListener('click', () => handleBulkTurnCandidateMode('exclude'));
+    byId(ID.turnIncludeFiltered)?.addEventListener('click', () => handleBulkTurnCandidateMode('include'));
 
-    document.getElementById(ID.cancel)?.addEventListener('click', handleCancel);
-    document.getElementById(ID.undo)?.addEventListener('click', handleUndo);
-    document.getElementById(ID.exportBackup)?.addEventListener('click', handleExportBackup);
+    // 공통
+    byId(ID.cancel)?.addEventListener('click', handleCancel);
+    byId(ID.undo)?.addEventListener('click', event => {
+      event.stopPropagation();
+      toggleHistoryPop();
+    });
+    byId(ID.history)?.addEventListener('click', handleHistoryClick);
+    byId(ID.exportBackup)?.addEventListener('click', handleExportBackup);
+
+    document.addEventListener('click', event => {
+      const pop = byId(ID.undoPop);
+      if (!pop || pop.hidden) return;
+      if (pop.contains(event.target) || byId(ID.undo)?.contains(event.target)) return;
+      toggleHistoryPop(false);
+    });
 
     document.addEventListener('keydown', event => {
-      if (
-        event.key === 'Escape' &&
-        document.getElementById(ID.overlay)?.style.display !== 'none'
-      ) {
-        closePanel();
+      if (event.key !== 'Escape' || byId(ID.overlay)?.style.display !== 'flex') return;
+      const pop = byId(ID.undoPop);
+      if (pop && !pop.hidden) {
+        toggleHistoryPop(false);
+        return;
       }
+      closePanel();
     });
 
+    const tabs = document.querySelector(`#${ID.panel} .cbe-tabs`);
+    if (tabs && typeof ResizeObserver === 'function') {
+      new ResizeObserver(() => moveTabInk(true)).observe(tabs);
+    }
+
+    renderRecentChips();
     switchTab(state.activeTab);
     updateBackupButtons();
   }
@@ -2943,7 +3985,7 @@
     button.setAttribute('data-cbe-toolbar-button', 'bulk-editor');
     button.title = '🔁 LogShift (로그 일괄 편집기)';
     button.setAttribute('aria-label', 'LogShift 로그 일괄 편집기');
-    button.innerHTML = '<span class="cbe-launch-icon" aria-hidden="true">⇄</span>';
+    button.innerHTML = `<span class="cbe-launch-icon" aria-hidden="true">${icon('swap')}</span>`;
     button.addEventListener('mousedown', event => {
       event.preventDefault();
       event.stopPropagation();
@@ -2983,6 +4025,7 @@
       button.className = info.base.className;
       button.classList.add(keep);
       button.dataset.cbeBaseClass = info.base.className;
+      syncLaunchBusy();
     }
 
     if (info.cmu && info.anchor?.parentElement === info.toolbar) {
