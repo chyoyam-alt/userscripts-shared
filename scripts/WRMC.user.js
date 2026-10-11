@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽 Wish RP Manager Core
 // @namespace    local.rp.context.manager
-// @version      1.6.0
+// @version      1.6.1
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @description  Crack RP용 컨텍스트 주입·인지·자동 장기기억·자료집·전체 재구축을 하나로 관리합니다.
@@ -57,7 +57,7 @@
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '1.6.0';
+  const SCRIPT_VERSION = '1.6.1';
   const EDITION = 'core';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   // Managers without synchronous GM storage (iOS Userscripts, Greasemonkey 4) cannot keep settings; say so instead of a raw ReferenceError.
@@ -10469,7 +10469,17 @@ function remapLogSelectionKeysByMatch(room,oldBlocks,newBlocks){
   // UTF-16LE stays off for the rest of the page once the server refuses it, stores it differently or it cannot go out at all (sendCarrierPatch).
   // `answered`: a UTF-16LE PATCH got an HTTP answer (any status) on this page, so this userscript manager does send it.
   // `encoding` (optional) counts the body in that encoding instead: the panel shows a verified carrier in the one it was sent in.
-  const carrierUtf16={on:true,reason:'',answered:false};
+  // A page starts with UTF-16LE off when GM_info.scriptHandler names a manager whose Blob body does not reach the server as
+  // sent (Stay, Userscripts, AdGuard), or when this browser kept a refusal (localStorage: Userscripts has no GM storage) for the
+  // same manager name, manager version and WRMC version less than 7 days ago. A refusal is kept after a 4xx refusal is followed
+  // by a UTF-8 PATCH that goes through (sendCarrierPatch); 5xx and unanswered requests are never kept.
+  // `refused4xx`: this page saw such a refusal and no UTF-8 PATCH has gone through or failed since.
+  const CARRIER_UTF16_REFUSED_KEY='WISH_RP_carrier_utf16_refused_v1';
+  const carrierUtf16Env=(()=>{let name='',version='';try{if(typeof GM_info==='object'&&GM_info){name=String(GM_info.scriptHandler||'');version=String(GM_info.version||'');}}catch(_){}return {name,version,wrmc:SCRIPT_VERSION};})();
+  function carrierUtf16Refused() {
+    try{const r=JSON.parse(localStorage.getItem(CARRIER_UTF16_REFUSED_KEY)||'null'),e=carrierUtf16Env;return r&&r.name===e.name&&r.version===e.version&&r.wrmc===e.wrmc&&Number.isFinite(r.at)?r:null;}catch(_){return null;}
+  }
+  const carrierUtf16={on:!['stay','userscripts','adguard'].includes(carrierUtf16Env.name.toLowerCase())&&!(age=>age>=0&&age<7*864e5)(Date.now()-(carrierUtf16Refused()?.at??NaN)),reason:'',answered:false,refused4xx:false};
   function carrierBody(text,encoding='') {
     const json=JSON.stringify({message:String(text??'')}),utf8=new TextEncoder().encode(json).length;
     return (encoding?encoding==='utf-16le':carrierUtf16.on&&json.length*2<utf8)?{encoding:'utf-16le',bytes:json.length*2}:{encoding:'utf-8',bytes:utf8};
@@ -10511,7 +10521,8 @@ function remapLogSelectionKeysByMatch(room,oldBlocks,newBlocks){
         if(normalizeLineBreaks(observed)===normalizeLineBreaks(text)){carrierUtf16.answered=true;return {encoding:'utf-16le',observed};}
       }
       carrierUtf16.on=false;carrierUtf16.reason=refused?String(refused.message||refused):lost?'UTF-16LE 요청이 모든 주소에서 응답 없음 · '+String(lost.message||lost):'UTF-16LE 저장 본문 불일치';
-      notify((lost?'UTF-16LE 요청이 모든 주소에서 응답 없이 끝나(서버 조회는 정상) 이 페이지에서는 UTF-8로 보냅니다 · '+String(lost.message||lost)
+      const refused4xx=Number(refused?.diagnostic?.httpStatus)>0;if(refused4xx)carrierUtf16.refused4xx=true;
+      if(!refused4xx||!carrierUtf16Refused())notify((lost?'UTF-16LE 요청이 모든 주소에서 응답 없이 끝나(서버 조회는 정상) 이 페이지에서는 UTF-8로 보냅니다 · '+String(lost.message||lost)
         :(refused&&!Number(refused?.diagnostic?.httpStatus)?'UTF-16LE 요청을 보내지 못해':'서버가 UTF-16LE 전송을 받지 않아')+' 이 페이지에서는 UTF-8로 보냅니다 · '+carrierUtf16.reason),'warn',5000);
       if(carrierBodyBytes(text)>APP.carrierByteBudget){
         const back=refused||restore.includes(observed)?null:restore.find(t=>typeof t==='string'&&carrierBodyBytes(t)<=APP.carrierByteBudget);
@@ -10519,7 +10530,8 @@ function remapLogSelectionKeysByMatch(room,oldBlocks,newBlocks){
         throw Object.assign(Error('메시지 PATCH 실패 · UTF-16LE 대신 UTF-8로 보내려면 서버 용량 한도에 맞게 다시 골라야 합니다 · '+carrierUtf16.reason),{code:'WISH_CARRIER_UTF8_REFIT',serverText:refused?undefined:back??observed});
       }
     }
-    await send(to,text,'utf-8');
+    try{await send(to,text,'utf-8');}catch(error){carrierUtf16.refused4xx=false;throw error;}
+    if(carrierUtf16.refused4xx){carrierUtf16.refused4xx=false;try{localStorage.setItem(CARRIER_UTF16_REFUSED_KEY,JSON.stringify({...carrierUtf16Env,at:Date.now()}));}catch(_){}}
     return {encoding:'utf-8',observed:null};
   }
   function isServerPatch413(error) {
@@ -11415,6 +11427,7 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
     const historyTicket=WishHistory.begin(String(chatId));
     let cursor = '', useCrackApiFallback = false;
     const messages = [], ids = new Set(), cursors = new Set();
+    let lastPageStart = 0;
     while (true) {
       if (control?.cancelled) throw control.staleOnCancel ? wishHistoryStaleError('대화 조회 중 기준이 바뀌어 다시 확인해야 합니다.') : new Error('사용자가 전체 재구축을 중단했습니다.');
       const suffix = `${rid}/messages?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
@@ -11430,7 +11443,19 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
       const data = payload?.data || payload || {};
       const page = Array.isArray(data.messages) ? data.messages : [];
       if (!Array.isArray(data.messages)) throw new Error('전체 대화 목록 응답 형식을 확인할 수 없습니다.');
-      for (const raw of page) {
+      // A cursor page may begin by sending again some rows of the page just before it. When those leading rows are equal in
+      // id, role and text to the rows already read from that page, and come in the same order, they are the same messages read
+      // twice and the first copies are kept. Any other repeat, or a page of nothing but repeats that still points to another
+      // page, stops as before.
+      let repeat = 0, at = lastPageStart - 1;
+      while (repeat < page.length && ids.has(String(messageIdOf(page[repeat]) || '')) && ['user','assistant','system'].includes(messageRoleOf(page[repeat]))) {
+        const raw = page[repeat], id = String(messageIdOf(raw)), first = messages.findIndex((m, k) => k > at && String(messageIdOf(m)) === id);
+        if (first < 0 || messageRoleOf(messages[first]) !== messageRoleOf(raw) || messageTextOf(messages[first]) !== messageTextOf(raw)) throw new Error('전체 대화 페이지에서 중복 메시지가 발견되어 중단했습니다.');
+        at = first; repeat++;
+      }
+      if (repeat && repeat === page.length && data.nextCursor != null && String(data.nextCursor)) throw new Error('전체 대화 페이지에서 중복 메시지가 발견되어 중단했습니다.');
+      lastPageStart = messages.length;
+      for (const raw of page.slice(repeat)) {
         const mid = String(messageIdOf(raw) || '');
         if (!mid||!['user','assistant','system'].includes(messageRoleOf(raw)))throw Error('전체 대화 메시지의 ID 또는 역할을 확인할 수 없습니다.');
         if (ids.has(mid)) throw new Error('전체 대화 페이지에서 중복 메시지가 발견되어 중단했습니다.');
@@ -15047,7 +15072,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     const needed=pendingTurnAnchorIds(p);
     if(cognitionIds.some(id=>!frame.stable.some(m=>String(messageIdOf(m))===id)) || needed.some(id=>!frame.userIds.includes(id)) || Object.values(room.aiSourceManifests||{}).some(list=>list.some(x=>!frame.stable.some(m=>String(messageIdOf(m))===x.id))) || Object.values(room.aiUpdateCursors||{}).some(c=>c.messageId&&!frame.stable.some(m=>String(messageIdOf(m))===c.messageId)))
       try{frame=stableFrame([...(await observeFullRoomHistory(room,frame.messages.slice(0,50)))].reverse());}
-      catch(error){if(isWishHistoryStale(error))return {deferred:true};throw error;}
+      catch(error){if(isWishHistoryStale(error))return {deferred:true};if(reason==='before-send'||reason==='before-reroll')return {readFailed:error};throw error;}
     control?.assertActive?.();
     p.observedHead=headSignature;
     if(frame.trailingUser)return {active:activePendingItems(p).length,deferred:true};
@@ -16824,7 +16849,7 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
     } finally { clearTimeout(timer); }
   }
   async function getRawHistory(rid, options = {}) {
-    const messages=[],ids=new Set(),cursors=new Set(),required=options.requiredIds||[];let cursor='',useCrackApiFallback=false;
+    const messages=[],ids=new Set(),cursors=new Set(),required=options.requiredIds||[];let cursor='',useCrackApiFallback=false,lastPageStart=0;
     while(true){
       if(options.control?.pause)throw new Error('읽기를 중단했어요. 다시 누르면 이어서 분석할 수 있어요.');
       const suffix=encodeURIComponent(rid)+'/messages?limit=50'+(cursor?'&cursor='+encodeURIComponent(cursor):'');
@@ -16842,7 +16867,12 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
         throw new Error('대화 끝을 확인할 페이지 정보가 없습니다. 전체를 읽었다고 처리하지 않았습니다.');
       if((!page.length && (next || data.hasNext===true)) || (data.hasNext===true && !next))
         throw new Error('이전 대화가 남았지만 다음 페이지를 확인하지 못했습니다. 전체를 읽었다고 처리하지 않았습니다.');
-      for(const m of page){
+      // Same rule as fetchAllRoomMessages: leading rows sent again from the page just before, equal and in order, are kept once.
+      let repeat=0,at=lastPageStart-1;
+      while(repeat<page.length&&ids.has(page[repeat].id)){const m=page[repeat],first=messages.findIndex((x,k)=>k>at&&x.id===m.id);if(first<0||messages[first].role!==m.role||messages[first].text!==m.text)throw new Error('페이지에 중복 메시지 또는 다른 방의 메시지가 있습니다. 다시 읽어 주세요.');at=first;repeat++;}
+      if(repeat&&repeat===page.length&&next)throw new Error('페이지에 중복 메시지 또는 다른 방의 메시지가 있습니다. 다시 읽어 주세요.');
+      lastPageStart=messages.length;
+      for(const m of page.slice(repeat)){
         if(ids.has(m.id))throw new Error('페이지에 중복 메시지 또는 다른 방의 메시지가 있습니다. 다시 읽어 주세요.');
         ids.add(m.id);messages.push(m);
       }
@@ -17010,6 +17040,9 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
         try{prepared=await waitForWishOperation(withCarrierOperation(currentRoom,()=>{assertActive();return reconcileStableCarrier(currentRoom,parsed.event==='send'?'before-send':'before-reroll',null,{assertActive,onProgress:notice.stage});},{signal:controller.signal}),controller.signal);assertActive();}
         finally{notice.stop();}
         if(prepared?.deferred)throw new Error('서버에서 이전 생성 상태를 확인 중입니다. 잠시 뒤 다시 보내 주세요.');
+        // The full history could not be read: the injection already on the server stays as it is and this message is sent;
+        // the failure is recorded as the periodic check records it.
+        if(prepared?.readFailed)recordPendingSyncError(currentRoom,prepared.readFailed);
       }
       // 주입·재전송이 없는 방의 기준점은 자동 정리의 생성 추적용입니다. 읽지 못하면 자동 정리가 없는 방과 같이 추적 없이 보냅니다.
       const untrackedOk=!replay&&!!currentRoom&&!currentRoom.pending&&isAiAutomationReady();let untracked=false;
@@ -18590,7 +18623,7 @@ function mRelationships() {
   function vCog() {
     const c = V.cog, pick = c.facts.filter(f => f.included).length, brief = c.facts.filter(f => f.included && f.brief).length;
     return `${pageHead('인물 '+help(helpSections([['인물·인지','누가 무엇을 알고 모르는지, 누구에게 숨기는지를 관리합니다. 인지 주입 버튼과 각 정보의 포함·제외 설정을 따릅니다.'],['호칭·말투','화자→상대별 현재 호칭과 말투를 관리합니다. 호칭·말투 주입을 켜면 매턴 포함하며 과거 호칭보다 현재값을 우선합니다.'],['인물 묶음 정리','팝업에서 전체 확정 대화를 읽고 구간 수를 선택합니다. 인물·인지·호칭·말투·관계·감정선·은폐만 내장 API로 정리하고 결과 확인 후 적용합니다.']])), `<span class="m3-actions">${btn('자동 정리 설정', 'nav', { arg: 'settings', cls: 'quiet mini', icon: 'set' })}${btn('모아보기','personDossier',{cls:'mini',icon:'search'})}${btn('관계도','relationMap',{cls:'mini',icon:'relation'})}${btn('인물 묶음 정리', 'cogRe', { cls: 'mini', icon: 'refresh', dis: !!V.ai.manual })}</span>`)}
-    ${tabs([['people', '인물·인지'], ['char', '캐릭터'], ['speech', '호칭·말투'], ['relationships','관계·감정선'], ['review', `검토 ${V.reviews.length}`]], S.cog, 'cogSub')}
+    ${tabs([['people', '인물·인지'], ['speech', '호칭·말투'], ['relationships','관계·감정선'], ['char', '캐릭터'], ['review', `검토 ${V.reviews.length}`]], S.cog, 'cogSub')}
     <div class="m3-sub" data-key="cog-${S.cog}">${S.cog === 'char' ? mChar() : S.cog === 'relationships' ? mRelationships() : S.cog === 'speech' ? mSpeech() : S.cog === 'review' ? `<div class="m3-sechead"><span class="m3-muted">자동 정리가 보류한 후보와 이전 버전 후보입니다. 반영하거나 제외해 주세요</span>${V.reviews.length ? btn('모두 제외', 'rvClear', { cls: 'quiet mini' }) : ''}</div>${heldCReviews()}` :
       `<div class="m3-setting-row m3-cog-mode"><span class="m3-title-help"><b>인지 넣는 방식</b>${help(helpSections([['전부', '모든 인지를 자세히 넣습니다(지금까지의 방식).'], ['골라서', '지금 장면(내 입력과 최신 AI 답)에 관련된 인지는 자세히, 나머지는 누가 알고 누가 모르는지만 한 줄로 넣습니다. 주입 안 함으로 정한 인지만 빠집니다.']]))}</span>${tabs([['all', '전부'], ['pick', '골라서']], c.selectMode, 'cogSelectMode')}</div>
       <div class="m3-sechead"><b>인물 ${c.actors.length}</b><span class="m3-actions">${btn('인물 추가', 'acNew', { cls: 'mini', icon: 'plus' })}${chip('주입','cogInclude',V.pol.cog!=='off')}</span></div>
