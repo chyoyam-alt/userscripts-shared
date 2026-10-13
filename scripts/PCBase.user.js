@@ -2,7 +2,9 @@
 // @name         🛠️ 크랙 PC 베이스 (Crack PC Base)
 // @namespace    crack-pc-base
 // @version      1.0.0
-// @description  크랙 스토리 채팅(PC, 폭 1024px 이상) 기반 스크립트 — 상단 헤더·모델 선택 바·좌측 사이드바·우측 메뉴 자동 숨김(오버레이), 답변 완성 때 자동 스크롤 막기, 오래된 대화 숨기기·화면 밖 메시지 그리기 생략, 대시보드·라디오존데·로그 검색·채팅 목록·갈래 지도, 입력창 도구 줄의 설정창, 모듈용 API(window.CrackPcBase)
+// @description  크랙 PC 채팅을 더 가볍고 편하게 — 화면 정리, 대시보드, 로그 검색, 채팅 목록 정리, 다른 확장 바로가기까지 한곳에서
+// @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/PCBase.user.js
+// @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/PCBase.user.js
 // @match        https://crack.wrtn.ai/*
 // @run-at       document-idle
 // @grant        none
