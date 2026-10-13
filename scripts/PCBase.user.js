@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🛠️ 크랙 PC 베이스 (Crack PC Base)
 // @namespace    crack-pc-base
-// @version      1.0.0
+// @version      1.0.1
 // @description  크랙 PC 채팅을 더 가볍고 편하게 — 화면 정리, 대시보드, 로그 검색, 채팅 목록 정리, 다른 확장 바로가기까지 한곳에서
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/PCBase.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/PCBase.user.js
@@ -20,7 +20,7 @@
  * 영역은 셋이다: 'top' = 사이트 헤더(맨 위 막대)만, 'left' = 사이드바, 'right' = 방 메뉴.
  * 룸 상단바(모델 선택이 있는 막대)는 영역이 아니다. 표식도 이동도 없이 크랙 그대로 둔다(크랙이 클릭으로 스스로 접고 편다).
  *
- *   version                         '1.0.0'
+ *   version                         '1.0.1'
  *   page                            스토리 채팅 페이지인지(폭 무관)
  *   active                          레이아웃이 켜져 있는지(스토리 채팅 페이지 + 폭 1024px 이상)
  *   on(event, fn) → 해제 함수       off(event, fn)
@@ -73,7 +73,7 @@
   'use strict';
   if (window.CrackPcBase && window.CrackPcBase.version) return;
 
-  const VERSION = '1.0.0';
+  const VERSION = '1.0.1';
   const SETTINGS_KEY = 'crack-pc-base:v1';
   const OLD_PINS_KEY = 'crack-pc-base:pins:v1'; // 0.1.0이 쓰던 옛 저장 키. 시작할 때 한 번 지운다
   const CHAT_PATH = /^\/stories\/[^/]+\/episodes\/[^/]+\/?$/;
@@ -1622,6 +1622,7 @@ html[data-cpb-delsel] .flex-col-reverse > [data-message-group-id]:hover{box-shad
 html[data-cpb-reroll] main:has(> [role="dialog"] textarea[placeholder="원하는 답변 방향을 입력할 수 있어요"]) > :is([role="dialog"],.fixed.inset-0){opacity:0!important;pointer-events:none!important}
 /* 모델 바꾸기 대행 중에는 크랙 모델 선택창을 보이지 않게 */
 html[data-cpb-proxy] [data-radix-popper-content-wrapper]{opacity:0!important;pointer-events:none!important}
+[data-cpb-cbox][data-cpb-mhide] .flex.items-center.justify-between > .flex.min-w-0 > button[aria-haspopup="dialog"]:has(img[src*="/model-icon/"]){display:none!important}
 @media (prefers-reduced-motion: reduce){#cpb-dash *,#cpb-dash *::after,#cpb-mpick,#cpb-mpick *{animation:none!important;transition:none!important}}
 /* 빈 입력 전송 막기: 막힌 전송 버튼은 흐리게. 엔딩 힌트 버튼과 그 알림 점 숨기기 */
 [data-cpb-blocked]:has(path[d^="M18.77"]){opacity:.5!important;cursor:not-allowed!important;filter:grayscale(.22)!important}
@@ -2130,7 +2131,7 @@ html[data-cpb] .flex-col-reverse>[data-message-group-id][data-cpb-fold]{display:
     cmp.box = box;
     cmp.row = row;
     cmp.tools = row && row.firstElementChild && row.firstElementChild.tagName !== 'BUTTON' ? row.firstElementChild : null;
-    cmp.send = row && row.lastElementChild && row.lastElementChild.tagName === 'BUTTON' ? row.lastElementChild : null;
+    cmp.send = cmpFindSend(row);
     cmp.tt = el.editor && typeof el.editor.on === 'function' ? el.editor : null;
     flag(box, 'data-cpb-cbox', true);
     if (cmp.tt) attempt(() => cmp.tt.on('update', onCmpUpdate));
@@ -2255,9 +2256,16 @@ html[data-cpb] .flex-col-reverse>[data-message-group-id][data-cpb-fold]{display:
   // 전송 버튼은 크랙이 새 요소로 바꿔 끼울 수 있으니 쓸 때마다 버튼 줄의 마지막 버튼으로 다시 확인한다
   function cmpSend() {
     if (cmp.send && cmp.send.isConnected) return cmp.send;
-    const last = cmp.row && cmp.row.isConnected ? cmp.row.lastElementChild : null;
-    cmp.send = last && last.tagName === 'BUTTON' ? last : null;
+    cmp.send = cmpFindSend(cmp.row && cmp.row.isConnected ? cmp.row : null);
     return cmp.send;
+  }
+  // 전송 버튼 = 버튼 줄 오른쪽 끝. 2026-10-13부터 크랙은 오른쪽을 [모델 버튼 · 모델 선택창 · 구분선 · 전송] 묶음(div)으로 둔다 → 그 묶음의 마지막 버튼
+  function cmpFindSend(row) {
+    const last = row ? row.lastElementChild : null;
+    if (!last) return null;
+    if (last.tagName === 'BUTTON') return last;
+    const bs = last.querySelectorAll(':scope > button');
+    return bs.length ? bs[bs.length - 1] : null;
   }
   function guardBlocked(fresh) {
     const send = cmpSend();
@@ -3704,9 +3712,22 @@ html[data-cpb] .flex-col-reverse>[data-message-group-id][data-cpb-fold]{display:
   }
   const rowSwitchOn = (row) => { const sw = row && row.querySelector('[role="switch"]'); return sw ? sw.getAttribute('aria-checked') === 'true' : null; };
 
-  // 지금 모델: 룸 상단바 모델 버튼의 크랙 아이콘 → 우리 모델 기록에서 같은 아이콘 파일을 가진 살아 있는 모델
+  // 크랙 모델 버튼: 2026-10-13부터 입력창 아래 버튼 줄 오른쪽 묶음(전송 버튼 옆). 예전 배치(룸 상단바)도 본다.
+  // 모델 아이콘 그림이 든 dialog 버튼 + React 소유만(다른 확장이 같은 속성 버튼을 끼워 넣는다). 우리 대시보드 안은 제외
+  function crackModelBtn() {
+    const pick = (root) => {
+      if (!root || !root.isConnected) return null;
+      for (const b of root.querySelectorAll('button[aria-haspopup="dialog"]')) {
+        if (!b.closest('#cpb-dash') && b.querySelector('img[src*="/model-icon/"]') && reactProps(b)) return b;
+      }
+      return null;
+    };
+    return pick(cmp.row) || pick(els.roomBar);
+  }
+  // 지금 모델: 크랙 모델 버튼의 아이콘 → 우리 모델 기록에서 같은 아이콘 파일을 가진 살아 있는 모델
   function currentModel() {
-    const img = els.roomBar && els.roomBar.querySelector('button[aria-haspopup="dialog"] img[src*="model-icon"]');
+    const mbtn = crackModelBtn();
+    const img = mbtn && mbtn.querySelector('img[src*="/model-icon/"]');
     const file = img ? String(img.getAttribute('src') || '').split('?')[0].split('/').pop() : '';
     if (!file) return '';
     const keys = Object.keys(models).filter((k) => iconFile(k) === file);
@@ -3716,8 +3737,8 @@ html[data-cpb] .flex-col-reverse>[data-message-group-id][data-cpb-fold]{display:
   async function switchModel(token) {
     const file = iconFile(token);
     // 모델 아이콘이 든 버튼만. 다른 확프(요약 메모리 등)가 같은 aria-haspopup="dialog" 버튼을 모델 버튼 앞에 끼워 넣는다
-    const icon = els.roomBar && els.roomBar.querySelector('button[aria-haspopup="dialog"] img[src*="model-icon"]');
-    const trig = icon && icon.closest('button');
+    // 대시보드로 옮겨 숨긴(display:none) 크랙 버튼도 click()으로는 열린다. 창은 data-cpb-proxy 동안 보이지 않게 둔다
+    const trig = crackModelBtn();
     if (!trig || !file) return false;
     const html = document.documentElement;
     flag(html, 'data-cpb-proxy', true);
@@ -3994,7 +4015,7 @@ html[data-cpb] .flex-col-reverse>[data-message-group-id][data-cpb-fold]{display:
     const want = page && dashOn('on') && box && box.isConnected;
     if (!want) {
       if (dashEl && dashEl.isConnected) dashEl.remove();
-      if (box) delAttr(box, 'data-cpb-dash');
+      if (box) { delAttr(box, 'data-cpb-dash'); delAttr(box, 'data-cpb-mhide'); }
       pickClose();
       return;
     }
@@ -4007,6 +4028,8 @@ html[data-cpb] .flex-col-reverse>[data-message-group-id][data-cpb-fold]{display:
     const showModel = dashBtnOn('model') && !!cur;
     flag(mb, 'hidden', !showModel);
     flag(dashEl.querySelector('[data-sep="model"]'), 'hidden', !showModel);
+    // 대시보드 모델 버튼을 켜면 크랙 모델 버튼(전송 버튼 옆)은 숨긴다 = 대시보드로 옮긴 것. 끄거나 지금 모델을 못 찾으면 원래 자리에 그대로
+    flag(box, 'data-cpb-mhide', showModel);
     if (showModel) {
       const mi = modelInfo(cur);
       const img = mb.querySelector('img');
@@ -9487,13 +9510,15 @@ body[data-theme=dark] :is(.cpb-bm-btn,.cpb-bm-mini)::after{background:#ececec;co
     const bar = page && els.roomBar && els.roomBar.isConnected ? els.roomBar : null;
     const id = bar ? roomId() : '';
     const want = !!bar && bmOn('on') && bmOn('roomBtn') && BM_ID.test(id) && bmForest().tree.has(id);
-    const model = want ? bmModelBtn(bar) : null;
+    const model = want ? bmModelBtn(bar) || crackToggleBtn() : null;
     if (bar) for (const x of bar.querySelectorAll('.cpb-bm-btn')) if (x !== bmRoomEl || !model) x.remove();
     bmRoomWatch(want ? bar : null);
     if (!model) { if (bmRoomEl && bmRoomEl.isConnected) bmRoomEl.remove(); return; }
     if (!bmRoomEl) bmRoomEl = bmMakeBtn('room');
     const grp = model.parentElement;
-    if (bmRoomEl.parentNode !== grp || !(bmRoomEl.compareDocumentPosition(model) & 4)) grp.insertBefore(bmRoomEl, grp.firstChild);
+    // 모델 버튼 묶음이 있으면(예전 배치) 그 맨 앞, 없으면 우측 메뉴 토글(⋯) 바로 앞
+    const viaToggle = !model.querySelector('img[src*="model-icon"]');
+    if (bmRoomEl.parentNode !== grp || (viaToggle ? bmRoomEl.nextElementSibling !== model : !(bmRoomEl.compareDocumentPosition(model) & 4))) grp.insertBefore(bmRoomEl, viaToggle ? model : grp.firstChild);
     flag(bmRoomEl, 'data-dot', bmForest().linked.has(id));
   }
   // 크랙이 상단바를 다시 그려 버튼이 빠지면(또는 모델 버튼이 늦게 생기면) 다시 붙인다. 상단바 안만 보고 연결 여부만 확인한다
@@ -9656,7 +9681,7 @@ body[data-theme=dark] :is(.cpb-bm-btn,.cpb-bm-mini)::after{background:#ececec;co
     { cat: 'input', id: 'wrap', name: '감싸기 도구', desc: '글을 드래그하면 기호로 감싸요', master: 'wrap.enabled', items: [
       { t: 'button', label: '도구 고르기·순서', btn: '편집', icon: 'open', act: 'wrap' }] },
     { cat: 'input', id: 'dash', name: '대시보드', desc: '입력창 위 두 줄', master: 'dash.on', items: [
-      { t: 'chips', label: '모델 · 오른쪽 메뉴 바로가기', keys: stDash(['model', 'guide', 'profile', 'note', 'prose', 'output', 'summary', 'image', 'archive']) },
+      { t: 'chips', label: '모델 · 오른쪽 메뉴 바로가기', help: 'dash.model', keys: stDash(['model', 'guide', 'profile', 'note', 'prose', 'output', 'summary', 'image', 'archive']) },
       { t: 'chips', label: '테마 · 화면', keys: stDash(['theme', 'layout']) },
       { t: 'chips', label: '확장 바로가기', sub: '로그 검색과, 지금 이 브라우저에서 켜져 있는 확장만 보여요', dyn: 'ext' },
       stT('dash.row2', '정보 줄'),
@@ -9710,6 +9735,7 @@ body[data-theme=dark] :is(.cpb-bm-btn,.cpb-bm-mini)::after{background:#ececec;co
     'vault.fixCount': ['해금 수 바로잡기', '크랙 이미지 보관함의 해금 수가 실제보다 적게 나오는 문제가 있어요. 보관함을 열 때 실제로 세서 맞는 수로 고쳐 보여요.'],
     'radio.on': ['라디오존데', '모델마다 지금 정상인지, 느린지, 장애인지를 입력창 위 한 줄로 보여 줘요. 5분마다 새로 받아요.'],
     'models.hide': ['모델 숨기기', '모델 선택창과 답변 길이 창에서 안 쓰는 모델을 가려요. 가리기만 하고 크랙 설정은 바꾸지 않아요.'],
+    'dash.model': ['모델 버튼', "켜면 지금 모델 아이콘이 대시보드 맨 앞에 생기고, 전송 버튼 옆 크랙 모델 버튼은 숨겨져요(대시보드로 옮김). 누르면 모델을 바로 고를 수 있어요. 끄면 크랙 모델 버튼이 원래 자리로 돌아와요."],
     'dash.row2': ['정보 줄', '진행 턴 · 이 방 누적 크래커 · 잔여 크래커 · 직전 차감. 숫자를 누르면 이름이 펼쳐져요.'],
     'msg.marks': ['메시지 옆 표시', '글자수·생성 시각은 답변 아래 줄 오른쪽에, 크래커·모델 아이콘은 왼쪽 맨 앞에 붙어요. 모델 아이콘은 소설형에서만 보여요(채팅형은 크랙이 이미 보여 줘요). 크래커는 설치한 뒤 생성된 답변부터 기록돼요.'],
     'tools.cleaner': ['반복 표현 정리', '답변에 자주 나온 말(말버릇, 되풀이되는 묘사)을 모아 보여 줘요. 골라서 한꺼번에 지우거나 다른 말로 바꾸고, 바꾸기 전에 미리보기로 확인해요. 메시지 메뉴에서 열면 고른 대로 메시지에 바로 저장돼요.'],
