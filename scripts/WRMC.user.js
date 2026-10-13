@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽 Wish RP Manager Core
 // @namespace    local.rp.context.manager
-// @version      1.7.1
+// @version      1.7.2
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @description  Crack RP용 컨텍스트 주입·인지·자동 장기기억·자료집·전체 재구축을 하나로 관리합니다.
@@ -57,7 +57,7 @@
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '1.7.1';
+  const SCRIPT_VERSION = '1.7.2';
   const EDITION = 'core';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   // Managers without synchronous GM storage (iOS Userscripts, Greasemonkey 4) cannot keep settings; say so instead of a raw ReferenceError.
@@ -20706,6 +20706,7 @@ ${open ? `<div class="wp-err-body"><div class="wp-err-row"><span>원인</span><p
   const MON_ID = 'wish-rp-monitor', CHAT_PATH = /^\/stories\/[^/]+\/episodes\/[^/]+(?:\/|$)/;
   function foreign(el) { return !el || !!el.closest('#crack-pure-send-left-group') || !!el.closest('#' + MON_ID) || (el.id || '').startsWith('crack-'); }
   let cachedMonitorSend=null,cachedMonitorComposer=null,cachedMonitorParent=null;
+  function siteNode(el) { try { return Object.keys(el).some(k => k.startsWith('__reactFiber$') || k.startsWith('__reactProps$')); } catch (_) { return false; } }
   function findSend() {
     const input = document.querySelector('.__chat_input_textarea') || document.querySelector('div[contenteditable="true"][translate="no"]') || document.querySelector('div[contenteditable="true"]') || document.querySelector('textarea');
     if (!input) return null;
@@ -20714,7 +20715,9 @@ ${open ? `<div class="wp-err-body"><div class="wp-err-row"><span>원인</span><p
     const ok = b => { if (!b || b.hidden || b.getAttribute('aria-hidden')==='true' || /(?:중지|취소|stop|cancel)/i.test(b.getAttribute('aria-label')||b.title||'') || b.contains(input) || foreign(b)) return false; const r = b.getBoundingClientRect(); if (!r.width || !r.height) return false; if (r.top + r.height / 2 < midY - 40) return false; if (r.left + r.width / 2 < midX) return false; for (let p = b, i = 0; p && p !== document.body && i < 6; p = p.parentElement, i++) if (getComputedStyle(p).position === 'fixed') return false; return true; };
     for (let node = input, i = 0; node && i < 8; node = node.parentElement, i++) {
       const rows = node.querySelectorAll ? node.querySelectorAll('div.justify-between') : [];
-      for (let r = rows.length - 1; r >= 0; r--) { const bs = [...rows[r].children].filter(c => c.tagName === 'BUTTON' && ok(c)); if (bs.length) {cachedMonitorComposer=input;cachedMonitorSend=bs[bs.length - 1];cachedMonitorParent=cachedMonitorSend.parentNode;return cachedMonitorSend;} }
+      // The send button sits in the row itself or (Crack 2026-10-13) in one of its groups; other extensions add buttons beside it, so the
+      // site's own React-rendered button wins when that can be told.
+      for (let r = rows.length - 1; r >= 0; r--) { const bs = [...rows[r].children].flatMap(c => c.tagName === 'BUTTON' ? [c] : [...c.children].filter(x => x.tagName === 'BUTTON')).filter(ok); if (bs.length) {const own = bs.filter(siteNode), pick = own.length ? own : bs;cachedMonitorComposer=input;cachedMonitorSend=pick[pick.length - 1];cachedMonitorParent=cachedMonitorSend.parentNode;return cachedMonitorSend;} }
     }
     return null;
   }
