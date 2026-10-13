@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.6.1
-// @description  4.6.1: 최신 메시지 기준 초안 전송 확인, 완료·삭제 배지 부분 갱신, 대시보드 중복 DOM 교체 감소. 4.6.0: 9/30 크랙 개편 대응(분기 방 배지·전송 감지·초안 정리·캐릭터 채팅·유저노트 길게 눌러 선택), 긴 방·홈·방 이동 반복 작업과 메모리 누수 최적화, 라디오존데 복구(CDN 직접 조회·신규 모델 자동 추가·GM.xmlHttpRequest 호환)와 줄 간격 고정, 미니사이드바 문체 변경, 정보바 숫자 애니메이션, 전체화면·입력창 펼치기 SVG 아이콘. 허브 SVG 복원, 모델 맨 왼쪽 배치 및 전환 버튼 간격 수정. 미니사이드바 다크/라이트·소설/채팅 전환. 코드블록 자동 줄바꿈, 라이트 테마 코드·보조 글자 대비 수정, 테마 판별 통일, DOM·캐시·라디오존데 반복 처리 최적화. 모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
+// @version      4.6.2
+// @description  4.6.2: 10/13 크랙 개편 대응(모델 버튼이 전송 버튼 옆으로 이동 — 미니사이드바 모델 버튼을 켜면 원래 버튼은 숨김, 로어 버튼 자리), 라디오존데를 한 번에 받기(모델마다 따로 묻지 않음). 4.6.1: 최신 메시지 기준 초안 전송 확인, 완료·삭제 배지 부분 갱신, 대시보드 중복 DOM 교체 감소. 4.6.0: 9/30 크랙 개편 대응(분기 방 배지·전송 감지·초안 정리·캐릭터 채팅·유저노트 길게 눌러 선택), 긴 방·홈·방 이동 반복 작업과 메모리 누수 최적화, 라디오존데 복구(CDN 직접 조회·신규 모델 자동 추가·GM.xmlHttpRequest 호환)와 줄 간격 고정, 미니사이드바 문체 변경, 정보바 숫자 애니메이션, 전체화면·입력창 펼치기 SVG 아이콘. 허브 SVG 복원, 모델 맨 왼쪽 배치 및 전환 버튼 간격 수정. 미니사이드바 다크/라이트·소설/채팅 전환. 코드블록 자동 줄바꿈, 라이트 테마 코드·보조 글자 대비 수정, 테마 판별 통일, DOM·캐시·라디오존데 반복 처리 최적화. 모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       Assistant
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/crack-mobile-utility.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/crack-mobile-utility.user.js
@@ -32,7 +32,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.6.1';
+    const VERSION = '4.6.2';
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
     const CMU_RUNTIME_KEY = '__CRACK_MOBILE_UTILITY_RUNTIME__';
     const runtimeRoot = document.documentElement;
@@ -11617,11 +11617,20 @@
         trigger.click();
         return true;
     }
-    function openNativeModelMenu() {
+    // 10/13 크랙 개편: 모델 버튼이 입력창 아래 버튼 줄 오른쪽 묶음(전송 버튼 옆, aria-haspopup="dialog")으로 옮겨졌다.
+    // 모델 아이콘이 든 dialog 버튼만 고른다('이어서 생성' 버튼에도 모델 아이콘이 있고, 다른 확장이 같은 속성 버튼을 끼워 넣는다)
+    function findNativeModelButton() {
+        const own = '#chud-sidebar, #chud-infobar, #cpb-dash, #cpb-mpick, [id^="cmu-"]';
+        const ok = b => b instanceof HTMLButtonElement && !b.closest(own) && !!b.querySelector('img[src*="/model-icon/"], img[srcset*="/model-icon/"]');
+        const row = Array.from(document.querySelectorAll('main .flex.items-center.justify-between > .flex.min-w-0 > button[aria-haspopup="dialog"]')).find(ok);
+        if (row) return row;
         const topBar = findLoreRoomTopBar();
-        const btn = topBar?.querySelector('button[aria-haspopup="menu"]') ||
-            document.querySelector('img[src*="model-icon"]')?.closest('button') ||
-            Array.from(document.querySelectorAll('button[aria-haspopup="menu"]')).find(visibleClickable);
+        const old = topBar?.querySelector('button[aria-haspopup="menu"]');
+        if (old) return old;
+        return Array.from(document.querySelectorAll('main button[aria-haspopup="dialog"], main button[aria-haspopup="menu"]')).find(ok) || null;
+    }
+    function openNativeModelMenu() {
+        const btn = findNativeModelButton();
         if (btn) {
             const ok = fireClickSequence(btn);
             scheduleNmfScan([120, 300, 700, 1100]);
@@ -11775,7 +11784,22 @@
         refreshSideAvailability();
         applySideVisible();
     }
+    // 미니사이드바에 모델 버튼이 보이면 크랙 모델 버튼(전송 버튼 옆)은 감춘다 = 미니사이드바로 옮긴 것. 끄면 원래 자리에 그대로
+    function cmuSyncModelMoved() {
+        const mb = DASH_SIDE.btns && DASH_SIDE.btns.modelButton;
+        const moved = !!(DASH_SIDE.el && DASH_SIDE.el.isConnected && mb && mb.style.display !== 'none');
+        if (!document.getElementById('cmu-model-move-css')) {
+            const st = document.createElement('style');
+            st.id = 'cmu-model-move-css';
+            st.textContent = 'html[data-cmu-model-moved] main .flex.items-center.justify-between > .flex.min-w-0 > button[aria-haspopup="dialog"]:has(img[src*="/model-icon/"])'
+                + '{width:0!important;min-width:0!important;padding:0!important;margin:0!important;border:0!important;overflow:hidden!important;opacity:0!important;pointer-events:none!important}';
+            (document.head || document.documentElement).appendChild(st);
+        }
+        if (moved) document.documentElement.setAttribute('data-cmu-model-moved', '');
+        else document.documentElement.removeAttribute('data-cmu-model-moved');
+    }
     function removeDashboardSidebar() {
+        document.documentElement.removeAttribute('data-cmu-model-moved');
         document.getElementById(ID.dashboardSidebar)?.remove();
         document.getElementById('chud-side-menu')?.remove();
         DASH_SIDE.el = DASH_SIDE.content = DASH_SIDE.menu = DASH_SIDE.settingsBtn = null;
@@ -11792,6 +11816,7 @@
             const isUserVisible = visible[key] !== false;
             btn.style.display = (isAvailable && isUserVisible) ? 'inline-flex' : 'none';
         });
+        cmuSyncModelMoved();
         DASH_SIDE.menu?.querySelectorAll('.chud-menu-row[data-part], .chud-menu-row').forEach(row => {
             const input = row.querySelector?.('input[data-part]');
             const key = input?.dataset?.part || row.dataset?.part;
@@ -13414,10 +13439,36 @@
         igxMetricInflight.set(slug, task);
         return task;
     }
+    // 묶음 요청: 30개씩 한 번에. 받은 값은 모델별 캐시에 넣어 아래 모델별 경로가 다시 묻지 않게 한다
+    async function fetchIgxBulk(slugs, force) {
+        const now = Date.now();
+        const want = slugs.filter(slug => {
+            const cached = igxMetricCache.get(slug);
+            return force || !cached || now - cached.at >= 15000;
+        });
+        for (let i = 0; i < want.length; i += 30) {
+            const part = want.slice(i, i + 30);
+            try {
+                const data = await igxRequestJson('simple/bulk?models=' + part.map(encodeURIComponent).join(','));
+                if (!data || typeof data !== 'object') continue;
+                for (const slug of part) {
+                    const record = metricRecordFromObject(data[slug], slug);
+                    if (!record) continue;
+                    igxMetricCache.set(slug, { at: Date.now(), record });
+                    igxMetricFailures.delete(slug);
+                }
+            }
+            catch (error) {
+                if (error.name === 'AbortError') throw error;
+            }
+        }
+    }
     async function fetchIgxSnapshot({ force = false, slugs = [], onRecord } = {}) {
         const requested = [...new Set(slugs)];
+        await fetchIgxBulk(requested, force);
         const results = await Promise.allSettled(requested.map(async slug => {
-            const record = await fetchIgxOfficialModel(slug, { force });
+            const fresh = igxMetricCache.get(slug);
+            const record = fresh && Date.now() - fresh.at < 15000 ? fresh.record : await fetchIgxOfficialModel(slug, { force });
             if (igxCanRequest() && onRecord) onRecord(slug, record);
             return record;
         }));
@@ -16639,7 +16690,7 @@
         if (!loreButton?.parentElement)
             return 'found-unplaced';
         const next = loreButton.nextElementSibling;
-        if (next?.getAttribute?.('aria-haspopup') === 'menu')
+        if (next?.getAttribute?.('aria-haspopup') === 'menu' || next?.querySelector?.('svg path[d^="M11 11h2v2h-2"]'))
             return 'before-model';
         return loreButton.dataset.cmuLorePlaced || 'found-unplaced';
     }
@@ -16653,7 +16704,8 @@
         const topBar = findLoreRoomTopBar();
         if (!topBar)
             return;
-        const modelButton = topBar.querySelector('button[aria-haspopup="menu"]') || topBar.querySelector('img[src*="model-icon"]')?.closest('button');
+        const modelButton = topBar.querySelector('button[aria-haspopup="menu"]') || topBar.querySelector('img[src*="model-icon"]')?.closest('button') ||
+            topBar.querySelector('svg path[d^="M11 11h2v2h-2"]')?.closest('button');
         if (!modelButton?.parentElement)
             return;
         if (modelButton.previousElementSibling !== loreButton)
