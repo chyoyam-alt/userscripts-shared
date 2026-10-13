@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         📱 Crack Mobile Utility (모바일 유틸 합본)
 // @namespace    crack-mobile-utility
-// @version      4.6.2
-// @description  4.6.2: 10/13 크랙 개편 대응(모델 버튼이 전송 버튼 옆으로 이동 — 미니사이드바 모델 버튼을 켜면 원래 버튼은 숨김, 로어 버튼 자리), 라디오존데를 한 번에 받기(모델마다 따로 묻지 않음). 4.6.1: 최신 메시지 기준 초안 전송 확인, 완료·삭제 배지 부분 갱신, 대시보드 중복 DOM 교체 감소. 4.6.0: 9/30 크랙 개편 대응(분기 방 배지·전송 감지·초안 정리·캐릭터 채팅·유저노트 길게 눌러 선택), 긴 방·홈·방 이동 반복 작업과 메모리 누수 최적화, 라디오존데 복구(CDN 직접 조회·신규 모델 자동 추가·GM.xmlHttpRequest 호환)와 줄 간격 고정, 미니사이드바 문체 변경, 정보바 숫자 애니메이션, 전체화면·입력창 펼치기 SVG 아이콘. 허브 SVG 복원, 모델 맨 왼쪽 배치 및 전환 버튼 간격 수정. 미니사이드바 다크/라이트·소설/채팅 전환. 코드블록 자동 줄바꿈, 라이트 테마 코드·보조 글자 대비 수정, 테마 판별 통일, DOM·캐시·라디오존데 반복 처리 최적화. 모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
+// @version      4.6.3
+// @description  4.6.3: 미니사이드바 모델 버튼에 지금 모델 이미지 표시. 4.6.2: 10/13 크랙 개편 대응(모델 버튼이 전송 버튼 옆으로 이동 — 미니사이드바 모델 버튼을 켜면 원래 버튼은 숨김, 로어 버튼 자리), 라디오존데를 한 번에 받기(모델마다 따로 묻지 않음). 4.6.1: 최신 메시지 기준 초안 전송 확인, 완료·삭제 배지 부분 갱신, 대시보드 중복 DOM 교체 감소. 4.6.0: 9/30 크랙 개편 대응(분기 방 배지·전송 감지·초안 정리·캐릭터 채팅·유저노트 길게 눌러 선택), 긴 방·홈·방 이동 반복 작업과 메모리 누수 최적화, 라디오존데 복구(CDN 직접 조회·신규 모델 자동 추가·GM.xmlHttpRequest 호환)와 줄 간격 고정, 미니사이드바 문체 변경, 정보바 숫자 애니메이션, 전체화면·입력창 펼치기 SVG 아이콘. 허브 SVG 복원, 모델 맨 왼쪽 배치 및 전환 버튼 간격 수정. 미니사이드바 다크/라이트·소설/채팅 전환. 코드블록 자동 줄바꿈, 라이트 테마 코드·보조 글자 대비 수정, 테마 판별 통일, DOM·캐시·라디오존데 반복 처리 최적화. 모바일용 합본: 입력창 설정·초안 자동 저장·입력 글자수 카운터·우측 상단 펼치기 버튼, 상단바 접기, 빈 전송 방지, 엔딩 버튼 숨김, 와이드뷰, 글씨/이미지 크기, 썸네일 움짤 정지, 라디오존데 인라인, 대시보드 원본식 정보바/미니사이드바(게임 HUD·모바일 삽화·Wish RP Manager 바로가기 포함), 글자수·시간 배지·답변별 모델·실측 크래커, 메시지 길게 누르기 메뉴, 로그 캡처, 외부 테마 자동 공존
 // @author       Assistant
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/crack-mobile-utility.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/crack-mobile-utility.user.js
@@ -32,7 +32,7 @@
 
 (() => {
     'use strict';
-    const VERSION = '4.6.2';
+    const VERSION = '4.6.3';
     const CMU_RUNTIME_ATTR = 'data-cmu-runtime-version';
     const CMU_RUNTIME_KEY = '__CRACK_MOBILE_UTILITY_RUNTIME__';
     const runtimeRoot = document.documentElement;
@@ -11792,14 +11792,52 @@
             const st = document.createElement('style');
             st.id = 'cmu-model-move-css';
             st.textContent = 'html[data-cmu-model-moved] main .flex.items-center.justify-between > .flex.min-w-0 > button[aria-haspopup="dialog"]:has(img[src*="/model-icon/"])'
-                + '{width:0!important;min-width:0!important;padding:0!important;margin:0!important;border:0!important;overflow:hidden!important;opacity:0!important;pointer-events:none!important}';
+                + '{width:0!important;min-width:0!important;padding:0!important;margin:0!important;border:0!important;overflow:hidden!important;opacity:0!important;pointer-events:none!important}'
+                + '#chud-model-btn .chud-model-img{width:18px;height:18px;border-radius:5px;object-fit:cover}';
             (document.head || document.documentElement).appendChild(st);
         }
         if (moved) document.documentElement.setAttribute('data-cmu-model-moved', '');
         else document.documentElement.removeAttribute('data-cmu-model-moved');
+        cmuSyncSideModelIcon();
+    }
+    // 미니사이드바 모델 버튼 = 지금 모델의 크랙 이미지(크랙 모델 버튼의 그림을 그대로). 못 찾으면 원래 SVG.
+    // 모델을 바꾸면 크랙 버튼의 그림이 바뀌니 그 버튼만 지켜본다(그림·글자 변화만)
+    var cmuSideModelNative = null, cmuSideModelMo = null; // var: 시작 때 removeDashboardSidebar가 먼저 불려도 안전하게
+    function cmuSyncSideModelIcon() {
+        const mb = DASH_SIDE.btns && DASH_SIDE.btns.modelButton;
+        if (!mb) return;
+        const native = findNativeModelButton();
+        const img = native && native.querySelector('img[src*="/model-icon/"], img[srcset*="/model-icon/"]');
+        const src = img ? (img.getAttribute('src') || '') : '';
+        const name = native ? String(native.textContent || '').replace(/\s+/g, ' ').trim() : '';
+        const sig = src + '|' + name;
+        if (mb.dataset.modelSig !== sig) {
+            mb.dataset.modelSig = sig;
+            if (src) {
+                const im = document.createElement('img');
+                im.className = 'chud-btn-icon chud-model-img';
+                im.alt = '';
+                im.src = src;
+                mb.replaceChildren(im);
+            } else mb.innerHTML = SIDE_ICON.model;
+            const title = name ? name + ' · 모델 변경' : '모델 변경';
+            mb.title = title;
+            mb.setAttribute('aria-label', title);
+        }
+        if (cmuSideModelNative !== native) {
+            cmuSideModelMo?.disconnect();
+            cmuSideModelMo = null;
+            cmuSideModelNative = native;
+            if (native) {
+                cmuSideModelMo = new MutationObserver(() => cmuSyncSideModelIcon());
+                cmuSideModelMo.observe(native, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['src', 'srcset'] });
+            }
+        }
     }
     function removeDashboardSidebar() {
         document.documentElement.removeAttribute('data-cmu-model-moved');
+        cmuSideModelMo?.disconnect();
+        cmuSideModelMo = cmuSideModelNative = null;
         document.getElementById(ID.dashboardSidebar)?.remove();
         document.getElementById('chud-side-menu')?.remove();
         DASH_SIDE.el = DASH_SIDE.content = DASH_SIDE.menu = DASH_SIDE.settingsBtn = null;
