@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         ✂️ Crack Pinset (핀셋 수정)
 // @namespace    crack-pinset
-// @version      0.1.5
-// @description메시지에서 글자를 드래그하면 그 부분만 바로 고칩니다. 크랙 수정창을 열 필요가 없고 새로고침도 하지 않습니다. 고친 자리에는 주황색 흔적이 남고, 원래 글 보기·되돌리기를 할 수 있습니다.
+// @version      0.1.6
+// @description  메시지에서 글자를 드래그하면 그 부분만 바로 고칩니다. 크랙 수정창을 열 필요가 없고 새로고침도 하지 않습니다. 고친 자리에는 주황색 흔적이 남고, 원래 글 보기·되돌리기를 할 수 있습니다.
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/Pinset.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/Pinset.user.js
 // @match        https://crack.wrtn.ai/*
@@ -19,11 +19,15 @@
 (() => {
   'use strict';
 
+  // 본체. env = 저장소(get/set/del/listen). 페이지 안에서 돌 때는 env.page = true
+  const MAIN = function (env) {
+  'use strict';
+
   const pageWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   if (pageWindow.__crackPinsetRunning) return;
   pageWindow.__crackPinsetRunning = true;
 
-  const VERSION = '0.1.5';
+  const VERSION = '0.1.6';
   const LOG = '[핀셋]';
   const API_BASE = 'https://crack-api.wrtn.ai/crack-gen';
   const SETTINGS_KEY = 'cpn:settings:v1';
@@ -44,7 +48,7 @@
 
   function readValue(key, fallback) {
     try {
-      const value = GM_getValue(key, fallback);
+      const value = env.get(key, fallback);
       return value && typeof value === 'object' ? value : fallback;
     } catch (error) {
       return fallback;
@@ -52,18 +56,18 @@
   }
 
   function writeValue(key, value) {
-    try { GM_setValue(key, value); } catch (error) { console.warn(LOG, 'save failed', error); }
+    try { env.set(key, value); } catch (error) { console.warn(LOG, 'save failed', error); }
   }
 
   function deleteValue(key) {
-    try { GM_deleteValue(key); } catch (error) { writeValue(key, {}); }
+    try { env.del(key); } catch (error) { writeValue(key, {}); }
   }
 
   const settings = { paint: true, ...readValue(SETTINGS_KEY, {}) };
   // 다른 탭에서 '색칠'을 바꾸면 이 탭도 따라갑니다.
-  if (typeof GM_addValueChangeListener === 'function') {
+  if (typeof env.listen === 'function') {
     try {
-      GM_addValueChangeListener(SETTINGS_KEY, (name, before, after, remote) => {
+      env.listen(SETTINGS_KEY, (name, before, after, remote) => {
         if (!remote || !after || typeof after !== 'object') return;
         settings.paint = after.paint !== false;
         schedulePaint(0);
@@ -91,10 +95,10 @@
     if (!books.has(chatId)) {
       books.set(chatId, cleanBook(readValue(chatKey(chatId), {})));
       // 다른 탭이 같은 방 기록을 바꾸면 다시 읽습니다.
-      if (!watchedKeys.has(chatId) && typeof GM_addValueChangeListener === 'function') {
+      if (!watchedKeys.has(chatId) && typeof env.listen === 'function') {
         watchedKeys.add(chatId);
         try {
-          GM_addValueChangeListener(chatKey(chatId), (name, before, after, remote) => {
+          env.listen(chatKey(chatId), (name, before, after, remote) => {
             if (!remote) return;
             books.delete(chatId);
             schedulePaint();
@@ -2471,6 +2475,7 @@ textarea:focus{background:var(--surface-2);box-shadow:inset 0 0 0 1.5px var(--pi
       const info = md ? messageOf(groupOf(md), bridge) : null;
       return {
         version: VERSION,
+        world: env.page ? 'page' : 'direct',
         route: h,
         fiber: bridge.fiber,
         actions: bridge.actions ? Object.keys(bridge.actions).sort() : null,
@@ -2504,5 +2509,66 @@ textarea:focus{background:var(--surface-2);box-shadow:inset 0 0 0 1.5px var(--pi
       return { msgId: target.msgId, via: target.via, ...rest, sourceSlice: mapped.ok ? target.content.slice(mapped.a, mapped.b) : null, eraseWouldGive: erase ? erase.next.slice(Math.max(0, erase.a - 30), erase.a + erase.kept.length + 30) : '(원문 창으로 넘어감)' };
     },
   };
-  console.info(LOG, `v${VERSION} 준비됨`);
+  console.info(LOG, `v${VERSION} 준비됨` + (env.page ? ' (페이지 안에서)' : ''));
+  };
+
+  // 페이지 쪽 저장소: 시작할 때 받은 값을 들고 있고, 쓰기·지우기·지켜보기는 이벤트로 Tampermonkey 쪽에 넘긴다
+  const PAGE_ENV = function (preload) {
+    const cache = preload || {};
+    const fns = new Map();
+    const send = m => document.dispatchEvent(new CustomEvent('cpn:gm', { detail: JSON.stringify(m) }));
+    const copy = v => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
+    document.addEventListener('cpn:gm-change', e => {
+      let m;
+      try { m = JSON.parse(e.detail); } catch (error) { return; }
+      if (m.after === undefined || m.after === null) delete cache[m.k]; else cache[m.k] = m.after;
+      (fns.get(m.k) || []).forEach(fn => { try { fn(m.k, m.before, m.after, m.remote); } catch (error) { /* 무시 */ } });
+    });
+    return {
+      page: true,
+      get: (k, d) => (Object.prototype.hasOwnProperty.call(cache, k) ? copy(cache[k]) : d),
+      set: (k, v) => { cache[k] = copy(v); send({ op: 'set', k, v }); },
+      del: k => { delete cache[k]; send({ op: 'del', k }); },
+      listen: (k, fn) => { if (!fns.has(k)) fns.set(k, []); fns.get(k).push(fn); send({ op: 'listen', k }); },
+    };
+  };
+
+  const gm = {
+    get: (k, d) => GM_getValue(k, d),
+    set: (k, v) => GM_setValue(k, v),
+    del: k => GM_deleteValue(k),
+    listen: typeof GM_addValueChangeListener === 'function' ? (k, fn) => GM_addValueChangeListener(k, fn) : null,
+  };
+  // 크랙 화면(React)의 내부 값이 여기서 보이면 예전처럼 바로 돈다.
+  // 안 보이면 Tampermonkey가 따로 떼어 둔 공간에서 도는 것이라(크롬 새 방식), 본체를 페이지 안으로 넣어 돌린다.
+  // 그래야 크랙이 쓰는 updateMessage를 불러 새로고침 없이 고칠 수 있다
+  const root = document.getElementById('__next');
+  const reactVisible = !root || Object.keys(root).some(k => k.startsWith('__react'));
+  if (reactVisible) { MAIN(gm); return; }
+  if (document.documentElement.dataset.cpnPage === '1') return; // 이미 넣었다
+  document.documentElement.dataset.cpnPage = '1';
+  const preload = {};
+  const take = k => { try { const v = GM_getValue(k, undefined); if (v !== undefined) preload[k] = v; } catch (error) { /* 무시 */ } };
+  take('cpn:settings:v1');
+  take('cpn:index:v1');
+  const index = preload['cpn:index:v1'];
+  if (index && typeof index === 'object') Object.keys(index).forEach(id => take('cpn:chat:' + id));
+  const listened = new Set();
+  document.addEventListener('cpn:gm', e => {
+    let m;
+    try { m = JSON.parse(e.detail); } catch (error) { return; }
+    if (!m || typeof m.k !== 'string' || !m.k.startsWith('cpn:')) return; // 핀셋 저장 키만
+    try {
+      if (m.op === 'set') GM_setValue(m.k, m.v);
+      else if (m.op === 'del') GM_deleteValue(m.k);
+      else if (m.op === 'listen' && gm.listen && !listened.has(m.k)) {
+        listened.add(m.k);
+        gm.listen(m.k, (name, before, after, remote) => document.dispatchEvent(new CustomEvent('cpn:gm-change', { detail: JSON.stringify({ k: name, before, after, remote }) })));
+      }
+    } catch (error) { /* 무시 */ }
+  });
+  const tag = document.createElement('script');
+  tag.textContent = '(' + MAIN.toString() + ')((' + PAGE_ENV.toString() + ')(' + JSON.stringify(preload).replace(/</g, '\\u003c') + '));';
+  (document.head || document.documentElement).appendChild(tag);
+  tag.remove();
 })();
