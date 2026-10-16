@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽 Wish RP Manager Core
 // @namespace    local.rp.context.manager
-// @version      2.0.1.3
+// @version      2.0.1.4
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @description  Crack RP용 컨텍스트 주입·인지·자동 장기기억·자료집·전체 재구축을 하나로 관리합니다.
@@ -58,7 +58,7 @@
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '2.0.1.3';
+  const SCRIPT_VERSION = '2.0.1.4';
   const EDITION = 'core';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   // Managers without synchronous GM storage (iOS Userscripts, Greasemonkey 4) cannot keep settings; say so instead of a raw ReferenceError.
@@ -12652,8 +12652,9 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
       try {
         payload = await apiRequest('GET', `${useCrackApiFallback ? 'https://crack-api.wrtn.ai/crack-gen/v3/chats/' : 'https://contents-api.wrtn.ai/character-chat/v3/chats/'}${suffix}`);
       } catch (e) {
-        // contents-api outage (5xx, e.g. 2026-10-16 503): read the same list from crack-api, as for 404/405.
-        if (!useCrackApiFallback && !messages.length && /API 오류 (?:404|405|5\d\d)\b/.test(String(e.message || e))) {
+        // contents-api outage (5xx, e.g. 2026-10-16 503): read the same list from crack-api, as for 404/405. Also when it gave no answer
+        // at all: a manager whose requests follow CORS sees the down server's 503 page (no CORS header) as a network error.
+        if (!useCrackApiFallback && !messages.length && (/API 오류 (?:404|405|5\d\d)\b/.test(String(e.message || e)) || ['CRACK_NETWORK','CRACK_TIMEOUT'].includes(e?.code))) {
           useCrackApiFallback = true;
           payload = await apiRequest('GET', `https://crack-api.wrtn.ai/crack-gen/v3/chats/${suffix}`);
         } else throw e;
@@ -18297,8 +18298,9 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       let result;
       try{result=await crackRequest('GET',(useCrackApiFallback?'https://crack-api.wrtn.ai/crack-gen/v3/chats/':'https://contents-api.wrtn.ai/character-chat/v3/chats/')+suffix);}
       catch(error){
-        // contents-api outage (5xx): read the same list from crack-api, as for 404/405.
-        if(!useCrackApiFallback && !messages.length && ([404,405].includes(error.httpStatus)||error.httpStatus>=500&&error.httpStatus<600)){
+        // contents-api outage: read the same list from crack-api, as for 404/405 — on 5xx, and when the page's fetch got no answer (the
+        // down server's 503 page has no CORS header, so the browser throws TypeError; AbortError = this reader's 15 s limit).
+        if(!useCrackApiFallback && !messages.length && ([404,405].includes(error.httpStatus)||error.httpStatus>=500&&error.httpStatus<600||!error.httpStatus&&['TypeError','AbortError'].includes(error?.name))){
           useCrackApiFallback=true;result=await crackRequest('GET','https://crack-api.wrtn.ai/crack-gen/v3/chats/'+suffix);
         }else throw error;
       }
