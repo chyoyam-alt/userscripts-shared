@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🪽 Wish RP Manager Core
 // @namespace    local.rp.context.manager
-// @version      2.0.1
+// @version      2.0.1.3
 // @downloadURL  https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @updateURL    https://raw.githubusercontent.com/chyoyam-alt/userscripts-shared/main/scripts/WRMC.user.js
 // @description  Crack RP용 컨텍스트 주입·인지·자동 장기기억·자료집·전체 재구축을 하나로 관리합니다.
@@ -58,7 +58,7 @@
   // Storage IDs, ELR contract, strict AI commit validation and rollback formats are preserved.
  let WUI=null;
 
-  const SCRIPT_VERSION = '2.0.1';
+  const SCRIPT_VERSION = '2.0.1.3';
   const EDITION = 'core';
   const RUNTIME_HOST = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   // Managers without synchronous GM storage (iOS Userscripts, Greasemonkey 4) cannot keep settings; say so instead of a raw ReferenceError.
@@ -7067,7 +7067,8 @@ const p=plan(list,{...u,settings:settings(room)},force==='retry'||retrying?(u.fa
         if(sourceRecheck&&(isWishHistoryStale(u.lastError)||isUnifiedSourceBlock(u.lastError))){
           u.lastError='';u.failedKind='';u.retry=null;u.status='대화 재확인 완료';await saveRoom(room);
         }
-        if(!p.memory&&!p.observe){if(force)notify('새로 정리할 확정 대화가 없습니다. 최신 1턴은 다음 응답 뒤 확정됩니다.','info');return false;}
+        // A retry whose read passed with nothing left to 정리: the failure has nothing to retry, so clear it as the re-check above does.
+        if(!p.memory&&!p.observe){if((force==='retry'||retrying)&&u.lastError){u.lastError='';u.failedKind='';u.retry=null;u.status='대화 재확인 완료';await saveRoom(room);}if(force)notify('새로 정리할 확정 대화가 없습니다. 최신 1턴은 다음 응답 뒤 확정됩니다.','info');return false;}
         // 외부 AI 복붙 방식은 자동 예약으로 복붙 창을 띄우지 않습니다. 차례만 알리고, 사용자가 누른 실행과 이어지는 구간만 진행합니다.
         if(!scope&&isManualAiProvider()){manualDueNotice(room,p);return false;}
         // 기억 묶음이 자료를 갱신하기 전에 방별 canonical 자동팩을 준비한다.
@@ -12651,7 +12652,8 @@ async function chooseAllFitItems(room, items, original, query='', options={}) {
       try {
         payload = await apiRequest('GET', `${useCrackApiFallback ? 'https://crack-api.wrtn.ai/crack-gen/v3/chats/' : 'https://contents-api.wrtn.ai/character-chat/v3/chats/'}${suffix}`);
       } catch (e) {
-        if (!useCrackApiFallback && !messages.length && /API 오류 (404|405)/.test(String(e.message || e))) {
+        // contents-api outage (5xx, e.g. 2026-10-16 503): read the same list from crack-api, as for 404/405.
+        if (!useCrackApiFallback && !messages.length && /API 오류 (?:404|405|5\d\d)\b/.test(String(e.message || e))) {
           useCrackApiFallback = true;
           payload = await apiRequest('GET', `https://crack-api.wrtn.ai/crack-gen/v3/chats/${suffix}`);
         } else throw e;
@@ -18295,7 +18297,8 @@ async function convertTextToLoreEntries(sourceText) {return await WLOG.run("텍�
       let result;
       try{result=await crackRequest('GET',(useCrackApiFallback?'https://crack-api.wrtn.ai/crack-gen/v3/chats/':'https://contents-api.wrtn.ai/character-chat/v3/chats/')+suffix);}
       catch(error){
-        if(!useCrackApiFallback && !messages.length && [404,405].includes(error.httpStatus)){
+        // contents-api outage (5xx): read the same list from crack-api, as for 404/405.
+        if(!useCrackApiFallback && !messages.length && ([404,405].includes(error.httpStatus)||error.httpStatus>=500&&error.httpStatus<600)){
           useCrackApiFallback=true;result=await crackRequest('GET','https://crack-api.wrtn.ai/crack-gen/v3/chats/'+suffix);
         }else throw error;
       }
