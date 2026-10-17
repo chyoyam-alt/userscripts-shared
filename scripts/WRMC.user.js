@@ -15,6 +15,7 @@
 // @connect      generativelanguage.googleapis.com
 // @connect      api.deepseek.com
 // @connect      api.anthropic.com
+// @connect      api.openai.com
 // @connect      *
 // @connect      aiplatform.googleapis.com
 // @connect      *.aiplatform.googleapis.com
@@ -215,6 +216,12 @@
     { id:'claude-sonnet-5-5', label:'Sonnet 5.5' },
     { id:'claude-opus-5-5', label:'Opus 5.5' },
   ]);
+  // OpenAI Responses API: explicit allowlist; separate from the existing provider settings.
+  const AI_OPENAI_MODELS = Object.freeze([
+    { id:'gpt-6.1-sol', label:'GPT-6.1 Sol' },
+    { id:'gpt-6-luna', label:'GPT-6 Luna' },
+    { id:'gpt-6-astra', label:'GPT-6 Astra' },
+  ]);
   // G-53. Claude's output box (max_tokens) holds its thinking too. Official maximum of Sonnet 5.5 and Opus 5.5 on the synchronous
   // Messages API: 128K tokens (models overview, effort guide, 2026-10-16).
   const AI_ANTHROPIC_MAX_OUTPUT_TOKENS = 128000;
@@ -244,6 +251,9 @@
     deepSeekThinking: true,
     anthropicApiKey: '',
     anthropicModel: 'claude-sonnet-5-5',
+    openAiApiKey: '',
+    openAiModel: 'gpt-6.1-sol',
+    openAiReasoningEffort: 'medium',
     maxMessages: 80,
     temperature: 0.2,
     maxOutputTokens: 32768,
@@ -1412,7 +1422,7 @@
   }
 
   // ---------------------------------------------------------------------------
-  // 공용 AI Service · Gemini 3.x / Firebase AI Logic / DeepSeek / Claude
+  // 공용 AI Service · Gemini 3.x / Firebase AI Logic / DeepSeek / Claude / OpenAI
   // 인지 분석과 장기기억 갱신이 동일한 provider 설정을 사용합니다.
   // ---------------------------------------------------------------------------
 
@@ -1427,6 +1437,7 @@
     if (raw === 'vertex' || raw === 'vertex-ai' || raw === 'vertex-sa') return 'vertex';
     if (raw === 'deepseek' || raw === 'deepseek-api') return 'deepseek';
     if (raw === 'anthropic' || raw === 'claude') return 'anthropic';
+    if (raw === 'openai') return 'openai';
     if (raw === 'manual' || raw === 'external' || raw === 'copy-paste') return 'manual';
     return AI_DEFAULTS.provider;
   }
@@ -1482,6 +1493,16 @@
     return {enabled:value.enabled!==false,memoryEnabled:value.memoryEnabled!==false,observeEnabled:value.observeEnabled!==false,memoryEvery,observeEvery};
   }
 
+  function normalizeOpenAiModel(value) {
+    const model = String(value || '').trim();
+    return AI_OPENAI_MODELS.some(item => item.id === model) ? model : AI_DEFAULTS.openAiModel;
+  }
+  function normalizeOpenAiReasoningEffort(value, model) {
+    // xhigh/max are not offered; a stored one (earlier 2.0.2 candidate) reads as high.
+    const raw = String(value || '').trim().toLowerCase(), effort = raw === 'xhigh' || raw === 'max' ? 'high' : raw;
+    return ['low','medium','high'].includes(effort) || (effort === 'none' && normalizeOpenAiModel(model) === 'gpt-6-luna') ? effort : AI_DEFAULTS.openAiReasoningEffort;
+  }
+
   function normalizeAiSettings(value) {
     const src = value && typeof value === 'object' ? value : {};
     const provider = normalizeAiProvider(src.provider);
@@ -1514,6 +1535,9 @@
       deepSeekThinking: src.deepSeekThinking !== false,
       anthropicApiKey: normalizeAiKey(src.anthropicApiKey),
       anthropicModel,
+      openAiApiKey: normalizeAiKey(src.openAiApiKey),
+      openAiModel: normalizeOpenAiModel(src.openAiModel),
+      openAiReasoningEffort: normalizeOpenAiReasoningEffort(src.openAiReasoningEffort, src.openAiModel),
       maxMessages,
       temperature,
       maxOutputTokens,
@@ -1553,13 +1577,14 @@
   }
 
   function getAiProviderLabel(provider) {
-    return ({'ai-studio':'Google AI Studio','firebase':'Firebase AI Logic','vertex':'Vertex AI (JSON 키)','deepseek':'DeepSeek API','anthropic':'Claude API (Anthropic)','manual':'외부 AI 복붙'})[normalizeAiProvider(provider)] || 'AI';
+    return ({'ai-studio':'Google AI Studio','firebase':'Firebase AI Logic','vertex':'Vertex AI (JSON 키)','deepseek':'DeepSeek API','anthropic':'Claude API (Anthropic)','openai':'OpenAI API','manual':'외부 AI 복붙'})[normalizeAiProvider(provider)] || 'AI';
   }
 
   function getAiSelectedModel(settings) {
     const cfg = normalizeAiSettings(settings);
     if (cfg.provider === 'manual') return '외부 AI 복붙';
     if (cfg.provider === 'anthropic') return cfg.anthropicModel;
+    if (cfg.provider === 'openai') return cfg.openAiModel;
     if (cfg.provider === 'deepseek') {
       if (!isDirectDeepSeekBaseUrl(cfg.deepSeekBaseUrl) && cfg.deepSeekCustomModel) return cfg.deepSeekCustomModel;
       return cfg.deepSeekModel;
@@ -1572,6 +1597,7 @@
     if (cfg.provider === 'manual') return true;
     if (cfg.provider === 'deepseek') return !!cfg.deepSeekApiKey;
     if (cfg.provider === 'anthropic') return !!cfg.anthropicApiKey;
+    if (cfg.provider === 'openai') return !!cfg.openAiApiKey;
     if (cfg.provider === 'firebase') return !!cfg.firebaseConfig;
     if (cfg.provider === 'vertex') return !!cfg.vertexServiceAccount;
     return !!cfg.apiKey;
@@ -1625,7 +1651,7 @@ const WLOG=(()=>{
     const fill=(t,v)=>v?t.replace('N',()=>String(v)):t.replace(/\(\S* ?N\S*\)/,''),fb=r.provider==='firebase',sec=r.timeoutMs?Math.ceil(r.timeoutMs/1000):0;
     const key='설정의 해당 서비스 인증 정보와 API 키를 확인하고 연결 테스트를 해 주세요.',wait='잠시 기다린 뒤 다시 시도해 주세요.';
     if(c==='AI_MAX_TOKENS')return {category:'출력 한도 초과',cause:u3?'AI 답이 출력 한도에 닿아 중간에 잘렸습니다. 현재상태가 크거나 밀린 대화가 많을수록 답이 길어집니다.':'AI 답이 출력 한도에 닿아 중간에 잘렸습니다.',...(u3?{next:'[다시 시도]는 같은 크기로 보내 같은 실패와 요금이 날 수 있습니다. 설정 → API 사용량 절약에서 [현재상태 변경분 갱신]을 켜고 저장하거나(적용 전 백업은 이때 자동으로 만들어집니다), 보조 AI 연결의 기억 추출·재구축 추론 강도를 낮음으로 바꾼 뒤 [다시 시도]를 눌러 주세요.'}:{}),toast:'AI 답이 출력 한도에서 잘림 · 절약 모드를 켜 주세요'};
-    if(c==='AI_INCOMPLETE')return {category:'AI 응답 미완료',cause:fill('Gemini 서버가 이 요청의 처리를 끝내지 못했습니다(상태 N).',r.finishReason),next:u3?ASK_API:wait,toast:'AI 서버가 처리를 끝내지 못함 · 잠시 뒤 다시 시도'};
+    if(c==='AI_INCOMPLETE')return {category:'AI 응답 미완료',cause:fill((r.provider==='openai'?'OpenAI':'Gemini')+' 서버가 이 요청의 처리를 끝내지 못했습니다(상태 N).',r.finishReason),next:u3?ASK_API:wait,toast:'AI 서버가 처리를 끝내지 못함 · 잠시 뒤 다시 시도'};
     if(c==='AI_SAFETY')return {category:'안전 필터',cause:fill('AI 서비스의 안전 필터가 이 구간의 답을 막았습니다(사유 N). 설정이나 기억이 잘못된 것은 아닙니다.',r.finishReason),next:u3?'[다시 시도]를 한 번 눌러 주세요. 계속 막히면 AI 연결에서 다른 모델을 골라 주세요.':'계속 막히면 AI 연결에서 다른 모델을 골라 주세요.',toast:'AI 안전 필터가 답을 막음 · 다른 모델을 골라 주세요'};
     if(c==='AI_EMPTY')return {category:'빈 응답',cause:'AI가 결과 본문 없이 답을 끝냈습니다.',...(u3?{next:ASK_API}:{}),toast:'AI가 빈 답을 보냄 · 한 번 더 시도해 주세요'};
     if(http===400&&/not scoped to a workspace/i.test(m))return {category:'요청 거부',cause:'이 Claude API 키는 워크스페이스에 묶여 있지 않아 요청이 거절됐습니다(HTTP 400).',next:'Anthropic 콘솔 → Workspaces에서 워크스페이스를 고르거나 만든 뒤, 그 안에서 새 API 키를 만들어 넣어 주세요.',toast:'Claude 키 확인 필요: 워크스페이스 안에서 만든 키를 넣어 주세요.'};
@@ -2106,6 +2132,12 @@ const WLOG=(()=>{
           if(/^gemini-3\.1-pro/.test(m))return null;
           r=r.map(n=>n*1.1);
         }
+      }else if(p==='openai'){
+        // developers.openai.com/api/docs/models and guides/prompt-caching, verified 2026-10-17. Standard tier.
+        if(m==='gpt-6.1-sol')r=[2,10,.1];
+        else if(m==='gpt-6-luna')r=[.1,.5,.01];
+        else if(m==='gpt-6-astra')r=[10,50,1];
+        if(r&&t.input>272000)r=[r[0]*2,r[1]*1.5,r[2]*2];
       }else if(p==='anthropic'){
         if(m==='claude-sonnet-5-5')r=[2,10,.1];
         else if(m==='claude-opus-5-5')r=[4,20,.2];
@@ -2124,6 +2156,11 @@ const WLOG=(()=>{
     function tokens(raw){
       const g=raw?.usageMetadata||raw?.response?.usageMetadata,u=raw?.usage;
       if(g){const input=number(g.promptTokenCount),out=number(g.candidatesTokenCount),think=number(g.thoughtsTokenCount)||0;return {input,output:out===null?null:out+think,cached:number(g.cachedContentTokenCount)||0};}
+      // OpenAI includes cache reads/writes in input and reasoning in output; never add them twice.
+      if(u&&raw?.object==='response'){
+        const input=number(u.input_tokens),cached=number(u.input_tokens_details?.cached_tokens),written=number(u.input_tokens_details?.cache_write_tokens);
+        return {input,output:number(u.output_tokens),cached:cached||0,cacheWrite:cached===null||written===null||input===null||cached+written>input?null:written};
+      }
       // Anthropic: input_tokens leaves out cache reads and writes; output_tokens already holds the thinking (output_tokens_details is
       // a breakdown of it, not added).
       if(u&&u.input_tokens!=null&&u.prompt_tokens==null&&u.total_input_tokens==null){const input=number(u.input_tokens),cached=number(u.cache_read_input_tokens)||0;return {input:input===null?null:input+(number(u.cache_creation_input_tokens)||0)+cached,output:number(u.output_tokens),cached};}
@@ -2135,13 +2172,13 @@ const WLOG=(()=>{
       const db=load(),date=day(at),t=tokens(raw),rate=official(meta,t,at),key=JSON.stringify([date,meta.provider,meta.model,meta.task,rate]);
       let row=db.rows.find(r=>r.key===key);if(!row){row={key,date,provider:meta.provider,model:meta.model,task:meta.task,rate,calls:0,failed:0,unknown:0,input:0,output:0,cached:0};db.rows.push(row);}
       row.calls++;if(failed)row.failed++;
-      if(t.input===null||t.output===null)row.unknown++;else{row.input+=t.input;row.output+=t.output;row.cached+=Math.min(t.cached,t.input);}
+      if(t.input===null||t.output===null||meta.provider==='openai'&&t.cacheWrite==null)row.unknown++;else{row.input+=t.input;row.output+=t.output;row.cached+=Math.min(t.cached,t.input);if(meta.provider==='openai')row.cacheWrite=(Number(row.cacheWrite)||0)+t.cacheWrite;}
       // Bounded daily aggregates, independent of room/card volume.
       db.rows=db.rows.filter(r=>r.date>=since());
       if(!timer)timer=setTimeout(flush,500);
     }catch(e){console.warn('[Wish] 사용량 집계 실패',e.name);}}
     async function track(cfg,options,fn,override=null){const at=Date.now(),model=getAiSelectedModel(cfg),meta={provider:cfg.provider==='deepseek'&&!isDirectDeepSeekBaseUrl(cfg.deepSeekBaseUrl)?'deepseek-custom':cfg.provider,model,location:/^gemini-3\.[678]-flash$/.test(model)?'global':cfg.provider==='vertex'?cfg.vertexLocation:cfg.firebaseLocation,task:options.operationLabel||options.taskKind||'AI 요청',...(override||{})};let raw;try{raw=await fn();record(meta,raw,false,at);return raw;}catch(e){record(meta,null,true,at);throw e;}}
-    function cost(r){const p=load().rates[modelKey(r)]||r.rate;if(!p)return null;return ((r.input-r.cached)*p.input+r.cached*p.cached+r.output*p.output)/1e6;}
+    function cost(r){const p=load().rates[modelKey(r)]||r.rate;if(!p)return null;return ((r.input-r.cached)*p.input+r.cached*p.cached+r.output*p.output+(r.provider==='openai'?(Number(r.cacheWrite)||0)*p.input*.25:0))/1e6;}
     function total(rows){return rows.reduce((a,r)=>{const c=cost(r);a.calls+=r.calls;a.failed+=r.failed;a.unknown+=c===null?r.calls:r.unknown;a.usd+=c||0;return a;},{calls:0,failed:0,unknown:0,usd:0});}
     function pruneShards(cutoff=since()){const kept=[];
       // Per-page shards prevent one active tab from overwriting another's counters.
@@ -2150,7 +2187,7 @@ const WLOG=(()=>{
       return kept;}
     function snapshot(){const db=load(),all=new Map(),cutoff=since();
       try{db.rates=JSON.parse(localStorage.getItem(RATES)||'{}');}catch{db.rates={};}
-      const add=rows=>{for(const r of rows||[]){if(r.date<cutoff)continue;let row=all.get(r.key);if(!row){all.set(r.key,{...r});continue;}for(const k of ['calls','failed','unknown','input','output','cached'])row[k]+=Number(r[k])||0;}};
+      const add=rows=>{for(const r of rows||[]){if(r.date<cutoff)continue;let row=all.get(r.key);if(!row){all.set(r.key,{...r});continue;}for(const k of ['calls','failed','unknown','input','output','cached'])row[k]+=Number(r[k])||0;if(r.provider==='openai')row.cacheWrite=(Number(row.cacheWrite)||0)+(Number(r.cacheWrite)||0);}};
       for(const rows of pruneShards(cutoff))add(rows);
       db.rows=db.rows.filter(r=>r.date>=cutoff);if(!db.rows.length)localStorage.removeItem(KEY);else flush();
       add(db.rows);const rows=[...all.values()];return {rows,models:[...new Map(rows.map(r=>[modelKey(r),{key:modelKey(r),provider:r.provider,model:r.model,...(db.rates[modelKey(r)]||{input:'',output:'',cached:''})}])).values()]};}
@@ -2710,6 +2747,94 @@ const WLOG=(()=>{
     }
   }
 
+  // ---- OpenAI Responses API ----
+  // Keep the caller's schema and local validators unchanged. Strict output is used only when
+  // every object already meets OpenAI's required/additionalProperties rules; optional fields
+  // and dictionaries keep their existing meaning through JSON mode instead of null coercion.
+  function openAiStructuredSchema(schema) {
+    const allowed = new Set(['type','properties','required','additionalProperties','items','enum','const','anyOf','$defs','$ref','title','description','minLength','maxLength','pattern','format','minimum','maximum','exclusiveMinimum','exclusiveMaximum','multipleOf','minItems','maxItems']);
+    const plain = v => !!v && typeof v === 'object' && !Array.isArray(v);
+    try {
+      const copy = JSON.parse(JSON.stringify(schema));
+      if (!plain(copy) || copy.type !== 'object' || copy.anyOf || copy.$ref) return null;
+      const walk = node => {
+        if (!plain(node) || Object.keys(node).some(k => !allowed.has(k))) return false;
+        if (node.properties || node.type === 'object' || Array.isArray(node.type) && node.type.includes('object')) {
+          if (!plain(node.properties) || node.additionalProperties !== false || !Array.isArray(node.required)) return false;
+          const keys = Object.keys(node.properties);
+          if (new Set(node.required).size !== keys.length || node.required.length !== keys.length || keys.some(k => !node.required.includes(k))) return false;
+          if (!Object.values(node.properties).every(walk)) return false;
+        }
+        if (node.$defs && (!plain(node.$defs) || !Object.values(node.$defs).every(walk))) return false;
+        if (node.items !== undefined && !walk(node.items)) return false;
+        if (node.anyOf && (!Array.isArray(node.anyOf) || !node.anyOf.length || !node.anyOf.every(walk))) return false;
+        return true;
+      };
+      return walk(copy) ? copy : null;
+    } catch (_) { return null; }
+  }
+
+  function isOpenAiSchemaError(error) {
+    const e = error?.apiError, message = String(e?.message || error?.message || '');
+    return Number(error?.diagnostic?.httpStatus) === 400 && e?.type === 'invalid_request_error'
+      && !/quota|billing|credit|api.?key|authentication|permission|rate.?limit/i.test(message)
+      && (/^text\.format(?:\.|$)/.test(String(e?.param || '')) || /invalid schema for (?:response_format|text\.format)|(?:json_schema|text\.format).*schema|schema.*(?:json_schema|text\.format)/i.test(message));
+  }
+
+  function openAiNoAutoRetry(error) {
+    const status = Number(error?.diagnostic?.httpStatus) || 0, apiCodes = [error?.apiError?.code, error?.apiError?.type].map(v => String(v || ''));
+    return ['AI_TIMEOUT','AI_NETWORK','AI_SAFETY','WISH_USER_ABORT'].includes(error?.code) || status === 504
+      || apiCodes.some(c => /^(?:insufficient_quota|billing_hard_limit_reached|billing_not_active|usage_limit_reached|credit_balance_exhausted|organization_spend_limit_exceeded|project_spend_limit_exceeded|organization_usage_limit_exceeded)$/.test(c));
+  }
+
+  // Output includes reasoning. These are upper bounds, not requested token usage; no automatic
+  // live estimate is made. Even a small connection test needs room to finish its low-effort answer.
+  function openAiMaxTokens(cfg, options={}) {
+    const raw = Number(options.maxOutputTokens || cfg.maxOutputTokens), base = Math.max(1, Number.isFinite(raw) ? Math.floor(raw) : 32768);
+    const effort = normalizeOpenAiReasoningEffort(cfg.openAiReasoningEffort, cfg.openAiModel);
+    const floor = effort === 'none' ? 1 : effort === 'low' ? 4096 : effort === 'medium' ? 65536 : 128000;
+    return Math.min(128000, Math.max(base, floor));
+  }
+
+  async function callOpenAi(cfg, systemPrompt, userPrompt, options={}) {
+    if (!cfg.openAiApiKey) throw new Error('OpenAI API Key가 비어 있습니다.');
+    const wantsJson = !!options.responseJsonSchema || /json/i.test(String(options.responseMimeType || ''));
+    const schema = options.responseJsonSchema ? openAiStructuredSchema(options.responseJsonSchema) : null;
+    const run = async withSchema => {
+      let instructions = String(systemPrompt || '');
+      if (wantsJson && !/json/i.test(instructions)) instructions += '\nJSON만 출력한다. 코드블록, 마크다운, 설명문, JSON 외 텍스트는 출력하지 않는다.';
+      const body = { model:cfg.openAiModel, input:String(userPrompt || ''), ...(instructions ? { instructions } : {}), store:false, stream:false,
+        reasoning:{ effort:normalizeOpenAiReasoningEffort(cfg.openAiReasoningEffort, cfg.openAiModel) }, max_output_tokens:openAiMaxTokens(cfg, options) };
+      if (wantsJson) body.text = { format:withSchema ? { type:'json_schema', name:'wish_response', strict:true, schema } : { type:'json_object' } };
+      // A cut/refused response was billed too: record HTTP usage before inspecting output.
+      const data = await WishUsage.track(cfg, options, () => aiGmRequestJson({ url:'https://api.openai.com/v1/responses', headers:{ 'Content-Type':'application/json', Authorization:`Bearer ${cfg.openAiApiKey}` }, body, timeout:Number(options.timeoutMs) || 120000, label:'OpenAI' }));
+      const status = String(data?.status || ''), reason = String(data?.incomplete_details?.reason || ''), output = Array.isArray(data?.output) ? data.output : [];
+      const messages = output.filter(item => item?.type === 'message' && item?.role === 'assistant');
+      const diagnostic = { finishReason:reason || status, outputTokens:Number(WishUsage.tokens(data).output) || 0 };
+      const fail = (message, code) => Object.assign(new Error(message), { code, diagnostic, ...(data?.error ? { apiError:data.error } : {}) });
+      if (reason === 'content_filter' || messages.some(item => Array.isArray(item.content) && item.content.some(part => part?.type === 'refusal')))
+        throw Object.assign(fail(`AI가 결과 본문을 반환하지 않았습니다. (${reason || 'refusal'})`, 'AI_SAFETY'), { diagnostic:{ ...diagnostic, finishReason:reason || 'refusal' } });
+      if (reason === 'max_output_tokens') throw fail('AI 출력이 토큰 한도에서 잘려 적용하지 않았습니다.', 'AI_MAX_TOKENS');
+      if (status !== 'completed' || data?.error || messages.some(item => item.status !== 'completed'))
+        throw fail(`OpenAI 응답이 완료되지 않아 기존 기록을 보존했습니다. (${reason || status || '빈 응답'})`, 'AI_INCOMPLETE');
+      const text = messages.flatMap(item => Array.isArray(item.content) ? item.content : []).filter(part => part?.type === 'output_text' && typeof part.text === 'string').map(part => part.text).join('').trim();
+      if (!text) throw fail('OpenAI가 결과 본문을 반환하지 않았습니다.', 'AI_EMPTY');
+      return { text, raw:data };
+    };
+    try {
+      if (!schema) return options.responseJsonSchema ? { ...await run(false), structuredOutputFallback:true } : await run(false);
+      try { return await run(true); }
+      catch (error) {
+        // One JSON-mode retry only for a schema-specific HTTP 400 from a strict-schema request.
+        if (!isOpenAiSchemaError(error)) throw error;
+        return { ...await run(false), structuredOutputFallback:true };
+      }
+    } catch (error) {
+      if (openAiNoAutoRetry(error)) error.noAutoRetry = true;
+      throw error;
+    }
+  }
+
   async function withAiTimeout(promise, timeoutMs, label='AI 요청') {
     const ms=Math.max(0,Number(timeoutMs)||0);if(!ms)return await promise;
     let timer;
@@ -2723,6 +2848,7 @@ const WLOG=(()=>{
     // G-46: U3's rescue run thinks low too, so its bigger output box goes to the answer.
     if(taskKind==='select'||taskKind==='test'||taskKind==='rescue'){
       cfg.geminiThinkingLevel='low';
+      if(cfg.provider==='openai'&&cfg.openAiReasoningEffort!=='none')cfg.openAiReasoningEffort='low';
       if(cfg.provider==='deepseek'){
         if(isDirectDeepSeekBaseUrl(cfg.deepSeekBaseUrl))cfg.deepSeekReasoningEffort='low';
         else cfg.deepSeekThinking=false; // Unknown proxy model: do not assume low-effort support.
@@ -3008,6 +3134,8 @@ const WLOG=(()=>{
     // G-53: Claude may fill its box (anthropicMaxTokens), so it waits for that box at 100 tokens/s: always at 'medium'/'high', and at
     // 'low' when the caller set no wait of its own (R31 and bundle segments, lore conversion: the 120 s default cut 166 s answers).
     if(cfg.provider==='anthropic'&&(longThinking||!ownWait))options.timeoutMs=Math.max(options.timeoutMs,anthropicMaxTokens(cfg,options)*AI_ANTHROPIC_MS_PER_OUTPUT_TOKEN+60000);
+    // OpenAI's output limit includes reasoning; retain caller deadlines for quick selection/test requests.
+    if(cfg.provider==='openai'&&(!ownWait||!['none','low'].includes(cfg.openAiReasoningEffort)))options.timeoutMs=Math.max(options.timeoutMs,openAiMaxTokens(cfg,options)*10+60000);
     const label=options.operationLabel||WLOG.current()?.operation||'보조 AI 요청';
     const inputChars=String(systemPrompt||'').length+String(userPrompt||'').length,started=Date.now();
     // G-47: the wait line and the record show the real limit. A streamed Firebase call is bounded by withAiTimeout below like every other
@@ -3022,6 +3150,7 @@ const WLOG=(()=>{
     try{
     if (!isAiProviderReady(cfg)) throw new Error(`${getAiProviderLabel(cfg.provider)} 연결 정보가 비어 있습니다.`);
     const invoke=async()=>{
+    if (cfg.provider === 'openai') return await callOpenAi(cfg, systemPrompt, userPrompt, options);
     if (cfg.provider === 'anthropic') return await callAnthropicAi(cfg, systemPrompt, userPrompt, options);
     if (cfg.provider === 'deepseek') return await callDeepSeekAi(cfg, systemPrompt, userPrompt, options);
     if (cfg.provider === 'firebase') {
@@ -3040,8 +3169,8 @@ const WLOG=(()=>{
     // shape does not apply: noAutoRetry comes first, and while rescuedKind stands the resend would be the very same request).
     // A18: a failure that has an HTTP status or hit a wait limit keeps how long it waited (aiWaitMs, read by U3's heldLong); the
     // failure record keeps its own elapsedMs, as before.
-    const result=await withAiTimeout(AiAbort.race(invoke()),options.timeoutMs,options.operationLabel||'보조 AI 요청').catch(e=>{if(e?.code==='AI_TIMEOUT'||e?.diagnostic?.httpStatus)e.aiWaitMs=Date.now()-started;if((deepSeekThinking||cfg.provider==='firebase'||options.taskKind==='rescue'&&cfg.provider==='deepseek'&&cfg.deepSeekThinking)&&e?.code==='AI_TIMEOUT')e.noAutoRetry=true;if(cfg.provider==='anthropic'&&anthropicNoAutoRetry(e))e.noAutoRetry=true;throw e;});
-    return { ...result, text:cleanAiGeneratedText(result.text),diagnostic:{provider:cfg.provider,model:getAiSelectedModel(cfg),finishReason:String(result.raw?.candidates?.[0]?.finishReason||result.raw?.choices?.[0]?.finish_reason||result.raw?.stop_reason||'')} };
+    const result=await withAiTimeout(AiAbort.race(invoke()),options.timeoutMs,options.operationLabel||'보조 AI 요청').catch(e=>{if(e?.code==='AI_TIMEOUT'||e?.diagnostic?.httpStatus)e.aiWaitMs=Date.now()-started;if((deepSeekThinking||cfg.provider==='firebase'||options.taskKind==='rescue'&&cfg.provider==='deepseek'&&cfg.deepSeekThinking)&&e?.code==='AI_TIMEOUT')e.noAutoRetry=true;if(cfg.provider==='anthropic'&&anthropicNoAutoRetry(e))e.noAutoRetry=true;if(cfg.provider==='openai'&&openAiNoAutoRetry(e))e.noAutoRetry=true;throw e;});
+    return { ...result, text:cleanAiGeneratedText(result.text),diagnostic:{provider:cfg.provider,model:getAiSelectedModel(cfg),finishReason:String(result.raw?.candidates?.[0]?.finishReason||result.raw?.choices?.[0]?.finish_reason||result.raw?.stop_reason||(cfg.provider==='openai'?result.raw?.incomplete_details?.reason||result.raw?.status:'')||'')} };
     }finally{timers.forEach(clearTimeout);details.elapsedMs=Date.now()-started;}
     },details);
   }
@@ -3758,6 +3887,7 @@ const ExternalReplay=(()=>{
     const typedGemini = normalizeAiKey(backdrop.querySelector('#rpcm-ai-key')?.value || '');
     const typedDeepSeek = normalizeAiKey(backdrop.querySelector('#rpcm-ai-deepseek-key')?.value || '');
     const typedAnthropic = normalizeAiKey(backdrop.querySelector('#rpcm-ai-anthropic-key')?.value || '');
+    const typedOpenAi = normalizeAiKey(backdrop.querySelector('#rpcm-ai-openai-key')?.value || '');
     const typedAppCheck = normalizeAiKey(backdrop.querySelector('#rpcm-ai-firebase-appcheck')?.value || '');
     const typedVertex = String(backdrop.querySelector('#rpcm-ai-vertex-sa')?.value || '').trim();
     const typedBase = String(backdrop.querySelector('#rpcm-ai-deepseek-base')?.value || '').trim();
@@ -3786,6 +3916,9 @@ const ExternalReplay=(()=>{
       deepSeekThinking: backdrop.querySelector('#rpcm-ai-deepseek-thinking')?.value !== '0',
       anthropicApiKey: typedAnthropic || saved.anthropicApiKey,
       anthropicModel: backdrop.querySelector('#rpcm-ai-anthropic-model')?.value || saved.anthropicModel,
+      openAiApiKey: typedOpenAi || saved.openAiApiKey,
+      openAiModel: backdrop.querySelector('#rpcm-ai-openai-model')?.value || saved.openAiModel,
+      openAiReasoningEffort: backdrop.querySelector('#rpcm-ai-openai-reasoning')?.value || saved.openAiReasoningEffort,
       maxMessages: Number(backdrop.querySelector('#rpcm-ai-max-messages')?.value || saved.maxMessages),
       temperature: Number(backdrop.querySelector('#rpcm-ai-temperature')?.value || saved.temperature),
       maxOutputTokens: saved.maxOutputTokens,
@@ -3796,8 +3929,8 @@ const ExternalReplay=(()=>{
   }
 
   // Non-secret fields of the AI sheet; secret fields always open empty.
-  function aiSettingsDraft(s){return {provider:s.provider,firebase:s.firebaseConfig,vxLoc:s.vertexLocation,dsBase:s.deepSeekBaseUrl,model:s.model,thinking:s.geminiThinkingLevel,dsModel:s.deepSeekModel,dsThinking:s.deepSeekThinking?'1':'0',dsCustom:s.deepSeekCustomModel,anModel:s.anthropicModel};}
-  function openAiSettingsDialog(options={}){const s=loadAiSettings();return WUI.openSheet('ai',{saved:s,providers:[['ai-studio','AI Studio'],['firebase','Firebase'],['vertex','Vertex (JSON 키)'],['deepseek','DeepSeek'],['anthropic','Claude'],['manual','외부 AI 복붙 (API 없이)']],models:{'ai-studio':AI_GEMINI_MODELS.map(x=>[x,x]),firebase:AI_GEMINI_MODELS.map(x=>[x,x]),vertex:AI_GEMINI_MODELS.map(x=>[x,x]),deepseek:AI_DEEPSEEK_MODELS.map(x=>[x.id,x.label]),anthropic:AI_ANTHROPIC_MODELS.map(x=>[x.id,x.label])},showCustom:true,draft:{...aiSettingsDraft(s),key:'',fbAppCheck:'',vx:'',dsKey:'',anKey:'',test:''}});}
+  function aiSettingsDraft(s){return {provider:s.provider,firebase:s.firebaseConfig,vxLoc:s.vertexLocation,dsBase:s.deepSeekBaseUrl,model:s.model,thinking:s.geminiThinkingLevel,dsModel:s.deepSeekModel,dsThinking:s.deepSeekThinking?'1':'0',dsCustom:s.deepSeekCustomModel,anModel:s.anthropicModel,oaModel:s.openAiModel,oaThinking:s.openAiReasoningEffort};}
+  function openAiSettingsDialog(options={}){const s=loadAiSettings();return WUI.openSheet('ai',{saved:s,providers:[['ai-studio','AI Studio'],['firebase','Firebase'],['vertex','Vertex (JSON 키)'],['deepseek','DeepSeek'],['anthropic','Claude'],['openai','OpenAI'],['manual','외부 AI 복붙 (API 없이)']],models:{'ai-studio':AI_GEMINI_MODELS.map(x=>[x,x]),firebase:AI_GEMINI_MODELS.map(x=>[x,x]),vertex:AI_GEMINI_MODELS.map(x=>[x,x]),deepseek:AI_DEEPSEEK_MODELS.map(x=>[x.id,x.label]),anthropic:AI_ANTHROPIC_MODELS.map(x=>[x.id,x.label]),openai:AI_OPENAI_MODELS.map(x=>[x.id,x.label])},showCustom:true,draft:{...aiSettingsDraft(s),key:'',fbAppCheck:'',vx:'',dsKey:'',anKey:'',oaKey:'',test:''}});}
 
   // ---------------------------------------------------------------------------
   // committed turn 기준 자동 장기기억
@@ -7223,13 +7356,22 @@ const p=plan(list,{...u,settings:settings(room)},force==='retry'||retrying?(u.fa
         // Copy-paste mode: the entry keeps the characters of the pending turns (the longer lane, the rows the plan just took, as
         // pendingCounts counts them), so the home card keeps its figure after this check; the API entry stays {memory,observe}.
         counts.set(room,{memory:p.mem.length,observe:p.obs.length,...(isManualAiProvider()?{chars:(p.mem.length>=p.obs.length?p.mem:p.obs).reduce((c,t)=>c+t.userText.length+t.assistantText.length,0)}:{})});
-        let chunked=chunkPlan(p,settings(room),rescue);
+        // Copy-paste mode (owner 2026-10-17): no per-run size split, the whole backlog goes into one request; the pasted answer's
+        // re-check rebuilds the same range before the cap below. API providers take chunkPlan's value as before.
+        let chunked=!isManualAiProvider()&&chunkPlan(p,settings(room),rescue);
         // 외부 AI 답은 요청문에 들어간 턴까지만 적용합니다. 그 뒤에 진행한 턴은 다음 요청문으로 넘깁니다.
         if(manual?.mode==='import'){
           const cap=(on,rows,key)=>{if(!key)return [];const i=on?rows.findIndex(t=>String(t.key)===String(key)):-1;if(i<0){clearManualJob(room);throw Object.assign(Error('이 답은 쓸 수 없게 되었습니다. 요청문을 복사한 뒤 정리할 대화가 리롤·수정·삭제되었거나 다른 정리가 먼저 끝났습니다. [함께 정리]로 새 요청문을 받아 외부 AI에 다시 보내 주세요. 아무것도 저장하지 않았습니다.'),{code:'WISH_MANUAL_STALE'});}return rows.slice(0,i+1);};
           const mem=cap(p.memory,p.mem,manual.job.memCap),obs=cap(p.observe,p.obs,manual.job.obsCap);
           if(mem.length<p.mem.length||obs.length<p.obs.length)chunked=true;
           p.mem=mem;p.obs=obs;p.memory=mem.length>0;p.observe=obs.length>0;
+        }
+        // A waiting job's request rebuilt by manualCopy/manualTxt (its stored text is gone: one over 400,000 chars is kept in memory
+        // only, so a reload drops it) takes that job's own range, so the same request and job code come back after more RP too. When
+        // that range is no longer on the path (reroll, edit, delete) its answer could not be used anyway, and a plain export follows.
+        if(manual&&manual.mode!=='import'&&isManualAiProvider()){
+          const at=(on,rows,key)=>!key?-2:on?rows.findIndex(t=>String(t.key)===String(key)):-1,m=at(p.memory,p.mem,manual.job.memCap),o=at(p.observe,p.obs,manual.job.obsCap);
+          if(m!==-1&&o!==-1&&(m>=0||o>=0)){p.mem=m>=0?p.mem.slice(0,m+1):[];p.obs=o>=0?p.obs.slice(0,o+1):[];p.memory=m>=0;p.observe=o>=0;}
         }
         if(!force&&!retrying&&u.lastError&&!historyDeferred)return false;
         // Processed source must still exist unchanged on the current path. The latest
@@ -15283,7 +15425,7 @@ function loreEntrySourceHashCached(entry) { const text = loreEntrySourceText(ent
       return {...job,status:'ready',message:'남은 구간을 균등 배분했습니다.',segments:[...done,...chunks(job.rows.slice(start),count,start)].map((s,i)=>({...s,index:i+1}))};
     }
     async function digest(value){return sha256Hex(new TextEncoder().encode(JSON.stringify(value)));}
-    const resultSettings=s=>({provider:s.provider,model:getAiSelectedModel(s),endpoint:s.provider==='deepseek'?s.deepSeekBaseUrl:s.provider==='firebase'?[s.firebaseLocation,s.firebaseSdkVersion]:s.provider==='vertex'?[s.vertexLocation]:'',temperature:s.temperature,geminiThinkingLevel:s.geminiThinkingLevel,deepSeekThinking:s.deepSeekThinking,apiEconomy:s.apiEconomy});
+    const resultSettings=s=>({provider:s.provider,model:getAiSelectedModel(s),endpoint:s.provider==='deepseek'?s.deepSeekBaseUrl:s.provider==='firebase'?[s.firebaseLocation,s.firebaseSdkVersion]:s.provider==='vertex'?[s.vertexLocation]:'',temperature:s.temperature,geminiThinkingLevel:s.geminiThinkingLevel,deepSeekThinking:s.deepSeekThinking,...(s.provider==='openai'?{openAiReasoningEffort:s.openAiReasoningEffort}:{}),apiEconomy:s.apiEconomy});
     function basis(r,c,ps,packStamp=lorePackStorageFingerprint){
       return JSON.stringify({room:{chatId:r.chatId,epoch:r._epoch,slots:r.slots,unified:r.unified,autoMemory:r.autoMemory,loreAutomation:r.loreAutomation&&{...r.loreAutomation,apiHeldProtected:undefined,apiHeldResolved:undefined},
         speech:r.speechRelations,relationships:r.relationships,relationshipBaseline:r.relationshipBaseline,active:r.activeLorePackIds,
@@ -21115,7 +21257,7 @@ diff:`<div class="m3-shell">
     approvedIcons(ui);ui.querySelector('.hd-ic').innerHTML=approvedIcon('wallet');
     const q=s=>ui.querySelector(s),T=WishUsage.total,today=WishUsage.day(),cur=today.slice(0,7);
     const months=Array.from({length:12},(_,i)=>{const x=new Date();x.setDate(1);x.setMonth(x.getMonth()-i);return WishUsage.day(x).slice(0,7);});
-    const PV={'ai-studio':'AI Studio',firebase:'Firebase',vertex:'Vertex',deepseek:'DeepSeek','deepseek-custom':'DeepSeek 호환',anthropic:'Claude'};
+    const PV={'ai-studio':'AI Studio',firebase:'Firebase',vertex:'Vertex',deepseek:'DeepSeek','deepseek-custom':'DeepSeek 호환',anthropic:'Claude',openai:'OpenAI'};
     const COL=['--c-state','--c-log','--c-cog','--c-lore','--c-rel','--c-extra'];
     const money=n=>{n=Number(n)||0;return n===0?'$0':n<.01?'$'+n.toFixed(4):'$'+n.toFixed(2);};
     const mlabel=m=>{const [y,mm]=m.split('-');return y+'년 '+Number(mm)+'월';};
@@ -21435,19 +21577,19 @@ diff:`<div class="m3-shell">
     confirm(d) { return sheet(d, { title: esc(d.title), body: `<p style="color:var(--m3-fg2);line-height:1.85">${esc(d.body)}</p>`, foot: `${SP}${closeBtn(d, '취소')}${btn(esc(d.okLabel || '확인'), 'cfOk', { arg: d.id, cls: d.danger ? 'danger' : 'primary', icon: d.danger ? 'alert' : 'check' })}` }); },
     /* 정리 중 수정(G2): 사용자가 승인한 팝업. confirm 모양, [거부]는 취소 자리(closeBtn), [수락]은 AI API 호출 버튼(btn aiCall). 닫기 = 거부. */
     editRerun(d) { return sheet(d, { title: '✏️ 정리 중에 메시지가 수정됐어요', body: `<p style="color:var(--m3-fg2);line-height:1.85">AI가 기억을 정리하는 동안, 정리하던 구간의 메시지 내용이 바뀌었어요.<br>지금 받은 정리 결과는 고치기 전 내용으로 만들어졌어요.<br>· 수락하면 → 고친 내용으로 한 번 더 정리해요. (AI 호출 1회 추가)<br>· 거부하면 → 이번 결과를 그대로 저장해요. 고친 내용은 기억에 반영되지 않아요.</p><div class="m3-status m3-err m3-topgap">${ic('alert')}<span>어느 쪽을 골라도 RP와 기존 기억은 안전해요. 고친 내용을 기억에 넣을지만 고르는 거예요.</span></div><p class="m3-muted m3-topgap">창을 닫으면 거부와 같아요.</p>`, foot: `${SP}${closeBtn(d, '거부')}${btn('수락', 'editRerun', { arg: d.id, icon: 'refresh' })}` }); },
-    /* props: { providers:[[v,l]], models:{provider:[[v,l]]}, saved, draft:{provider,key,firebase,fbAppCheck,vx,vxLoc,dsKey,dsBase,model,thinking,dsModel,dsThinking,dsCustom,anKey,anModel,maxMsg,temp,autoMem,memMin,memMax,test} } */
+    /* props: { providers:[[v,l]], models:{provider:[[v,l]]}, saved, draft:{provider,key,firebase,fbAppCheck,vx,vxLoc,dsKey,dsBase,model,thinking,dsModel,dsThinking,dsCustom,anKey,anModel,oaKey,oaModel,oaThinking,maxMsg,temp,autoMem,memMin,memMax,test} } */
     ai(d) {
-      const a = d.draft, ds = a.provider === 'deepseek', an = a.provider === 'anthropic', models = [...((d.models || {})[a.provider] || [])];
+      const a = d.draft, ds = a.provider === 'deepseek', an = a.provider === 'anthropic', oa = a.provider === 'openai', models = [...((d.models || {})[a.provider] || [])];
       const manual = a.provider === 'manual', sv = d.saved || {};
       const firebasePanel = field('Firebase Config', ta(D(d, 'firebase'), a.firebase, 'const firebaseConfig = { apiKey:"…", projectId:"…", appId:"…" };', '100')) + field('App Check 디버그 토큰', secretInp(D(d, 'fbAppCheck'), a.fbAppCheck || '', sv.firebaseAppCheckDebugToken ? '저장됨 · 새 토큰을 넣으면 교체' : '예: 123a4567-b89c-12d3-e456-789012345678'), '2026년 11월 2일부터 Firebase AI Logic은 App Check가 필수입니다. Firebase 콘솔 > App Check > 앱 메뉴(⋮) > 디버그 토큰 관리 > 토큰 생성 후 붙여 넣고, App Check의 Firebase AI Logic을 적용(Enforce)으로 바꾸세요.');
       const vertexPanel = field('서비스 계정 JSON', ta(D(d, 'vx'), a.vx || '', sv.vertexServiceAccount ? '저장됨 · 새 JSON을 붙여 넣으면 교체' : '{ "type": "service_account", "project_id": "…", "private_key": "…", "client_email": "…" }', '100'), 'Google Cloud 콘솔 > IAM 및 관리자 > 서비스 계정 > 키 > JSON으로 받은 파일 내용 전체를 붙여 넣으세요.') + field('Vertex 위치', inp(D(d, 'vxLoc'), a.vxLoc || '', 'global'), 'global 권장 · 지역을 쓰려면 us-central1 · asia-northeast3처럼 입력합니다. 3.6~3.8 Flash는 항상 global로 보냅니다.');
       const manualPanel = manual ? `<div class="m3-panel" data-key="manual-ai-intro"><b>API 키 없이 외부 AI로 진행합니다</b><p class="m3-muted">확인 탭의 [함께 정리]를 누르면 요청문이 TXT 파일 하나로 저장됩니다. ChatGPT·Gemini·Claude 같은 외부 AI 새 대화에 파일로 첨부해 보내고, 답을 복사한 뒤 [답 붙여넣기]를 누르면 API로 받을 때와 같은 검사를 거쳐 기존 기억에 합칩니다. 마지막 정리 이후의 새 대화만 보냅니다.</p><ul class="m3-muted"><li>답을 기다리는 동안 패널을 닫거나 새로고침하고, RP를 계속 진행해도 됩니다.</li><li>자동 정리는 차례가 되면 알림만 드립니다.</li><li>API를 쓰는 버튼·옵션(묶음 정리·다시 시도·텍스트 → 자료·API 전체 재구축·AI 재검토·API 사용량 절약·연결 테스트)은 회색으로 잠기고 [함께 정리]만 씁니다. 전체 재구축은 자료 관리의 [외부 AI로 재구축]을 쓰세요.</li><li>주입 후보는 최근·키워드 검색으로 고르며 에리 의미검색(임베딩)도 쓰지 않습니다.</li><li>저장된 API 키는 그대로 두므로 언제든 API 방식으로 돌아갈 수 있습니다.</li></ul><div class="m3-actions">${btn('복붙 안내 지침 편집', 'promptGuides', { arg: 'manualRelay', cls: 'mini', icon: 'doc' })}</div></div>` : '';
-      if(!ds&&!an&&a.model&&!models.some(([id])=>id===a.model))models.unshift([a.model,a.model+' · 기존 설정']);
+      if(!ds&&!an&&!oa&&a.model&&!models.some(([id])=>id===a.model))models.unshift([a.model,a.model+' · 기존 설정']);
       return sheet(d, { title: '보조 AI 연결', desc: '인지 · 기억 갱신 · 날짜로그 정리 · 자료집 · 전체 재구축이 같은 연결을 씁니다', body: `
-      <section class="m3-grp"><div class="m3-gt">${ic('key')}연결</div>${field('AI 서비스', selc(D(d, 'provider'), a.provider, d.providers || [['ai-studio', 'Google AI Studio'], ['firebase', 'Firebase AI Logic'], ['vertex', 'Vertex AI (JSON 키)'], ['deepseek', 'DeepSeek API'], ['anthropic', 'Claude'], ['manual', '외부 AI 복붙 (API 없이)']]))}
-      ${manual ? manualPanel : a.provider === 'firebase' ? firebasePanel : a.provider === 'vertex' ? vertexPanel : ds ? field('DeepSeek API Key', secretInp(D(d, 'dsKey'), a.dsKey || '', sv.deepSeekApiKey ? '저장됨 · 새 키를 넣으면 교체' : '키를 붙여 넣으세요'), '이 브라우저에만 보관하고 백업에는 넣지 않습니다.') + field('Base URL', inp(D(d, 'dsBase'), a.dsBase || '', '', 'text', NO_FILL + ' inputmode="url"')) : an ? field('Claude API Key', secretInp(D(d, 'anKey'), a.anKey || '', sv.anthropicApiKey ? '저장됨 · 새 키를 넣으면 교체' : 'sk-ant-로 시작하는 키를 붙여 넣으세요'), '이 브라우저에만 보관하고 백업에는 넣지 않습니다.') : field('Gemini API Key', secretInp(D(d, 'key'), a.key || '', sv.apiKey ? '저장됨 · 새 키를 넣으면 교체' : 'AIza로 시작하는 키를 붙여 넣으세요'), '이 브라우저에만 보관하고 백업에는 넣지 않습니다.')}</section>
+      <section class="m3-grp"><div class="m3-gt">${ic('key')}연결</div>${field('AI 서비스', selc(D(d, 'provider'), a.provider, d.providers || [['ai-studio', 'Google AI Studio'], ['firebase', 'Firebase AI Logic'], ['vertex', 'Vertex AI (JSON 키)'], ['deepseek', 'DeepSeek API'], ['anthropic', 'Claude'], ['openai', 'OpenAI API'], ['manual', '외부 AI 복붙 (API 없이)']]))}
+      ${manual ? manualPanel : a.provider === 'firebase' ? firebasePanel : a.provider === 'vertex' ? vertexPanel : ds ? field('DeepSeek API Key', secretInp(D(d, 'dsKey'), a.dsKey || '', sv.deepSeekApiKey ? '저장됨 · 새 키를 넣으면 교체' : '키를 붙여 넣으세요'), '이 브라우저에만 보관하고 백업에는 넣지 않습니다.') + field('Base URL', inp(D(d, 'dsBase'), a.dsBase || '', '', 'text', NO_FILL + ' inputmode="url"')) : an ? field('Claude API Key', secretInp(D(d, 'anKey'), a.anKey || '', sv.anthropicApiKey ? '저장됨 · 새 키를 넣으면 교체' : 'sk-ant-로 시작하는 키를 붙여 넣으세요'), '이 브라우저에만 보관하고 백업에는 넣지 않습니다.') : oa ? field('OpenAI API Key', secretInp(D(d, 'oaKey'), a.oaKey || '', sv.openAiApiKey ? '저장됨 · 새 키를 넣으면 교체' : 'OpenAI API 키를 붙여 넣으세요'), '이 브라우저에만 보관하고 백업에는 넣지 않습니다.') : field('Gemini API Key', secretInp(D(d, 'key'), a.key || '', sv.apiKey ? '저장됨 · 새 키를 넣으면 교체' : 'AIza로 시작하는 키를 붙여 넣으세요'), '이 브라우저에만 보관하고 백업에는 넣지 않습니다.')}</section>
       ${manual ? '<div hidden>' : ''}<section class="m3-grp"><div class="m3-gt">${ic('spark')}모델 · 생성</div>
-      ${ds ? `<div class="m3-grid2">${field('DeepSeek 모델', selc(D(d, 'dsModel'), a.dsModel, models.length ? models : [[a.dsModel, a.dsModel]]))}${field('기억 추출·재구축 추론', selc(D(d, 'dsThinking'), a.dsThinking, [['1', '켜기'], ['0', '끄기']]))}</div>${d.showCustom ? field('커스텀 모델 ID · 서드파티 전용', inp(D(d, 'dsCustom'), a.dsCustom || '', '', 'text', NO_FILL)) : ''}` : `<div class="m3-grid2">${field('모델', selc(D(d, an ? 'anModel' : 'model'), an ? a.anModel : a.model, models.length ? models : [[a.model, a.model]]))}${field('기억 추출·재구축 추론 강도', selc(D(d, 'thinking'), a.thinking, d.thinkingOptions || [['low', '낮음'], ['medium', '보통'], ['high', '높음']]))}</div>`}
+      ${ds ? `<div class="m3-grid2">${field('DeepSeek 모델', selc(D(d, 'dsModel'), a.dsModel, models.length ? models : [[a.dsModel, a.dsModel]]))}${field('기억 추출·재구축 추론', selc(D(d, 'dsThinking'), a.dsThinking, [['1', '켜기'], ['0', '끄기']]))}</div>${d.showCustom ? field('커스텀 모델 ID · 서드파티 전용', inp(D(d, 'dsCustom'), a.dsCustom || '', '', 'text', NO_FILL)) : ''}` : `<div class="m3-grid2">${field('모델', selc(D(d, oa ? 'oaModel' : an ? 'anModel' : 'model'), oa ? normalizeOpenAiModel(a.oaModel) : an ? a.anModel : a.model, models.length ? models : [[a.model, a.model]]))}${field('기억 추출·재구축 추론 강도', selc(D(d, oa ? 'oaThinking' : 'thinking'), oa ? normalizeOpenAiReasoningEffort(a.oaThinking,a.oaModel) : a.thinking, oa ? [...(normalizeOpenAiModel(a.oaModel)==='gpt-6-luna'?[['none','끄기']]:[]),['low','낮음'],['medium','보통'],['high','높음']] : d.thinkingOptions || [['low', '낮음'], ['medium', '보통'], ['high', '높음']]))}</div>`}
       </section>
       <p class="m3-muted">추출·재구축·자료 변환은 선택한 설정을 사용합니다. 후보 선별·색인·연결 테스트는 낮음으로 실행합니다. DeepSeek 추론 OFF는 유지하며, 사용자 지정 서버에서는 해당 보조 작업의 추론을 끕니다. 임베딩 의미검색은 별도입니다.</p>${manual ? '</div>' : ''}
       <div class="m3-status ${a.test === 'ok' ? 'm3-ok' : a.test === 'busy' ? 'm3-busy' : a.test === 'err' ? 'm3-err' : ''}" aria-live="polite">${ic(manual || a.test === 'ok' ? 'check' : 'alert')}<span>${manual ? '외부 AI 복붙은 연결 테스트가 없습니다 · 저장하면 바로 사용합니다.' : a.test === 'busy' ? `연결 테스트 중${dots}` : a.test === 'ok' ? '연결 성공 · 저장을 눌러야 유지됩니다' : a.test === 'err' ? esc(a.testMsg || '연결 실패') : '연결 테스트는 소량의 API를 사용합니다.'}</span></div>`,
@@ -21799,7 +21941,7 @@ nativeBundle(d) {
   }
   function closeSheet(idOrD, instant, preserveDraft = false) {
     const d = typeof idOrD === 'string' ? findDlg(idOrD) : idOrD; if (!d || d.leaving) return;
-    if(d.type==='ai'&&!d.committed&&['key','dsKey','vx','fbAppCheck','anKey'].some(k=>String(d.draft?.[k]||'').trim()))toast('입력한 키는 저장하지 않고 닫았습니다. 쓰려면 다시 열어 붙여 넣고 [저장]을 눌러 주세요.','warn');
+    if(d.type==='ai'&&!d.committed&&['key','dsKey','vx','fbAppCheck','anKey','oaKey'].some(k=>String(d.draft?.[k]||'').trim()))toast('입력한 키는 저장하지 않고 닫았습니다. 쓰려면 다시 열어 붙여 넣고 [저장]을 눌러 주세요.','warn');
     if(d.externalScope&&d.busy)return;
     if(d.type==='nativeBundle'&&d.draft?.busy)return;
     if(d.busy&&['roomCopy','roomName','loreSplit','secondaryExport','secondaryReview','secondaryManage','importPeople'].includes(d.type))return;
@@ -22572,10 +22714,10 @@ async function WUIRemoveEditor(d){if(d.editPath&&d.editPath!==location.pathname)
 
 function WUIAIConfig(d){const fresh=loadAiSettings(),opened=aiSettingsDraft(d.saved||fresh),latest=aiSettingsDraft(fresh),x={...d.draft};
 // Fields left as they were when the sheet opened follow the latest saved settings, so a stale sheet (opened twice, or in another tab) cannot put old values back.
-const typed=['key','dsKey','vx','fbAppCheck','anKey'].some(k=>String(x[k]||'').trim());
+const typed=['key','dsKey','vx','fbAppCheck','anKey','oaKey'].some(k=>String(x[k]||'').trim());
 // A key typed here belongs to the provider (and DeepSeek address) this sheet shows.
 for(const k of Object.keys(opened))if(x[k]===opened[k]&&!(typed&&k==='provider')&&!(k==='dsBase'&&String(x.dsKey||'').trim()))x[k]=latest[k];
-const fields={provider:x.provider,key:x.key,'firebase-config':x.firebase,'firebase-appcheck':x.fbAppCheck,'vertex-sa':x.vx,'vertex-location':x.vxLoc,'deepseek-key':x.dsKey,'deepseek-base':x.dsBase,model:x.model,'gemini-thinking':x.thinking,'deepseek-model':x.dsModel,'deepseek-thinking':x.dsThinking,'deepseek-custom':x.dsCustom,'anthropic-key':x.anKey,'anthropic-model':x.anModel};return settingsFromAiDialog(WUIForm(Object.fromEntries(Object.entries(fields).map(([k,v])=>['#rpcm-ai-'+k,v]))),fresh);}
+const fields={provider:x.provider,key:x.key,'firebase-config':x.firebase,'firebase-appcheck':x.fbAppCheck,'vertex-sa':x.vx,'vertex-location':x.vxLoc,'deepseek-key':x.dsKey,'deepseek-base':x.dsBase,model:x.model,'gemini-thinking':x.thinking,'deepseek-model':x.dsModel,'deepseek-thinking':x.dsThinking,'deepseek-custom':x.dsCustom,'anthropic-key':x.anKey,'anthropic-model':x.anModel,'openai-key':x.oaKey,'openai-model':x.oaModel,'openai-reasoning':x.oaThinking};return settingsFromAiDialog(WUIForm(Object.fromEntries(Object.entries(fields).map(([k,v])=>['#rpcm-ai-'+k,v]))),fresh);}
 function WUIDateApply(d){const replacements=[];for(const b of d.blocks){if(b.isSpecialDate||b.isYearOnly)continue;const x=d.draft.dn[String(b.index)];if(!x)continue;const y=String(x.y||'').trim()?Number(x.y):null,m=Number(x.m),day=Number(x.d);if(b.isUnknown&&!y&&!m&&!day)continue;if(b.isUnknown&&y===null&&(m||day))throw Error('날짜 미상 블록은 연도까지 입력해야 합니다.');if(y!==null&&(!Number.isInteger(y)||y<1||y>999999))throw Error('연도는 1~999999로 입력해 주세요.');if(!Number.isInteger(m)||m<1||m>12||!Number.isInteger(day)||day<1||day>new Date(y||2000,m,0).getDate())throw Error('올바른 월과 일을 입력해 주세요.');if(y!==(b.year||null)||m!==b.month||day!==b.day)replacements.push({start:b.sourceStart,end:b.headingEnd,text:formatNormalizedLogHeading(b,y,m,day),block:b});}if(!replacements.length){notify('변경된 날짜가 없습니다.');return;}
  // Judged on the log as it would be saved: a block whose new heading line would equal another block's there (same key) stays as it
  // was and the rest is applied, so dates shifted together (18일→19일, 19일→20일) all go through. Blocks that already shared one
@@ -22689,7 +22831,7 @@ Object.assign(WUI_ADAPTER.act,{
  logPick:()=>openLogRecallManagerDialog(state.currentRoom),lrApply:async id=>{const d=WUI.ui.dlg(id),r=d.wishRoom;if((r.slots.find(s=>s.id==='logSummary')?.content||'')!==d.originalText)throw Error('편집 중 로그가 바뀌었습니다. 다시 열어 주세요.');for(const [field,key] of [['manualLogSelectedKeys','man'],['autoLogPinnedKeys','pin'],['autoLogExcludedKeys','ex']])r[field]=d.blocks.filter(b=>d.draft.lr[String(b.index)]?.[key]).map(b=>b.key);await saveRoom(r);WUIResolve(id,true);},
  logNorm:()=>WUIInvoke('log-normalize'),dnApply:id=>WUIDateApply(WUI.ui.dlg(id)),logDedupe:()=>WUIInvoke('log-dedupe'),ddApply:id=>WUIDedupeApply(WUI.ui.dlg(id)),
  presets:arg=>openDefaultExtraPresetDialog(state.currentRoom,arg==='character'?'character':'extra'),psLoad:id=>{const d=WUI.ui.dlg(id),ch=d.group==='character';if(d.draft.list.length&&!confirm(ch?'현재 방 캐릭터 항목으로 편집 중인 프리셋을 교체할까요?':'현재 방 기타 항목으로 편집 중인 프리셋을 교체할까요?'))return;d.draft.list=state.currentRoom.slots.filter(s=>s.group===(ch?'character':'extra')).map(s=>({id:makeDefaultExtraPresetId(),title:s.title,content:s.content,enabled:s.enabled,ret:String(s.retentionTurns),...(ch?{aliases:(s.aliases||[]).join(', ')}:{})}));},psSave:id=>WUIPresetsSave(WUI.ui.dlg(id),false),psSaveApply:id=>WUIPresetsSave(WUI.ui.dlg(id),true),
- aiSave:id=>{const d=WUI.ui.dlg(id),cfg=WUIAIConfig(d);const kept=()=>notify('저장하지 않았습니다. 입력한 내용은 창에 남아 있습니다.','info');if(!cfg.deepSeekApiKey&&loadAiSettings().deepSeekApiKey&&!confirm('DeepSeek 주소의 서버가 바뀌어 저장된 DeepSeek 키를 새 주소로 보내지 않습니다. 키 없이 저장할까요?\n취소하면 창이 그대로 남으니 키를 다시 입력해 주세요.'))return kept();const gem=normalizeAiKey(d.draft.key),ds=normalizeAiKey(d.draft.dsKey);if(gem&&((gem.match(/AIza/g)||[]).length>1||!gem.startsWith('AIza')||gem.length!==39)&&!confirm('Gemini 키는 보통 AIza로 시작하는 39자입니다. 입력한 키('+gem.length+'자)는 모양이 달라, 다른 키나 비밀번호 뒤에 이어 붙었을 수 있습니다. 그대로 저장할까요?'))return kept();if(ds&&ds.indexOf('sk-',1)>=0&&!confirm(((ds.match(/sk-/g)||[]).length>1?'DeepSeek 키 안에 sk-가 두 번 들어 있습니다':'DeepSeek 키 앞에 다른 글자가 붙어 있습니다')+'('+ds.length+'자). 다른 키나 비밀번호 뒤에 이어 붙었을 수 있습니다. 그대로 저장할까요?'))return kept();saveAiSettings(cfg);WUIRefreshSettings();d.committed=true;WUI.closeSheet(d);notify('AI/API 설정을 저장했습니다.','success');const room=state.currentRoom,u=room?.unified,stop=String(u?.lastError||''),sv=d.saved||{},newAuth=[d.draft.key,d.draft.dsKey,d.draft.vx,d.draft.fbAppCheck,d.draft.anKey].some(v=>String(v||'').trim())||cfg.provider!==sv.provider||cfg.firebaseConfig!==sv.firebaseConfig;if(u&&isAiProviderReady(cfg)&&(stop==='보조 AI 연결 설정이 필요합니다.'||newAuth&&/(?:Gemini(?: Interactions)?|DeepSeek|Claude|Vertex AI|Vertex 인증|Firebase App Check) API 오류 (?:401|403)\b|API 오류 400:.*(?:API key|API_KEY)|Firebase AI Logic 호출 실패:.*\[(?:401|403)\b|Firebase AI Logic 호출 실패:.*\[400\b.*(?:API key|API_KEY)|Vertex 인증 API 오류 400\b/i.test(stop))){u.lastError='';u.failedKind='';u.retry=null;void saveRoom(room).then(()=>{if(state.currentRoom===room){U3.invalidate(room);U3.schedule(room);}}).catch(e=>console.warn('[Wish] 키 저장 뒤 정리 재개 실패',e));}},aiTest:async id=>{const d=WUI.ui.dlg(id);d.draft.test='busy';WUI.paint();try{const cfg=WUIAIConfig(d);if(cfg.provider==='manual')throw Error('외부 AI 복붙은 연결 테스트가 필요 없습니다. 저장하면 바로 사용합니다.');if(!isAiProviderReady(cfg))throw Error('인증 정보를 입력해 주세요.');const result=await callAiProvider(cfg,'연결 테스트입니다. 다른 설명 없이 OK 두 글자만 출력하십시오.','OK라고 답하십시오.',{taskKind:'test',maxOutputTokens:512,operationLabel:'AI 연결 테스트'});d.draft.test='ok';d.draft.testMsg=getAiSelectedModel(cfg)+' · '+cleanAiGeneratedText(result.text).slice(0,50);}catch(e){d.draft.test='err';d.draft.testMsg=WLOG.inline("AI 연결 테스트",e);}},aiClear:id=>{const d=WUI.ui.dlg(id),p=normalizeAiProvider(d.draft.provider);if(p==='manual'){notify('외부 AI 복붙은 저장된 인증 정보가 없습니다.','info');return;}if(!confirm(getAiProviderLabel(p)+'의 저장된 인증 정보를 삭제할까요?'))return;const next={...loadAiSettings()};next[p==='deepseek'?'deepSeekApiKey':p==='firebase'?'firebaseConfig':p==='vertex'?'vertexServiceAccount':p==='anthropic'?'anthropicApiKey':'apiKey']='';if(p==='firebase')next.firebaseAppCheckDebugToken='';saveAiSettings(next);WUIRefreshSettings();d.committed=true;WUI.closeSheet(d);},
+ aiSave:id=>{const d=WUI.ui.dlg(id),cfg=WUIAIConfig(d);const kept=()=>notify('저장하지 않았습니다. 입력한 내용은 창에 남아 있습니다.','info');if(!cfg.deepSeekApiKey&&loadAiSettings().deepSeekApiKey&&!confirm('DeepSeek 주소의 서버가 바뀌어 저장된 DeepSeek 키를 새 주소로 보내지 않습니다. 키 없이 저장할까요?\n취소하면 창이 그대로 남으니 키를 다시 입력해 주세요.'))return kept();const gem=normalizeAiKey(d.draft.key),ds=normalizeAiKey(d.draft.dsKey);if(gem&&((gem.match(/AIza/g)||[]).length>1||!gem.startsWith('AIza')||gem.length!==39)&&!confirm('Gemini 키는 보통 AIza로 시작하는 39자입니다. 입력한 키('+gem.length+'자)는 모양이 달라, 다른 키나 비밀번호 뒤에 이어 붙었을 수 있습니다. 그대로 저장할까요?'))return kept();if(ds&&ds.indexOf('sk-',1)>=0&&!confirm(((ds.match(/sk-/g)||[]).length>1?'DeepSeek 키 안에 sk-가 두 번 들어 있습니다':'DeepSeek 키 앞에 다른 글자가 붙어 있습니다')+'('+ds.length+'자). 다른 키나 비밀번호 뒤에 이어 붙었을 수 있습니다. 그대로 저장할까요?'))return kept();saveAiSettings(cfg);WUIRefreshSettings();d.committed=true;WUI.closeSheet(d);notify('AI/API 설정을 저장했습니다.','success');const room=state.currentRoom,u=room?.unified,stop=String(u?.lastError||''),sv=d.saved||{},newAuth=[d.draft.key,d.draft.dsKey,d.draft.vx,d.draft.fbAppCheck,d.draft.anKey,d.draft.oaKey].some(v=>String(v||'').trim())||cfg.provider!==sv.provider||cfg.firebaseConfig!==sv.firebaseConfig;if(u&&isAiProviderReady(cfg)&&(stop==='보조 AI 연결 설정이 필요합니다.'||newAuth&&/(?:Gemini(?: Interactions)?|DeepSeek|Claude|OpenAI|Vertex AI|Vertex 인증|Firebase App Check) API 오류 (?:401|403)\b|API 오류 400:.*(?:API key|API_KEY)|Firebase AI Logic 호출 실패:.*\[(?:401|403)\b|Firebase AI Logic 호출 실패:.*\[400\b.*(?:API key|API_KEY)|Vertex 인증 API 오류 400\b/i.test(stop))){u.lastError='';u.failedKind='';u.retry=null;void saveRoom(room).then(()=>{if(state.currentRoom===room){U3.invalidate(room);U3.schedule(room);}}).catch(e=>console.warn('[Wish] 키 저장 뒤 정리 재개 실패',e));}},aiTest:async id=>{const d=WUI.ui.dlg(id);d.draft.test='busy';WUI.paint();try{const cfg=WUIAIConfig(d);if(cfg.provider==='manual')throw Error('외부 AI 복붙은 연결 테스트가 필요 없습니다. 저장하면 바로 사용합니다.');if(!isAiProviderReady(cfg))throw Error('인증 정보를 입력해 주세요.');const result=await callAiProvider(cfg,'연결 테스트입니다. 다른 설명 없이 OK 두 글자만 출력하십시오.','OK라고 답하십시오.',{taskKind:'test',maxOutputTokens:512,operationLabel:'AI 연결 테스트'});d.draft.test='ok';d.draft.testMsg=getAiSelectedModel(cfg)+' · '+cleanAiGeneratedText(result.text).slice(0,50);}catch(e){d.draft.test='err';d.draft.testMsg=WLOG.inline("AI 연결 테스트",e);}},aiClear:id=>{const d=WUI.ui.dlg(id),p=normalizeAiProvider(d.draft.provider);if(p==='manual'){notify('외부 AI 복붙은 저장된 인증 정보가 없습니다.','info');return;}if(!confirm(getAiProviderLabel(p)+'의 저장된 인증 정보를 삭제할까요?'))return;const next={...loadAiSettings()};next[p==='deepseek'?'deepSeekApiKey':p==='firebase'?'firebaseConfig':p==='vertex'?'vertexServiceAccount':p==='anthropic'?'anthropicApiKey':p==='openai'?'openAiApiKey':'apiKey']='';if(p==='firebase')next.firebaseAppCheckDebugToken='';saveAiSettings(next);WUIRefreshSettings();d.committed=true;WUI.closeSheet(d);},
 
  localRooms:()=>WishLocalRooms.open(),localRoomPick:arg=>{const [id,mode]=arg.split('|');WishLocalRooms.pick(id,mode);},localRoomRemove:id=>WishLocalRooms.remove(id),
 
@@ -22726,8 +22868,8 @@ Object.assign(WUI_ADAPTER.act,{
  // [취소] keeps the job waiting and leaves the reason on it, so [오류 문구 복사] can ask the external AI for a fixed answer.
  manualConfirmCancel:id=>{const d=WUI.ui.dlg(id);if(!d)return;WUI.closeSheet(d);if(d.relayId||!d.room)return;const j=loadManualJob(d.room);if(j){j.lastError='빼야 하는 내용이 있어 적용하지 않았습니다('+d.drops.length+'건) · '+d.drops.map(x=>String(x).replace(/^양식에 없는 항목을 빼고 읽었습니다 · /,'스키마에 없는 칸 ')).join(' · ');j.lastFixable=true;saveManualJob(d.room,j);}WUI.paint();},
  manualPasteApply:async id=>{const d=WUI.ui.dlg(id);if(!d||d.busy)return;d.busy=true;WUI.paint();try{await manualApplyFrom(state.currentRoom,d.draft.answer,id);}finally{const live=WUI.ui.dlg(id);if(live){live.busy=false;WUI.paint();}}},
- manualCopy:async()=>{const r=state.currentRoom,j=loadManualJob(r);if(!j)return;const text=loadManualRequest(r,j.code);if(!text){notify('요청문을 다시 만듭니다.','info',2500);return U3.run(r,j.force);}const ok=await copyPlainText(text);notify(ok?'요청문을 다시 복사했습니다 ('+text.length.toLocaleString()+'자).':'복사하지 못했습니다. 확인 탭의 [TXT 다시 받기]로 받아 외부 AI에 첨부해 주세요.',ok?'success':'warn',5000);},
- manualTxt:()=>{const r=state.currentRoom,j=loadManualJob(r);if(!j)return;const text=loadManualRequest(r,j.code);if(!text){notify('요청문을 다시 만듭니다.','info',2500);return U3.run(r,j.force);}downloadText(text,'Wish-외부AI-요청문-'+j.code+'.txt','text/plain');notify('요청문 TXT를 다시 저장했습니다 ('+text.length.toLocaleString()+'자). 외부 AI 새 대화에 파일로 첨부해 주세요.','success',5000);},
+ manualCopy:async()=>{const r=state.currentRoom,j=loadManualJob(r);if(!j)return;const text=loadManualRequest(r,j.code);if(!text){notify('요청문을 다시 만듭니다.','info',2500);return U3.run(r,j.force,false,null,{job:j});}const ok=await copyPlainText(text);notify(ok?'요청문을 다시 복사했습니다 ('+text.length.toLocaleString()+'자).':'복사하지 못했습니다. 확인 탭의 [TXT 다시 받기]로 받아 외부 AI에 첨부해 주세요.',ok?'success':'warn',5000);},
+ manualTxt:()=>{const r=state.currentRoom,j=loadManualJob(r);if(!j)return;const text=loadManualRequest(r,j.code);if(!text){notify('요청문을 다시 만듭니다.','info',2500);return U3.run(r,j.force,false,null,{job:j});}downloadText(text,'Wish-외부AI-요청문-'+j.code+'.txt','text/plain');notify('요청문 TXT를 다시 저장했습니다 ('+text.length.toLocaleString()+'자). 외부 AI 새 대화에 파일로 첨부해 주세요.','success',5000);},
  manualFile:()=>{const r=state.currentRoom;if(!loadManualJob(r))return;const input=document.createElement('input');input.type='file';input.accept='.json,.txt,application/json,text/plain';pickFile(input,async()=>{const file=input.files?.[0];if(!file)return;if(file.size>8*1024*1024){notify('답 파일이 너무 큽니다(8MB 초과).','error');return;}let text='';try{text=await file.text();}catch(e){notify('답 파일을 읽지 못했습니다: '+String(e.message||e),'error');return;}await manualApplyFrom(state.currentRoom,text,'');});},
  manualCancel:id=>{const r=state.currentRoom;if(!loadManualJob(r))return;if(!confirm('기다리는 외부 AI 작업을 취소할까요? 이미 받은 답은 쓸 수 없게 됩니다.'))return;clearManualJob(r);const d=id&&WUI.ui.dlg(id);if(d)WUI.closeSheet(d);notify('외부 AI 작업을 취소했습니다.','info',3500);WUI.paint();},
  manualErrCopy:async()=>{const j=loadManualJob(state.currentRoom);if(!j?.lastError)return;const ok=await copyPlainText(aiFixRequest(j.lastError,j.code));notify(ok?'오류 문구를 복사했습니다 · 외부 AI의 같은 대화에 붙여 넣어 고친 답을 받아 주세요.':'복사하지 못했습니다.',ok?'success':'warn',6000);},
